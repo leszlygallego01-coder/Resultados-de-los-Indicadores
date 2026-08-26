@@ -4445,6 +4445,8 @@ function cohortesTopFiltrado(coh, bod){
     const filas=base
       .filter(r=>(r.pendientes||0)>0)
       .map(r=>({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'',
+        // Dispensas del artículo: documentos (pacientes) distintos que lo tienen dispensado.
+        'Dispensas': r.pacientes||0,
         'Cant. pendiente': r.unidadesPend||r.pendientes||0 }));
     if(!filas.length){
       showToast('Todo está entregado: '+nombreCoh+(bod?' · '+bod:'')+' no tiene líneas pendientes.', true);
