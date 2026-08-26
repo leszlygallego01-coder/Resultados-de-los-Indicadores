@@ -506,6 +506,21 @@ function toDateSafe(v){
   const dt2=new Date(s); return isNaN(dt2)?null:dt2;
 }
 function dateToISO(d){ if(!d) return ''; return d.toISOString().slice(0,10); }
+// ---- Apoyo para el filtro global por mes ----
+// Las fechas del reporte se construyen en UTC, por eso el mes se lee con getUTC*.
+// La clave "AAAA-MM" permite ordenar los meses cronológicamente sin ambigüedad.
+const MESES_FILTRO_ES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+function mesKey(d){
+  const dt = d instanceof Date ? d : toDateSafe(d);
+  if(!dt || isNaN(dt)) return '';
+  return dt.getUTCFullYear()+'-'+String(dt.getUTCMonth()+1).padStart(2,'0');
+}
+function mesLabel(key){
+  const m=String(key||'').match(/^(\d{4})-(\d{2})$/);
+  if(!m) return String(key||'');
+  const nombre=MESES_FILTRO_ES[(+m[2])-1]||m[2];
+  return nombre.charAt(0).toUpperCase()+nombre.slice(1)+' '+m[1];
+}
 function fmtInt(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return n.toLocaleString('es-CO'); }
 function fmtPct(n){ if(n===null||n===undefined||isNaN(n)) return '—'; return (n*100).toFixed(1)+'%'; }
 function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -1012,6 +1027,16 @@ function populateFilters(){
   selE.innerHTML='<option value="">Todos</option>'+p.epsList.map(c=>`<option value="${c}">${c}</option>`).join('');
   selEG.innerHTML='<option value="">Todas</option>'+p.epsGrupos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selZ.innerHTML='<option value="">Todas las zonas</option>'+p.zonas.map(z=>`<option value="${z}">${z}</option>`).join('');
+  // Filtro por mes: se arman las opciones con los meses realmente presentes en el reporte.
+  const selM=document.getElementById('fMes');
+  if(selM){
+    const mesesSet=new Set();
+    for(let i=0;i<p.rows.length;i++){ const k=mesKey(p.rows[i].fecha); if(k) mesesSet.add(k); }
+    const meses=Array.from(mesesSet).sort();
+    const prevMes=selM.value;
+    selM.innerHTML='<option value="">Todos</option>'+meses.map(k=>`<option value="${k}">${escHtml(mesLabel(k))}</option>`).join('');
+    selM.value = meses.indexOf(prevMes)>=0 ? prevMes : '';
+  }
   poblarSelectBodegas(p.rows);
   if(p.minFecha) document.getElementById('fFechaDesde').value=dateToISO(p.minFecha);
   if(p.maxFecha) document.getElementById('fFechaHasta').value=dateToISO(p.maxFecha);
@@ -1041,8 +1066,9 @@ document.getElementById('fCorte').addEventListener('change', ()=>{
   });
 })();
 // Se aplica automáticamente también al cambiar cualquiera de los campos (no solo con el botón),
-['fFechaDesde','fFechaHasta','fContrato','fEps','fEpsGrupo'].forEach(id=>{
-  document.getElementById(id).addEventListener('change', aplicarFiltrosYRenderizar);
+['fMes','fFechaDesde','fFechaHasta','fContrato','fEps','fEpsGrupo'].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el) el.addEventListener('change', aplicarFiltrosYRenderizar);
 });
 
 /* ---- Filtro Diagnóstico con selección múltiple (checkboxes) ---- */
@@ -1101,6 +1127,7 @@ document.getElementById('btnLimpiarFiltro').addEventListener('click', ()=>{
   document.getElementById('fFechaDesde').value = state.processed.minFecha ? dateToISO(state.processed.minFecha):'';
   document.getElementById('fFechaHasta').value = state.processed.maxFecha ? dateToISO(state.processed.maxFecha):'';
   document.getElementById('fContrato').value=''; document.getElementById('fEps').value=''; document.getElementById('fEpsGrupo').value=''; limpiarCie10();
+  const selMesLimpiar=document.getElementById('fMes'); if(selMesLimpiar) selMesLimpiar.value='';
   document.getElementById('fBodegaSearch').value=''; document.getElementById('fBodega').value=''; document.getElementById('fZona').value='';
   aplicarFiltrosYRenderizar();
 });
@@ -1126,9 +1153,12 @@ function aplicarFiltrosYRenderizar(){
   const contrato=document.getElementById('fContrato').value;
   const eps=document.getElementById('fEps').value;
   const epsGrupo=document.getElementById('fEpsGrupo').value;
+  const selMes=document.getElementById('fMes');
+  const mesSel=selMes? selMes.value : '';
   const cie10Sel=cie10Seleccionados;
 
   filteredRowsCache = p.rows.filter(r=>{
+    if(mesSel && mesKey(r.fecha)!==mesSel) return false;
     if(desde && r.fecha && r.fecha<desde) return false;
     if(hasta && r.fecha && r.fecha>hasta) return false;
     if(contrato && r.contrato!==contrato) return false;
@@ -3094,6 +3124,34 @@ function renderIndicadorSoporteEvento(rowsEventoRaw, bodegaSearch, zona){
     + 'Las tarjetas, la gráfica, la tabla y los archivos descargados usan el mismo conjunto de datos.';
   pintarTablaSoporte();
 
+  // ---- Dona filtrable por bodega: CON vs SIN soporte ----
+  // Usa exactamente la misma tabla por bodega que se muestra abajo, por lo que los
+  // porcentajes de la dona y de la tabla siempre coinciden.
+  if(table.length){
+    const aggSop=(tbl)=>({
+      bodega:'__ALL__',
+      ent: tbl.reduce((a,b)=>a+(b.ent||0),0),
+      entCon: tbl.reduce((a,b)=>a+(b.entCon||0),0),
+      entSin: tbl.reduce((a,b)=>a+(b.entSin||0),0)
+    });
+    setupGenericPieSelector('pieSoporteSelect','pieSoporte','pieSoporteLegend', table, aggSop, row=>[
+      {label:'Con soporte', value: row.entCon||0, color:'#1E8F5E'},
+      {label:'Sin soporte', value: row.entSin||0, color:'#C0392B'}
+    ], {
+      mode:'count',
+      totalFn:(row)=>row.ent||0,
+      // En el centro se muestra el % con soporte, que es la lectura principal del indicador.
+      centerFn:(slices,total)=>{
+        const con=slices.find(s=>s.label==='Con soporte');
+        return fmtPct(total ? (con? con.value:0)/total : null);
+      },
+      notaFn:(row)=>'Sobre '+fmtInt(row.ent||0)+' dispensas de evento entregadas · acumulado a '+etqCorteSop+'.'
+    });
+  } else {
+    drawDonut('pieSoporte', [{label:'',value:1,color:'#DCE4EC'}], '—');
+    const lg=document.getElementById('pieSoporteLegend'); if(lg) lg.innerHTML='';
+    const sl=document.getElementById('pieSoporteSelect'); if(sl) sl.innerHTML='<option value="__ALL__">Sin datos</option>';
+  }
 }
 
 // ---- Detalle descargable del Indicador Soporte Evento --------------------
