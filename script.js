@@ -3418,6 +3418,34 @@ document.getElementById('btnDescargarSinHomologar').addEventListener('click', ()
   showToast('Excel de Sin Homologar exportado: '+fmtInt(sinHom.length)+' líneas.');
 });
 
+// ---- Líneas Agotadas: líneas pendientes cuyo estado es TECNOLOGIA EN SALUD AGOTADO ----
+// Se indica además si la molécula es Pareto o No Pareto (o si no está clasificada).
+document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
+  if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
+  const bodegaSearch = getBodegaFiltro();
+  const zona = document.getElementById('fZona').value;
+  const agotadas = filteredRowsCache.filter(r=>{
+    if(r.versionVigente===false) return false;          // versión superada por un recargue
+    if(!esEstadoActivo(r.estadoDispensa)) return false;
+    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    if(r.lineaPendiente!=='SI') return false;
+    return r.estado==='TECNOLOGIA EN SALUD AGOTADO';
+  }).map(r=>({
+    'Código': r.codigoArticulo,
+    'Descripción': String(r.descripcionDci||'').trim() || String(r.descripcionReporte||r.descripcion||'').trim(),
+    'Bodega': r.bodegaDetalle,
+    'Documento': r.documento,
+    'Cant. pendiente': Math.abs(r.diferencia),
+    'Pareto / No Pareto': (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO') ? r.moleculaPareto : 'SIN CLASIFICAR'
+  }));
+  if(!agotadas.length){ showToast('No hay líneas agotadas en el filtro actual.', true); return; }
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(agotadas), 'Lineas Agotadas');
+  XLSX.writeFile(wb, 'Lineas_Agotadas_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Excel de Líneas Agotadas exportado: '+fmtInt(agotadas.length)+' líneas.');
+});
+
 // ---- Detalle por bodega: líneas del Reporte de Dispensación con las columnas clave ----
 // Respeta la bodega escrita en el filtro (y la zona); si no hay filtro, exporta todas.
 document.getElementById('btnDescargarDetalleBodega').addEventListener('click', ()=>{
@@ -4126,11 +4154,12 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
       if(!porCodigo.has(ck)) porCodigo.set(ck, { cohorte:k, bodega, zona:r.zona||'N/D',
         codigo:r.codigoArticulo||'SIN CODIGO', descripcion:descLinea(r),
         homologado:!sinHomologarLinea(r),
-        unidades:0, lineas:0, pendientes:0, pacientes:new Set() });
+        unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set() });
       const gc=porCodigo.get(ck);
       gc.unidades += (r.unidades||0);
       gc.lineas++;
-      if(!entregada) gc.pendientes++;
+      // Además de las líneas pendientes se acumulan las UNIDADES pendientes (lo que falta por entregar).
+      if(!entregada){ gc.pendientes++; gc.unidadesPend += Math.abs(r.diferencia||0); }
       if(r.documento) gc.pacientes.add(r.documento);
       if(!gc.descripcion) gc.descripcion=descLinea(r);
     });
@@ -4139,11 +4168,11 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     if(!porCodigoGlobal.has(gk)) porCodigoGlobal.set(gk, { cohorte:'', bodega, zona:r.zona||'N/D',
       codigo:r.codigoArticulo||'SIN CODIGO', descripcion:descLinea(r),
       homologado:!sinHomologarLinea(r), cohortesSet:new Set(),
-      unidades:0, lineas:0, pendientes:0, pacientes:new Set() });
+      unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set() });
     const gg=porCodigoGlobal.get(gk);
     gg.unidades += (r.unidades||0);
     gg.lineas++;
-    if(!entregada) gg.pendientes++;
+    if(!entregada){ gg.pendientes++; gg.unidadesPend += Math.abs(r.diferencia||0); }
     if(r.documento) gg.pacientes.add(r.documento);
     if(!gg.descripcion) gg.descripcion=descLinea(r);
     cohortes.forEach(k=>gg.cohortesSet.add(k));
@@ -4170,8 +4199,8 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Líneas en cohortes</div><div class="value">'+fmtInt(lineasCohTot)+'</div>'+
       '<div class="sub">'+fmtPct(rows.length?lineasCohTot/rows.length:null)+' de '+fmtInt(rows.length)+' líneas activas</div></div>'+
-      '<div class="stat"><div class="label">Pacientes en cohortes</div><div class="value">'+fmtInt(pacientesCoh.size)+'</div>'+
-      '<div class="sub">documentos distintos</div></div>'+
+      '<div class="stat"><div class="label">Dispensas en Cohortes</div><div class="value">'+fmtInt(pacientesCoh.size)+'</div>'+
+      '<div class="sub">pacientes con dispensas (documentos distintos)</div></div>'+
       '<div class="stat"><div class="label">% Cumplimiento en cohortes</div><div class="value '+effClass(lineasCohTot?entCohTot/lineasCohTot:null)+'">'+fmtPct(lineasCohTot?entCohTot/lineasCohTot:null)+'</div>'+
       '<div class="sub">'+fmtInt(entCohTot)+' entregadas</div></div>'+
       '<div class="stat"><div class="label">Líneas pendientes</div><div class="value">'+fmtInt(penCohTot)+'</div>'+
@@ -4244,7 +4273,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
   const todos=[...porCodigo.values()].map(g=>({
     cohorte:g.cohorte, cohorteLabel:COHORTE_LABEL.get(g.cohorte)||g.cohorte, bodega:g.bodega, zona:g.zona,
     codigo:g.codigo, descripcion:g.descripcion, homologado:g.homologado!==false, unidades:g.unidades, lineas:g.lineas,
-    pendientes:g.pendientes, pacientes:g.pacientes.size, pacientesSet:g.pacientes
+    pendientes:g.pendientes, unidadesPend:g.unidadesPend||0, pacientes:g.pacientes.size, pacientesSet:g.pacientes
   }));
   const grupos=new Map();
   todos.forEach(r=>{
@@ -4265,7 +4294,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
   _cohortesGlobalCodigos=[...porCodigoGlobal.values()].map(g=>({
     cohorte:'', cohorteLabel:'Todas las cohortes', bodega:g.bodega, zona:g.zona,
     codigo:g.codigo, descripcion:g.descripcion, homologado:g.homologado!==false,
-    unidades:g.unidades, lineas:g.lineas, pendientes:g.pendientes,
+    unidades:g.unidades, lineas:g.lineas, pendientes:g.pendientes, unidadesPend:g.unidadesPend||0,
     pacientes:g.pacientes.size, pacientesSet:g.pacientes,
     cohortes:[...g.cohortesSet].map(k=>COHORTE_LABEL.get(k)||k).sort((a,b)=>a.localeCompare(b,'es'))
   }));
@@ -4324,10 +4353,10 @@ function cohortesTopFiltrado(coh, bod){
     if(coh && r.cohorte!==coh) return;
     if(bod && r.bodega!==bod) return;
     if(!acum.has(r.codigo)) acum.set(r.codigo, { codigo:r.codigo, descripcion:r.descripcion,
-      homologado:r.homologado, unidades:0, lineas:0, pendientes:0, pacientes:new Set() });
+      homologado:r.homologado, unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set() });
     const g=acum.get(r.codigo);
     if(!g.descripcion && r.descripcion) g.descripcion=r.descripcion;
-    g.unidades+=r.unidades; g.lineas+=r.lineas; g.pendientes+=r.pendientes;
+    g.unidades+=r.unidades; g.lineas+=r.lineas; g.pendientes+=r.pendientes; g.unidadesPend+=(r.unidadesPend||0);
     if(r.pacientesSet) r.pacientesSet.forEach(d=>g.pacientes.add(d));
   });
   return [...acum.values()].map(g=>Object.assign({}, g, {pacientes:g.pacientes.size}))
@@ -4379,6 +4408,26 @@ function cohortesTopFiltrado(coh, bod){
     XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet(filas), 'CODIGOS CON PENDIENTES');
     XLSX.writeFile(wb2, 'Codigos_Cohortes_Pendientes_'+new Date().toISOString().slice(0,10)+'.xlsx');
     showToast('Excel descargado: '+fmtInt(filas.length)+' códigos con pendientes.');
+  });
+
+  // Descarga simple de pendientes de la cohorte y bodega seleccionadas: solo Codigo,
+  // Descripcion DCI y Cantidad pendiente (unidades que faltan por entregar), agrupado por codigo.
+  const btnPS=document.getElementById('btnExportCohortesPendSimple');
+  if(btnPS) btnPS.addEventListener('click', ()=>{
+    if(!_cohortesDetalle.length){ showToast('Primero calcula los indicadores.', true); return; }
+    const coh=(document.getElementById('fCohorte')||{}).value || '';
+    const bod=(document.getElementById('fCohorteBodega')||{}).value || '';
+    const filas=cohortesTopFiltrado(coh, bod)
+      .filter(r=>(r.pendientes||0)>0)
+      .map(r=>({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'',
+        'Cant. pendiente': r.unidadesPend||r.pendientes||0 }));
+    if(!filas.length){ showToast('No hay pendientes para la cohorte y bodega seleccionadas.', true); return; }
+    const nombreCoh=coh ? (COHORTE_LABEL.get(coh)||coh) : 'Todas las cohortes';
+    const wbP=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbP, XLSX.utils.json_to_sheet(filas), 'PENDIENTES');
+    const sufijo=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
+    XLSX.writeFile(wbP, 'Pendientes_'+sufijo+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    showToast('Excel descargado: '+fmtInt(filas.length)+' códigos pendientes de '+nombreCoh+(bod?' · '+bod:'')+'.');
   });
 
   // Descarga solo de los códigos que NO estan en la tabla Homólogo, respetando los filtros.
