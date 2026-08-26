@@ -4441,9 +4441,9 @@ function cohortesTopFiltrado(coh, bod){
     showToast('Excel descargado: '+fmtInt(filas.length)+' códigos con pendientes.');
   });
 
-  // Descarga simple de pendientes de la cohorte y bodega seleccionadas: Codigo, Descripcion DCI,
-  // Documento (la dispensa donde quedó el pendiente) y Cantidad pendiente. Se abre una fila por
-  // cada documento del artículo, para saber a qué dispensa pertenece cada cantidad.
+  // Descarga de pendientes de la cohorte y bodega seleccionadas, detallado por DOCUMENTO:
+  // Cohorte, Bodega, Código, Descripción DCI, Documento y Cantidad pendiente. Ya no se muestra
+  // el conteo de dispensas: cada fila es el documento (dispensa) que tiene el pendiente.
   const btnPS=document.getElementById('btnExportCohortesPendSimple');
   if(btnPS) btnPS.addEventListener('click', ()=>{
     if(!_cohortesDetalle.length){ showToast('Primero calcula los indicadores.', true); return; }
@@ -4456,21 +4456,32 @@ function cohortesTopFiltrado(coh, bod){
       showToast('No hay dispensas de '+nombreCoh+(bod?' en la bodega '+bod:'')+': cambia la cohorte o la bodega.', true);
       return;
     }
+    // Una fila por DOCUMENTO pendiente, indicando su cohorte y su bodega. Se recorre el detalle
+    // (cohorte + bodega + código) para no perder de dónde viene cada documento.
     const filas=[];
-    base.filter(r=>(r.pendientes||0)>0).forEach(r=>{
-      const docs = r.docsPend && r.docsPend.size ? [...r.docsPend.entries()] : [];
+    cohortesFuente(coh).forEach(r=>{
+      if(coh && r.cohorte!==coh) return;
+      if(bod && r.bodega!==bod) return;
+      if(!(r.pendientes||0)) return;
+      const etiquetaCoh = (r.cohortes && r.cohortes.length) ? r.cohortes.join(' / ') : (r.cohorteLabel||nombreCoh);
+      const docs = r.docsPendMap && r.docsPendMap.size ? [...r.docsPendMap.entries()] : [];
       if(!docs.length){
         // Respaldo: si por algún motivo no se guardó el documento, se exporta el total del código.
-        filas.push({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'', 'Documento':'',
+        filas.push({ 'Cohorte':etiquetaCoh, 'Bodega':r.bodega, 'Código':r.codigo,
+          'Descripción DCI':r.descripcion||'', 'Documento':'',
           'Cant. pendiente': r.unidadesPend||r.pendientes||0 });
         return;
       }
-      docs.sort((a,b)=> b[1]-a[1] || String(a[0]).localeCompare(String(b[0]),'es'));
       docs.forEach(([doc, cant])=>{
-        filas.push({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'', 'Documento':doc,
-          'Cant. pendiente':cant });
+        filas.push({ 'Cohorte':etiquetaCoh, 'Bodega':r.bodega, 'Código':r.codigo,
+          'Descripción DCI':r.descripcion||'', 'Documento':doc, 'Cant. pendiente':cant });
       });
     });
+    // Orden: mayor pendiente primero y, a igual cantidad, por bodega, código y documento.
+    filas.sort((a,b)=> b['Cant. pendiente']-a['Cant. pendiente']
+      || String(a.Bodega).localeCompare(String(b.Bodega),'es')
+      || String(a['Código']).localeCompare(String(b['Código']),'es')
+      || String(a.Documento).localeCompare(String(b.Documento),'es'));
     if(!filas.length){
       showToast('Todo está entregado: '+nombreCoh+(bod?' · '+bod:'')+' no tiene líneas pendientes.', true);
       return;
@@ -4479,7 +4490,8 @@ function cohortesTopFiltrado(coh, bod){
     XLSX.utils.book_append_sheet(wbP, XLSX.utils.json_to_sheet(filas), 'PENDIENTES');
     const sufijo=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
     XLSX.writeFile(wbP, 'Pendientes_'+sufijo+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
-    showToast('Excel descargado: '+fmtInt(filas.length)+' líneas pendientes por documento de '+nombreCoh+(bod?' · '+bod:'')+'.');
+    const docsUnicos=new Set(filas.map(f=>f.Documento)).size;
+    showToast('Excel descargado: '+fmtInt(filas.length)+' líneas pendientes de '+fmtInt(docsUnicos)+' documentos ('+nombreCoh+(bod?' · '+bod:'')+').');
   });
 
   // Descarga solo de los códigos que NO estan en la tabla Homólogo, respetando los filtros.
