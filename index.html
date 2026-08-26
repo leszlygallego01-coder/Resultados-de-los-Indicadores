@@ -256,6 +256,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <button class="btn btn-export" id="btnDescargarParetoExistencias">Descargar Pareto y No pareto existencias</button>
           <button class="btn btn-export" id="btnDescargarCodigosComprar" style="background:var(--clay,#B23A34);box-shadow:0 2px 0 #7A2019;">⬇ Descargar Códigos a Comprar (Excel)</button>
           <button class="btn btn-export" id="btnDescargarSinHomologar" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar Sin Homologar (Excel)</button>
+          <button class="btn btn-export" id="btnDescargarAgotadas" style="background:#8E44AD;box-shadow:0 2px 0 #5B2D75;">⬇ Descargar Líneas Agotadas (Excel)</button>
           <button class="btn btn-ghost" data-open-periodico="linea">📊 Reporte Comparativo Periódico</button>
         </div>
 
@@ -729,6 +730,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <select id="fCohorteBodega"><option value="">Todas las bodegas</option></select>
             </div>
             <button class="btn btn-export" id="btnExportCohortesTop">⬇ Descargar códigos con pendientes (Excel)</button>
+            <button class="btn btn-export" id="btnExportCohortesPendSimple">⬇ Descargar pendientes (Código, Descripción, Cantidad)</button>
             <button class="btn btn-export" id="btnExportCohortesSinHom">⬇ Descargar códigos sin homologar (Excel)</button>
           </div>
           <div class="table-wrap" style="max-height:560px;">
