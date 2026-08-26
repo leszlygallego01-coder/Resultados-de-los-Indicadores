@@ -4172,12 +4172,17 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
       if(!porCodigo.has(ck)) porCodigo.set(ck, { cohorte:k, bodega, zona:r.zona||'N/D',
         codigo:r.codigoArticulo||'SIN CODIGO', descripcion:descLinea(r),
         homologado:!sinHomologarLinea(r),
-        unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set() });
+        unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set(), docsPend:new Map() });
       const gc=porCodigo.get(ck);
       gc.unidades += (r.unidades||0);
       gc.lineas++;
-      // Además de las líneas pendientes se acumulan las UNIDADES pendientes (lo que falta por entregar).
-      if(!entregada){ gc.pendientes++; gc.unidadesPend += Math.abs(r.diferencia||0); }
+      // Además de las líneas pendientes se acumulan las UNIDADES pendientes (lo que falta por entregar)
+      // y se guarda el pendiente de cada documento (dispensa) para poder detallarlo en el Excel.
+      if(!entregada){
+        gc.pendientes++; gc.unidadesPend += Math.abs(r.diferencia||0);
+        const doc=String(r.documento||'').trim() || 'SIN DOCUMENTO';
+        gc.docsPend.set(doc, (gc.docsPend.get(doc)||0) + Math.abs(r.diferencia||0));
+      }
       if(r.documento) gc.pacientes.add(r.documento);
       if(!gc.descripcion) gc.descripcion=descLinea(r);
     });
@@ -4186,11 +4191,15 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     if(!porCodigoGlobal.has(gk)) porCodigoGlobal.set(gk, { cohorte:'', bodega, zona:r.zona||'N/D',
       codigo:r.codigoArticulo||'SIN CODIGO', descripcion:descLinea(r),
       homologado:!sinHomologarLinea(r), cohortesSet:new Set(),
-      unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set() });
+      unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set(), docsPend:new Map() });
     const gg=porCodigoGlobal.get(gk);
     gg.unidades += (r.unidades||0);
     gg.lineas++;
-    if(!entregada){ gg.pendientes++; gg.unidadesPend += Math.abs(r.diferencia||0); }
+    if(!entregada){
+      gg.pendientes++; gg.unidadesPend += Math.abs(r.diferencia||0);
+      const docG=String(r.documento||'').trim() || 'SIN DOCUMENTO';
+      gg.docsPend.set(docG, (gg.docsPend.get(docG)||0) + Math.abs(r.diferencia||0));
+    }
     if(r.documento) gg.pacientes.add(r.documento);
     if(!gg.descripcion) gg.descripcion=descLinea(r);
     cohortes.forEach(k=>gg.cohortesSet.add(k));
@@ -4291,7 +4300,8 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
   const todos=[...porCodigo.values()].map(g=>({
     cohorte:g.cohorte, cohorteLabel:COHORTE_LABEL.get(g.cohorte)||g.cohorte, bodega:g.bodega, zona:g.zona,
     codigo:g.codigo, descripcion:g.descripcion, homologado:g.homologado!==false, unidades:g.unidades, lineas:g.lineas,
-    pendientes:g.pendientes, unidadesPend:g.unidadesPend||0, pacientes:g.pacientes.size, pacientesSet:g.pacientes
+    pendientes:g.pendientes, unidadesPend:g.unidadesPend||0, pacientes:g.pacientes.size, pacientesSet:g.pacientes,
+    docsPendMap:g.docsPend
   }));
   const grupos=new Map();
   todos.forEach(r=>{
@@ -4313,7 +4323,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     cohorte:'', cohorteLabel:'Todas las cohortes', bodega:g.bodega, zona:g.zona,
     codigo:g.codigo, descripcion:g.descripcion, homologado:g.homologado!==false,
     unidades:g.unidades, lineas:g.lineas, pendientes:g.pendientes, unidadesPend:g.unidadesPend||0,
-    pacientes:g.pacientes.size, pacientesSet:g.pacientes,
+    pacientes:g.pacientes.size, pacientesSet:g.pacientes, docsPendMap:g.docsPend,
     cohortes:[...g.cohortesSet].map(k=>COHORTE_LABEL.get(k)||k).sort((a,b)=>a.localeCompare(b,'es'))
   }));
 
@@ -4371,11 +4381,14 @@ function cohortesTopFiltrado(coh, bod){
     if(coh && r.cohorte!==coh) return;
     if(bod && r.bodega!==bod) return;
     if(!acum.has(r.codigo)) acum.set(r.codigo, { codigo:r.codigo, descripcion:r.descripcion,
-      homologado:r.homologado, unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set() });
+      homologado:r.homologado, unidades:0, lineas:0, pendientes:0, unidadesPend:0, pacientes:new Set(),
+      docsPend:new Map() });
     const g=acum.get(r.codigo);
     if(!g.descripcion && r.descripcion) g.descripcion=r.descripcion;
     g.unidades+=r.unidades; g.lineas+=r.lineas; g.pendientes+=r.pendientes; g.unidadesPend+=(r.unidadesPend||0);
     if(r.pacientesSet) r.pacientesSet.forEach(d=>g.pacientes.add(d));
+    // Se conserva el pendiente por documento (dispensa) para poder detallarlo en las descargas.
+    if(r.docsPendMap) r.docsPendMap.forEach((v,doc)=>g.docsPend.set(doc, (g.docsPend.get(doc)||0)+v));
   });
   return [...acum.values()].map(g=>Object.assign({}, g, {pacientes:g.pacientes.size}))
     .sort((a,b)=> b.unidades-a.unidades || b.lineas-a.lineas || a.codigo.localeCompare(b.codigo,'es'));
@@ -4428,8 +4441,9 @@ function cohortesTopFiltrado(coh, bod){
     showToast('Excel descargado: '+fmtInt(filas.length)+' códigos con pendientes.');
   });
 
-  // Descarga simple de pendientes de la cohorte y bodega seleccionadas: solo Codigo,
-  // Descripcion DCI y Cantidad pendiente (unidades que faltan por entregar), agrupado por codigo.
+  // Descarga simple de pendientes de la cohorte y bodega seleccionadas: Codigo, Descripcion DCI,
+  // Documento (la dispensa donde quedó el pendiente) y Cantidad pendiente. Se abre una fila por
+  // cada documento del artículo, para saber a qué dispensa pertenece cada cantidad.
   const btnPS=document.getElementById('btnExportCohortesPendSimple');
   if(btnPS) btnPS.addEventListener('click', ()=>{
     if(!_cohortesDetalle.length){ showToast('Primero calcula los indicadores.', true); return; }
@@ -4442,12 +4456,21 @@ function cohortesTopFiltrado(coh, bod){
       showToast('No hay dispensas de '+nombreCoh+(bod?' en la bodega '+bod:'')+': cambia la cohorte o la bodega.', true);
       return;
     }
-    const filas=base
-      .filter(r=>(r.pendientes||0)>0)
-      .map(r=>({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'',
-        // Dispensas del artículo: documentos (pacientes) distintos que lo tienen dispensado.
-        'Dispensas': r.pacientes||0,
-        'Cant. pendiente': r.unidadesPend||r.pendientes||0 }));
+    const filas=[];
+    base.filter(r=>(r.pendientes||0)>0).forEach(r=>{
+      const docs = r.docsPend && r.docsPend.size ? [...r.docsPend.entries()] : [];
+      if(!docs.length){
+        // Respaldo: si por algún motivo no se guardó el documento, se exporta el total del código.
+        filas.push({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'', 'Documento':'',
+          'Cant. pendiente': r.unidadesPend||r.pendientes||0 });
+        return;
+      }
+      docs.sort((a,b)=> b[1]-a[1] || String(a[0]).localeCompare(String(b[0]),'es'));
+      docs.forEach(([doc, cant])=>{
+        filas.push({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'', 'Documento':doc,
+          'Cant. pendiente':cant });
+      });
+    });
     if(!filas.length){
       showToast('Todo está entregado: '+nombreCoh+(bod?' · '+bod:'')+' no tiene líneas pendientes.', true);
       return;
@@ -4456,7 +4479,7 @@ function cohortesTopFiltrado(coh, bod){
     XLSX.utils.book_append_sheet(wbP, XLSX.utils.json_to_sheet(filas), 'PENDIENTES');
     const sufijo=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
     XLSX.writeFile(wbP, 'Pendientes_'+sufijo+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
-    showToast('Excel descargado: '+fmtInt(filas.length)+' códigos pendientes de '+nombreCoh+(bod?' · '+bod:'')+'.');
+    showToast('Excel descargado: '+fmtInt(filas.length)+' líneas pendientes por documento de '+nombreCoh+(bod?' · '+bod:'')+'.');
   });
 
   // Descarga solo de los códigos que NO estan en la tabla Homólogo, respetando los filtros.
