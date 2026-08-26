@@ -811,6 +811,11 @@ async function calcularIndicadores(){
       const cod=normValue(r.codigoArticulo);
       if(cod) agotadoMap.set(cod, normValue(r.estado));
     });
+    // Resumen de la tabla Estado de la Molécula: sirve para avisar con claridad cuando la
+    // descarga de Líneas Agotadas sale vacía (¿la tabla no se cargó? ¿no hay códigos agotados?).
+    let _codigosAgotados=0;
+    agotadoMap.forEach(v=>{ if(String(v||'').includes('AGOTAD')) _codigosAgotados++; });
+    state.agotadosInfo={ filas:(byKey.agotados||[]).length, codigos:agotadoMap.size, agotados:_codigosAgotados };
 
     // ---- Tabla_2 Inventario del Punto: Codigo -> Homologo (via Tabla_4), luego Homologo|Bodega -> Unidades ----
     const invPuntoMap=new Map();
@@ -3418,19 +3423,27 @@ document.getElementById('btnDescargarSinHomologar').addEventListener('click', ()
   showToast('Excel de Sin Homologar exportado: '+fmtInt(sinHom.length)+' líneas.');
 });
 
-// ---- Líneas Agotadas: líneas pendientes cuyo estado es TECNOLOGIA EN SALUD AGOTADO ----
+// ---- Líneas Agotadas: líneas pendientes cuyo estado indica AGOTADO ----
+// El estado se compara buscando "AGOTAD" dentro del texto (por ejemplo "TECNOLOGIA EN SALUD
+// AGOTADO", "AGOTADA", "AGOTADO TEMPORAL"), así el archivo puede traer variantes de redacción.
 // Se indica además si la molécula es Pareto o No Pareto (o si no está clasificada).
 document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
+  const info = state.agotadosInfo || {filas:0, codigos:0, agotados:0};
+  if(!info.codigos){ showToast('La tabla Estado de la Molécula (Tabla_7) no está cargada: cárgala en el panel de cargue y vuelve a calcular los indicadores.', true); return; }
+  if(!info.agotados){ showToast('La tabla Estado de la Molécula no tiene ningún código marcado como AGOTADO.', true); return; }
   const bodegaSearch = getBodegaFiltro();
   const zona = document.getElementById('fZona').value;
+  let hayAgotadasSinFiltro=false;
   const agotadas = filteredRowsCache.filter(r=>{
     if(r.versionVigente===false) return false;          // versión superada por un recargue
     if(!esEstadoActivo(r.estadoDispensa)) return false;
+    if(r.lineaPendiente!=='SI') return false;
+    if(!normValue(r.estado).includes('AGOTAD')) return false;
+    hayAgotadasSinFiltro=true;                          // hay agotadas, aunque no en este filtro
     if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
-    if(r.lineaPendiente!=='SI') return false;
-    return r.estado==='TECNOLOGIA EN SALUD AGOTADO';
+    return true;
   }).map(r=>({
     'Código': r.codigoArticulo,
     'Descripción': String(r.descripcionDci||'').trim() || String(r.descripcionReporte||r.descripcion||'').trim(),
@@ -3439,7 +3452,12 @@ document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
     'Cant. pendiente': Math.abs(r.diferencia),
     'Pareto / No Pareto': (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO') ? r.moleculaPareto : 'SIN CLASIFICAR'
   }));
-  if(!agotadas.length){ showToast('No hay líneas agotadas en el filtro actual.', true); return; }
+  if(!agotadas.length){
+    showToast(hayAgotadasSinFiltro
+      ? 'Hay líneas agotadas, pero ninguna en la bodega o zona filtrada: limpia el filtro y vuelve a descargar.'
+      : 'Ninguna línea pendiente corresponde a códigos agotados con los datos cargados.', true);
+    return;
+  }
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(agotadas), 'Lineas Agotadas');
   XLSX.writeFile(wb, 'Lineas_Agotadas_'+new Date().toISOString().slice(0,10)+'.xlsx');
@@ -4417,12 +4435,21 @@ function cohortesTopFiltrado(coh, bod){
     if(!_cohortesDetalle.length){ showToast('Primero calcula los indicadores.', true); return; }
     const coh=(document.getElementById('fCohorte')||{}).value || '';
     const bod=(document.getElementById('fCohorteBodega')||{}).value || '';
-    const filas=cohortesTopFiltrado(coh, bod)
+    const nombreCoh=coh ? (COHORTE_LABEL.get(coh)||coh) : 'Todas las cohortes';
+    const base=cohortesTopFiltrado(coh, bod);
+    // Si el filtro no deja ninguna fila, el problema es la combinación cohorte + bodega.
+    if(!base.length){
+      showToast('No hay dispensas de '+nombreCoh+(bod?' en la bodega '+bod:'')+': cambia la cohorte o la bodega.', true);
+      return;
+    }
+    const filas=base
       .filter(r=>(r.pendientes||0)>0)
       .map(r=>({ 'Código':r.codigo, 'Descripción DCI':r.descripcion||'',
         'Cant. pendiente': r.unidadesPend||r.pendientes||0 }));
-    if(!filas.length){ showToast('No hay pendientes para la cohorte y bodega seleccionadas.', true); return; }
-    const nombreCoh=coh ? (COHORTE_LABEL.get(coh)||coh) : 'Todas las cohortes';
+    if(!filas.length){
+      showToast('Todo está entregado: '+nombreCoh+(bod?' · '+bod:'')+' no tiene líneas pendientes.', true);
+      return;
+    }
     const wbP=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wbP, XLSX.utils.json_to_sheet(filas), 'PENDIENTES');
     const sufijo=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
