@@ -73,6 +73,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <option value="3" selected>Corte 3 (días 21-31)</option>
         </select>
       </div>
+      <div class="field"><label>Mes</label><select id="fMes" title="Deja solo las dispensas del mes seleccionado"><option value="">Todos</option></select></div>
       <div class="field"><label>Fecha desde</label><input type="date" id="fFechaDesde"></div>
       <div class="field"><label>Fecha hasta</label><input type="date" id="fFechaHasta"></div>
       <div class="field"><label>Modalidad</label><select id="fContrato"><option value="">Todos</option></select></div>
@@ -376,6 +377,18 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <button class="btn btn-export" id="btnSoporteExportCsv" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar soporte evento (CSV)</button>
         </div>
         <p class="seg-desc" id="soporteAlcanceTxt" style="margin:-6px 0 12px;"></p>
+
+        <!-- Dona filtrable por bodega: reparto de las dispensas de evento entregadas
+             entre las que llegaron CON soporte y las que quedaron SIN soporte. -->
+        <div class="chart-row" style="grid-template-columns:1fr;">
+          <div class="chart-card">
+            <h4>% de dispensas de evento entregadas CON y SIN soporte</h4>
+            <select id="pieSoporteSelect"></select>
+            <svg id="pieSoporte" width="200" height="200" viewBox="0 0 200 200"></svg>
+            <div class="legend" id="pieSoporteLegend"></div>
+          </div>
+        </div>
+
         <div class="stat-row" id="statsSoporte"></div>
 
           <div class="table-wrap" style="margin-bottom:0;">
