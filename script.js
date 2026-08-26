@@ -4880,7 +4880,94 @@ function recuperadasPorBodega(filtered, corteFinal, tipo){
   return m;
 }
 let periodicoTabActual='documento';
+
+/* ===================== Acceso con clave universal =====================
+   El Reporte Comparativo Periódico queda protegido: al hacer clic en el botón
+   se abre primero una ventana de acceso y solo se muestra el reporte cuando el
+   usuario y la contraseña son correctos. La validación aprobada se recuerda
+   mientras la pestaña del navegador siga abierta (sessionStorage), para no
+   pedirla de nuevo al navegar por los otros indicadores.                  */
+const PERIODICO_USUARIO = 'reportes';
+const PERIODICO_CLAVE   = 'MedisfarmaReportes2026';
+const PERIODICO_AUTH_FLAG = 'periodico_auth_ok';
+
+// Pestaña que se debe abrir cuando el acceso quede autorizado.
+let _periodicoTabPendiente = null;
+
+function periodicoAccesoAutorizado(){
+  try { return sessionStorage.getItem(PERIODICO_AUTH_FLAG) === '1'; }
+  catch(e){ return false; } // navegador sin almacenamiento: siempre pedirá la clave
+}
+
+function guardarAccesoPeriodico(){
+  try { sessionStorage.setItem(PERIODICO_AUTH_FLAG, '1'); } catch(e){}
+}
+
+function mostrarErrorAuth(msg){
+  const box = document.getElementById('authError');
+  if(!box) return;
+  box.textContent = msg || '';
+  box.classList.toggle('show', !!msg);
+}
+
+function limpiarCamposAuth(){
+  const u = document.getElementById('authUser');
+  const p = document.getElementById('authPass');
+  if(u) u.value='';
+  if(p) p.value='';
+}
+
+function abrirModalAcceso(tab){
+  _periodicoTabPendiente = tab || 'documento';
+  const modal = document.getElementById('authModal');
+  if(!modal){ // sin ventana de acceso no se abre el reporte
+    showToast('No se pudo cargar la ventana de acceso.', true);
+    return;
+  }
+  limpiarCamposAuth();
+  mostrarErrorAuth('');
+  modal.classList.add('show');
+  const u = document.getElementById('authUser');
+  if(u) setTimeout(()=>u.focus(), 60);
+}
+
+function cerrarModalAcceso(){
+  const modal = document.getElementById('authModal');
+  if(modal) modal.classList.remove('show');
+  limpiarCamposAuth();
+  mostrarErrorAuth('');
+}
+
+// Valida las credenciales; si son correctas abre el reporte, si no bloquea el acceso.
+function validarAccesoPeriodico(){
+  const usuario = (document.getElementById('authUser')?.value || '').trim();
+  const clave   = document.getElementById('authPass')?.value || '';
+
+  // Usuario sin distinguir mayúsculas; la contraseña sí es sensible a mayúsculas.
+  if(usuario.toLowerCase() === PERIODICO_USUARIO && clave === PERIODICO_CLAVE){
+    guardarAccesoPeriodico();
+    const tab = _periodicoTabPendiente || 'documento';
+    _periodicoTabPendiente = null;
+    cerrarModalAcceso();
+    mostrarReportePeriodico(tab);
+    return;
+  }
+
+  // Credenciales incorrectas: aviso, campos limpios y la sección sigue bloqueada.
+  mostrarErrorAuth('Usuario o contraseña incorrectos');
+  limpiarCamposAuth();
+  const u = document.getElementById('authUser');
+  if(u) u.focus();
+}
+
+// Punto de entrada del botón: primero el control de acceso, luego el reporte.
 function abrirReportePeriodico(tab){
+  if(!periodicoAccesoAutorizado()){ abrirModalAcceso(tab); return; }
+  mostrarReportePeriodico(tab);
+}
+
+// Despliegue real del reporte (solo se llama con el acceso ya autorizado).
+function mostrarReportePeriodico(tab){
   if(!state.processed){ showToast('Primero calcula los indicadores.', true); return; }
   if(!state.processed.rows || !state.processed.rows.length){
     showToast('Aún no hay datos del Reporte de Dispensación para comparar entre cargues.', true);
@@ -4897,6 +4984,22 @@ document.getElementById('btnCerrarPeriodico').addEventListener('click', cerrarRe
 document.getElementById('periodicModal').addEventListener('click', e=>{ if(e.target.id==='periodicModal') cerrarReportePeriodico(); });
 document.querySelectorAll('[data-open-periodico]').forEach(btn=>{
   btn.addEventListener('click', ()=>abrirReportePeriodico(btn.dataset.openPeriodico));
+});
+
+/* Eventos de la ventana de acceso */
+document.getElementById('authForm')?.addEventListener('submit', e=>{
+  e.preventDefault();
+  validarAccesoPeriodico();
+});
+document.getElementById('btnAuthCancelar')?.addEventListener('click', cerrarModalAcceso);
+document.getElementById('btnCerrarAuth')?.addEventListener('click', cerrarModalAcceso);
+document.getElementById('authModal')?.addEventListener('click', e=>{ if(e.target.id==='authModal') cerrarModalAcceso(); });
+// Al escribir de nuevo se oculta el mensaje de error anterior.
+['authUser','authPass'].forEach(id=>{
+  document.getElementById(id)?.addEventListener('input', ()=>mostrarErrorAuth(''));
+});
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape' && document.getElementById('authModal')?.classList.contains('show')) cerrarModalAcceso();
 });
 document.querySelectorAll('.periodico-tab-btn').forEach(btn=>{
   btn.addEventListener('click', ()=>{
