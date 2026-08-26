@@ -753,6 +753,31 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
   <footer class="foot">Indicadores de Operaciones · procesamiento 100% local en el navegador · nada se envía a ningún servidor</footer>
 </div>
 
+<!-- Ventana de acceso: pide usuario y clave antes de abrir el Reporte Comparativo Periodico -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal-box auth-box">
+    <button class="modal-close" id="btnCerrarAuth" type="button" aria-label="Cerrar">✕</button>
+    <div class="auth-icon" aria-hidden="true">🔒</div>
+    <h2>Acceso restringido</h2>
+    <p class="auth-sub">El <b>Reporte Comparativo Periódico</b> requiere autenticación. Ingresa tus credenciales para continuar.</p>
+    <form id="authForm" autocomplete="off">
+      <div class="field auth-field">
+        <label for="authUser">Usuario</label>
+        <input type="text" id="authUser" name="authUser" placeholder="Usuario" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field auth-field">
+        <label for="authPass">Contraseña</label>
+        <input type="password" id="authPass" name="authPass" placeholder="Contraseña" autocomplete="off">
+      </div>
+      <div class="auth-error" id="authError" role="alert" aria-live="polite"></div>
+      <div class="auth-actions">
+        <button type="button" class="btn btn-ghost" id="btnAuthCancelar">Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="btnAuthEntrar">Ingresar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="modal-overlay" id="periodicModal">
   <div class="modal-box">
     <button class="modal-close" id="btnCerrarPeriodico">✕</button>
