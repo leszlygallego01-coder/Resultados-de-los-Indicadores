@@ -440,6 +440,20 @@ table.data thead th.sortable.sort-active{text-decoration:underline;text-underlin
 .periodico-tab-btn:hover{color:var(--blue-deep);background:var(--blue-tint);border-color:#c5d8ea;}
 .periodico-tab-btn.active{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 2px 10px rgba(11,95,165,.24);}
 
+/* ---- ventana de acceso con clave (Reporte Comparativo Periodico) ---- */
+.auth-box{max-width:400px;padding:30px 28px 26px;text-align:center;}
+.auth-box .auth-icon{font-size:30px;line-height:1;margin-bottom:8px;}
+.auth-box h2{margin:0 0 6px;}
+.auth-sub{font-size:12.5px;color:var(--ink-soft);margin:0 0 18px;line-height:1.5;}
+.auth-field{display:flex;flex-direction:column;gap:5px;text-align:left;margin-bottom:12px;}
+.auth-field label{font-family:var(--disp);font-size:11.5px;color:var(--ink-soft);font-weight:600;}
+.auth-field input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--bg-alt);color:var(--ink);box-sizing:border-box;}
+.auth-field input:focus{outline:none;border-color:var(--blue);background:var(--white);box-shadow:0 0 0 3px rgba(11,95,165,.12);}
+.auth-error{display:none;font-size:12.5px;font-weight:600;color:var(--red);background:var(--red-soft);border:1px solid var(--red-line);border-radius:8px;padding:8px 10px;margin:2px 0 12px;text-align:left;}
+.auth-error.show{display:block;}
+.auth-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:6px;}
+@media (max-width:480px){.auth-actions{flex-direction:column-reverse;}.auth-actions .btn{width:100%;}}
+
 .corte-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
 @media (max-width:900px){.corte-grid{grid-template-columns:1fr;}}
 .corte-card{border:1px solid var(--line);border-radius:var(--radius);padding:14px;background:var(--bg-alt);text-align:center;}
