@@ -889,10 +889,34 @@ async function calcularIndicadores(){
       };
     });
 
+    // ---- Número de ocurrencia de la línea dentro de su propio cargue -----------
+    // Un mismo documento puede traer legítimamente DOS o más filas del mismo artículo
+    // en la misma bodega (por ejemplo dos renglones del mismo medicamento). Si solo se
+    // identificara la línea por documento + bodega + artículo, esas filas se confundirían
+    // entre sí y el tablero contaría una sola. Para evitarlo se numera cada repetición
+    // por su orden de aparición DENTRO DEL MISMO CARGUE (1ª, 2ª, 3ª...). Así la primera
+    // repetición de un cargue se compara con la primera del recargue siguiente, la
+    // segunda con la segunda, y cada fila del archivo conserva su propia identidad.
+    {
+      const conteoPorCargue=new Map();
+      rows.forEach(r=>{
+        const cargue=String(r.fechaCargue||'');
+        // Si la fila no trae fecha de cargue (acumulados guardados antes de incluir esa
+        // columna) no hay forma de saber a qué cargue pertenece: en ese caso se deja como
+        // repetición 1 para no partir por error las versiones de una misma línea.
+        if(!cargue){ r.ocurrenciaLinea=1; return; }
+        const k=cargue+'#'+r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo;
+        const n=(conteoPorCargue.get(k)||0)+1;
+        conteoPorCargue.set(k, n);
+        r.ocurrenciaLinea=n;
+      });
+    }
+
     // ---- Versión VIGENTE de cada línea ----------------------------------------
     // Cada recargue del Reporte de Dispensación vuelve a traer la línea con su estado
-    // actualizado, así que la misma línea (documento + bodega + artículo) puede tener
-    // varias versiones guardadas. Marcamos como VIGENTE la última versión cargada:
+    // actualizado, así que la misma línea (documento + bodega + artículo + nº de
+    // repetición dentro del cargue) puede tener varias versiones guardadas.
+    // Marcamos como VIGENTE la última versión cargada:
     // el recargue REEMPLAZA el estado de la versión anterior. Las versiones superadas
     // se conservan (el Reporte Comparativo las necesita para medir el avance por corte),
     // pero no deben sumar en los indicadores ni en el seguimiento del estado actual.
@@ -2781,8 +2805,10 @@ function setupBarSelector(selectId, containerId, table, aggregateFn, getBars){
      · las versiones de una línea que ya fueron reemplazadas por un recargue posterior, y
      · las líneas de dispensas con Estado INACTIVO.
    Además hay líneas que no caen ni en entregadas ni en pendientes (sin unidades y sin
-   faltante, o con sobrante). Este aviso deja esas cifras a la vista para que el usuario
-   pueda cuadrar el número contra su propio conteo. */
+   faltante, o con sobrante). En cambio, las filas repetidas del mismo artículo dentro de
+   un mismo documento y bodega SÍ se cuentan por separado (cada renglón del archivo es una
+   línea). Este aviso deja esas cifras a la vista para que el usuario pueda cuadrar el
+   número contra su propio conteo. */
 function renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend){
   const el = document.getElementById('lineaDiag');
   if(!el) return;
@@ -2796,15 +2822,26 @@ function renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend){
   const superadas = base.filter(r=>r.versionVigente===false).length;
   const inactivas = base.filter(r=>r.versionVigente!==false && esEstadoInactivo(r.estadoDispensa)).length;
   const otras = Math.max(0, totalLin - totalEnt - totalPend);
-  if(!superadas && !inactivas && !otras){ el.style.display='none'; el.innerHTML=''; return; }
+  // Filas repetidas: mismo documento + bodega + artículo que aparece más de una vez en el
+  // mismo cargue. Ahora cada repetición cuenta como una línea independiente.
+  const repetidas = base.filter(r=>r.versionVigente!==false && (r.ocurrenciaLinea||1)>1).length;
+  if(!superadas && !inactivas && !otras && !repetidas){ el.style.display='none'; el.innerHTML=''; return; }
   const partes = [];
   if(superadas) partes.push('<b>'+fmtInt(superadas)+'</b> líneas corresponden a versiones antiguas que un recargue posterior ya reemplazó (el Reporte de Dispensación es acumulativo, así que la misma línea puede estar varias veces en el archivo)');
   if(inactivas) partes.push('<b>'+fmtInt(inactivas)+'</b> líneas pertenecen a dispensas con Estado <b>INACTIVO</b>');
   if(otras) partes.push('<b>'+fmtInt(otras)+'</b> líneas no cuentan como entregadas ni como pendientes (sin unidades entregadas y sin faltante, o con sobrante)');
   el.style.display='';
-  el.innerHTML = '<b>¿Por qué el total no coincide con el conteo del Excel?</b> De las '
-    + fmtInt(base.length) + ' filas del archivo en este alcance, el indicador trabaja con '
-    + fmtInt(totalLin) + ' líneas activas y vigentes porque: ' + partes.join('; ') + '.';
+  let html = '';
+  if(partes.length){
+    html = '<b>¿Por qué el total no coincide con el conteo del Excel?</b> De las '
+      + fmtInt(base.length) + ' filas del archivo en este alcance, el indicador trabaja con '
+      + fmtInt(totalLin) + ' líneas activas y vigentes porque: ' + partes.join('; ') + '.';
+  } else {
+    html = '<b>Conteo de líneas:</b> el indicador trabaja con ' + fmtInt(totalLin)
+      + ' líneas activas y vigentes de las ' + fmtInt(base.length) + ' filas del archivo en este alcance.';
+  }
+  if(repetidas) html += ' Se incluyen <b>'+fmtInt(repetidas)+'</b> filas repetidas del mismo artículo dentro de un mismo documento y bodega: cada renglón del archivo cuenta como una línea independiente.';
+  el.innerHTML = html;
 }
 
 function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
@@ -4689,8 +4726,10 @@ function corteRecuperacionSoporte(r){
   return p;
 }
 // Identidad de una línea a través de los distintos cargues del Reporte de Dispensación.
+// Incluye el número de repetición dentro del cargue: si un documento trae dos filas del
+// mismo artículo en la misma bodega, cada una se cuenta y se sigue por separado.
 function claveLineaCargue(r){
-  return r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo;
+  return r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo+'|'+(r.ocurrenciaLinea||1);
 }
 // Corte de la línea según su FECHA DE DISPENSACIÓN (se conserva el nombre anterior
 // para no romper las llamadas existentes; internamente ya no usa la fecha del cargue).
