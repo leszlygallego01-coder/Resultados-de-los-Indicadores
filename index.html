@@ -253,14 +253,17 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="subview" id="sub-linea">
         <div class="stat-row" id="statsLinea"></div>
         <!-- Conciliación con el conteo manual del Excel: explica cuántas líneas se dejaron
-             por fuera (versiones superadas por un recargue, dispensas inactivas) y cuántas
-             no caen ni en entregadas ni en pendientes. -->
+             por fuera (versiones superadas por un recargue, dispensas inactivas), cuántas
+             no caen ni en entregadas ni en pendientes y cuántas son renglones repetidos. -->
         <div class="helpbox" id="lineaDiag" style="display:none;"></div>
         <div style="margin-bottom:16px;">
           <button class="btn btn-export" id="btnDescargarParetoExistencias">Descargar Pareto y No pareto existencias</button>
           <button class="btn btn-export" id="btnDescargarCodigosComprar" style="background:var(--clay,#B23A34);box-shadow:0 2px 0 #7A2019;">⬇ Descargar Códigos a Comprar (Excel)</button>
           <button class="btn btn-export" id="btnDescargarSinHomologar" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar Sin Homologar (Excel)</button>
           <button class="btn btn-export" id="btnDescargarAgotadas" style="background:#8E44AD;box-shadow:0 2px 0 #5B2D75;">⬇ Descargar Líneas Agotadas (Excel)</button>
+          <!-- Renglones repetidos (misma dispensa + bodega + código más de una vez). El botón
+               solo se muestra cuando el alcance filtrado tiene líneas repetidas. -->
+          <button class="btn btn-export" id="btnDescargarRepetidas" style="display:none;background:#B7791F;box-shadow:0 2px 0 #7C5210;" title="Descarga cada renglón repetido con su dispensa, código y cantidades para revisar por qué está repetido.">⬇ Descargar Líneas Repetidas (Excel)</button>
           <button class="btn btn-ghost" data-open-periodico="linea">📊 Reporte Comparativo Periódico</button>
         </div>
 
