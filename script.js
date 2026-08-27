@@ -2822,9 +2822,13 @@ function renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend){
   const superadas = base.filter(r=>r.versionVigente===false).length;
   const inactivas = base.filter(r=>r.versionVigente!==false && esEstadoInactivo(r.estadoDispensa)).length;
   const otras = Math.max(0, totalLin - totalEnt - totalPend);
-  // Filas repetidas: mismo documento + bodega + artículo que aparece más de una vez en el
-  // mismo cargue. Ahora cada repetición cuenta como una línea independiente.
-  const repetidas = base.filter(r=>r.versionVigente!==false && (r.ocurrenciaLinea||1)>1).length;
+  // Filas repetidas: mismo documento + bodega + artículo que aparece más de una vez.
+  // Se calculan con la misma función que alimenta el botón de descarga, para que el número
+  // del aviso y el número de filas del Excel siempre coincidan.
+  const grupos = gruposLineasRepetidas(bodegaSearch, zona);
+  const repetidas = grupos.reduce((a,g)=>a+g.length, 0);
+  const btnRep = document.getElementById('btnDescargarRepetidas');
+  if(btnRep) btnRep.style.display = repetidas ? '' : 'none';
   if(!superadas && !inactivas && !otras && !repetidas){ el.style.display='none'; el.innerHTML=''; return; }
   const partes = [];
   if(superadas) partes.push('<b>'+fmtInt(superadas)+'</b> líneas corresponden a versiones antiguas que un recargue posterior ya reemplazó (el Reporte de Dispensación es acumulativo, así que la misma línea puede estar varias veces en el archivo)');
@@ -2840,9 +2844,91 @@ function renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend){
     html = '<b>Conteo de líneas:</b> el indicador trabaja con ' + fmtInt(totalLin)
       + ' líneas activas y vigentes de las ' + fmtInt(base.length) + ' filas del archivo en este alcance.';
   }
-  if(repetidas) html += ' Se incluyen <b>'+fmtInt(repetidas)+'</b> filas repetidas del mismo artículo dentro de un mismo documento y bodega: cada renglón del archivo cuenta como una línea independiente.';
+  if(repetidas) html += ' Se incluyen <b>'+fmtInt(repetidas)+'</b> filas repetidas (mismo artículo pedido varias veces dentro de una misma dispensa y bodega, en '
+    + fmtInt(grupos.length) + ' casos): cada renglón del archivo cuenta como una línea independiente.'
+    + ' Puedes revisarlas una por una con el botón <b>Descargar Líneas Repetidas (Excel)</b>.';
   el.innerHTML = html;
 }
+
+/* ---- Líneas repetidas: mismo documento + bodega + código más de una vez ----------
+   Una dispensa puede traer el mismo medicamento en varios renglones (por ejemplo dos
+   presentaciones, dos entregas parciales o dos cargues del formulario). El tablero las
+   cuenta por separado, así que aquí se agrupan para poder revisarlas y confirmar si son
+   repeticiones legítimas o un error de digitación en el archivo.
+   Se toma solo la versión vigente de cada renglón y solo dispensas activas, igual que el
+   indicador, para que el aviso y la descarga muestren siempre el mismo número. */
+function gruposLineasRepetidas(bodegaSearch, zona){
+  const vigentes = (filteredRowsCache||[]).filter(r=>{
+    if(r.versionVigente===false) return false;             // versión superada por un recargue
+    if(!esEstadoActivo(r.estadoDispensa)) return false;    // se excluyen las dispensas INACTIVO
+    if(!r.documento) return false;
+    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    return true;
+  });
+  const mapa = new Map();
+  vigentes.forEach(r=>{
+    const k = r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo;
+    if(!mapa.has(k)) mapa.set(k, []);
+    mapa.get(k).push(r);
+  });
+  const grupos = [];
+  mapa.forEach(filas=>{
+    if(filas.length < 2) return;
+    filas.sort((a,b)=>(a.ocurrenciaLinea||1)-(b.ocurrenciaLinea||1) || a.idx-b.idx);
+    grupos.push(filas);
+  });
+  // Primero los casos con más repeticiones, luego por bodega, dispensa y código.
+  grupos.sort((a,b)=> b.length-a.length
+    || String(a[0].bodegaDetalle).localeCompare(String(b[0].bodegaDetalle),'es')
+    || String(a[0].documento).localeCompare(String(b[0].documento),'es')
+    || String(a[0].codigoArticulo).localeCompare(String(b[0].codigoArticulo),'es'));
+  return grupos;
+}
+
+// Descarga en Excel de las líneas repetidas: una fila por renglón repetido, con la dispensa,
+// el código del artículo y las cantidades, para poder verificar por qué está repetida.
+const _btnRepetidas = document.getElementById('btnDescargarRepetidas');
+if(_btnRepetidas) _btnRepetidas.addEventListener('click', ()=>{
+  if(!(filteredRowsCache||[]).length){ showToast('No hay datos calculados para exportar.', true); return; }
+  const bodegaSearch = getBodegaFiltro();
+  const zona = (document.getElementById('fZona')||{}).value || '';
+  const grupos = gruposLineasRepetidas(bodegaSearch, zona);
+  if(!grupos.length){
+    showToast('No hay líneas repetidas con los filtros actuales: ninguna dispensa trae el mismo código dos veces.', true);
+    return;
+  }
+  const filas = [];
+  grupos.forEach(g=>{
+    const total = g.length;
+    // Si todos los renglones del grupo traen exactamente los mismos números, es muy
+    // probable que sea un duplicado del archivo; si cambian, son pedidos distintos.
+    const iguales = g.every(r=>r.cantidadAutorizada===g[0].cantidadAutorizada
+      && r.unidades===g[0].unidades && r.diferencia===g[0].diferencia);
+    g.forEach((r,i)=>{
+      filas.push({
+        'Dispensa (Documento)': r.documento,
+        'Bodega': r.bodegaDetalle,
+        'Código': r.codigoArticulo,
+        'Descripción': String(r.descripcionDci||'').trim() || String(r.descripcionReporte||'').trim(),
+        'Cantidad autorizada': r.cantidadAutorizada,
+        'Cantidad entregada': r.unidades,
+        'Cantidad pendiente': r.diferencia<0 ? Math.abs(r.diferencia) : 0,
+        'Repetición': (i+1)+' de '+total,
+        'Veces en la dispensa': total,
+        'Estado línea': lineaEsEntregada(r) ? 'ENTREGADA' : (lineaEsPendiente(r) ? 'PENDIENTE' : 'SIN ENTREGA / SOBRANTE'),
+        'Estado molécula': String(r.estado||'').trim(),
+        'Posible causa': iguales ? 'Renglones idénticos (revisar posible duplicado de digitación)' : 'Cantidades distintas (parecen pedidos o entregas parciales diferentes)',
+        'Fecha dispensación': (r.fecha instanceof Date && !isNaN(r.fecha)) ? r.fecha.toISOString().slice(0,10) : '',
+        'Fecha de cargue': r.fechaCargue || ''
+      });
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), 'LINEAS REPETIDAS');
+  XLSX.writeFile(wb, 'Lineas_Repetidas_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Excel descargado: '+fmtInt(filas.length)+' líneas repetidas en '+fmtInt(grupos.length)+' dispensas/códigos.');
+});
 
 function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
   // Solo dispensas con Estado Activo (se excluyen las INACTIVO).
