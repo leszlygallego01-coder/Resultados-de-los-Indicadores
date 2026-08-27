@@ -252,6 +252,10 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <!-- ---- SUBVISTA: LINEA (SUBSANAR) ---- -->
       <div class="subview" id="sub-linea">
         <div class="stat-row" id="statsLinea"></div>
+        <!-- Conciliación con el conteo manual del Excel: explica cuántas líneas se dejaron
+             por fuera (versiones superadas por un recargue, dispensas inactivas) y cuántas
+             no caen ni en entregadas ni en pendientes. -->
+        <div class="helpbox" id="lineaDiag" style="display:none;"></div>
         <div style="margin-bottom:16px;">
           <button class="btn btn-export" id="btnDescargarParetoExistencias">Descargar Pareto y No pareto existencias</button>
           <button class="btn btn-export" id="btnDescargarCodigosComprar" style="background:var(--clay,#B23A34);box-shadow:0 2px 0 #7A2019;">⬇ Descargar Códigos a Comprar (Excel)</button>
