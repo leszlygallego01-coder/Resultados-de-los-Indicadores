@@ -2774,6 +2774,39 @@ function setupBarSelector(selectId, containerId, table, aggregateFn, getBars){
 /* =========================================================================
    11. Indicador por Línea (Subsanar) — 2.1 - 2.8
    ========================================================================= */
+/* ---- Conciliación del Indicador por Línea con el conteo manual del Excel -------
+   Cuando el usuario cuenta las filas directamente en el archivo casi siempre le sale un
+   total un poco mayor que el del tablero. La razón es que el tablero muestra el ESTADO
+   ACTUAL y por eso deja por fuera:
+     · las versiones de una línea que ya fueron reemplazadas por un recargue posterior, y
+     · las líneas de dispensas con Estado INACTIVO.
+   Además hay líneas que no caen ni en entregadas ni en pendientes (sin unidades y sin
+   faltante, o con sobrante). Este aviso deja esas cifras a la vista para que el usuario
+   pueda cuadrar el número contra su propio conteo. */
+function renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend){
+  const el = document.getElementById('lineaDiag');
+  if(!el) return;
+  const enAlcance = (r)=>{
+    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    return true;
+  };
+  const base = (filteredRowsCache||[]).filter(enAlcance);
+  if(!base.length){ el.style.display='none'; el.innerHTML=''; return; }
+  const superadas = base.filter(r=>r.versionVigente===false).length;
+  const inactivas = base.filter(r=>r.versionVigente!==false && esEstadoInactivo(r.estadoDispensa)).length;
+  const otras = Math.max(0, totalLin - totalEnt - totalPend);
+  if(!superadas && !inactivas && !otras){ el.style.display='none'; el.innerHTML=''; return; }
+  const partes = [];
+  if(superadas) partes.push('<b>'+fmtInt(superadas)+'</b> líneas corresponden a versiones antiguas que un recargue posterior ya reemplazó (el Reporte de Dispensación es acumulativo, así que la misma línea puede estar varias veces en el archivo)');
+  if(inactivas) partes.push('<b>'+fmtInt(inactivas)+'</b> líneas pertenecen a dispensas con Estado <b>INACTIVO</b>');
+  if(otras) partes.push('<b>'+fmtInt(otras)+'</b> líneas no cuentan como entregadas ni como pendientes (sin unidades entregadas y sin faltante, o con sobrante)');
+  el.style.display='';
+  el.innerHTML = '<b>¿Por qué el total no coincide con el conteo del Excel?</b> De las '
+    + fmtInt(base.length) + ' filas del archivo en este alcance, el indicador trabaja con '
+    + fmtInt(totalLin) + ' líneas activas y vigentes porque: ' + partes.join('; ') + '.';
+}
+
 function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
   // Solo dispensas con Estado Activo (se excluyen las INACTIVO).
   const rowsAll = soloActivas(rowsAllRaw);
@@ -2861,6 +2894,9 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
     <div class="stat"><div class="label">Pareto pendientes</div><div class="value">${fmtInt(totalPareto)}</div><div class="sub">${alcanceLinea}</div></div>
     <div class="stat"><div class="label">No Pareto pendientes</div><div class="value">${fmtInt(totalNoPareto)}</div><div class="sub">${alcanceLinea}</div></div>
   `;
+
+  // Conciliación con el conteo manual del Excel (por qué el total puede no coincidir).
+  renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend);
 
   // ---- dona: % de líneas ENTREGADAS vs % de líneas PENDIENTES ----
   // Funciona tanto en "Todas las bodegas (general)" como al elegir una bodega puntual: en
