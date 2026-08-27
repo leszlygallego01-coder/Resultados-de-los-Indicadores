@@ -130,6 +130,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <button data-sub="facturas">Información por factura</button>
         <button data-sub="invfisico">Comparativo Inventario Sistema vs. Físico</button>
         <button data-sub="cohortes">Indicador e Informe de Cohortes</button>
+        <button data-sub="cuentas">Base cuentas</button>
       </div>
 
       <!-- ---- SUBVISTA: DISPENSA ---- -->
@@ -747,6 +748,92 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
                 <tr>
                   <th>#</th><th>Código</th><th>Descripción DCI</th>
                   <th>Líneas</th><th>Pacientes</th><th>Pendientes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- SUBVISTA: BASE CUENTAS (responsables por EPS, zona y bodega) ---- -->
+      <div class="subview" id="sub-cuentas">
+        <div class="helpbox">Asigna cada dispensación al <b>Líder</b> y/o <b>Gestor de cuenta</b> que responde por esa EPS, para ver el cumplimiento por persona. La EPS se compara por la <b>EPS consolidada</b> (así los regímenes y tutelas de una misma EPS quedan en la cuenta correcta); si el responsable tiene una <b>zona</b> o una <b>bodega</b> asignada, solo se le suman las líneas de ese alcance, y si su zona es <b>GENERAL</b> atiende toda la EPS. Se cuentan <b>solo dispensas con Estado Activo</b> y se respetan los filtros de bodega y zona de la barra superior. Cuando un Líder y su Gestor comparten la misma cuenta, la línea suma para ambos y en la fila <b>TOTAL</b> se cuenta una sola vez.</div>
+        <div class="helpbox" id="cuentasDiag" style="display:none;"></div>
+        <div class="stat-row" id="statsCuentas"></div>
+
+        <div class="seguimiento-section">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
+            <div style="flex:1;min-width:240px;">
+              <h3>👥 Base de cuentas por responsable</h3>
+              <p class="seg-desc">Líneas a cargo, entregadas, pendientes y % de cumplimiento de cada responsable, con la EPS, la zona y la bodega que atiende.</p>
+            </div>
+            <div class="field" style="min-width:210px;">
+              <label>Responsable</label>
+              <select id="fCuentaResponsable"><option value="">Todos los responsables</option></select>
+            </div>
+            <div class="field" style="min-width:170px;">
+              <label>Cargo</label>
+              <select id="fCuentaCargo">
+                <option value="">Todos los cargos</option>
+                <option value="Líder">Líder</option>
+                <option value="Gestor cuenta">Gestor de cuenta</option>
+              </select>
+            </div>
+            <div class="field" style="min-width:210px;">
+              <label>EPS a cargo</label>
+              <select id="fCuentaEps"><option value="">Todas las EPS</option></select>
+            </div>
+            <button class="btn btn-export" id="btnExportCuentas">⬇ Exportar base de cuentas (Excel)</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data" id="tblCuentasResp">
+              <thead>
+                <tr>
+                  <th>Responsable</th><th>Cargo</th><th>EPS a cargo</th><th>Zona</th><th>Bodega</th>
+                  <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
+                  <th>% Cumplimiento</th><th>Und. pendientes</th><th>Bodegas</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="seguimiento-section">
+          <h3>📈 Evolución por cortes</h3>
+          <p class="seg-desc">Cómo avanzó cada responsable corte a corte. Los cortes se arman con la <b>fecha de dispensación</b> y en cada uno se toma el estado vigente al cierre de ese corte; un corte sin dispensaciones queda en <b>—</b> para no repetir la cifra anterior.</p>
+          <div class="table-wrap">
+            <table class="data" id="tblCuentasCortes">
+              <thead>
+                <tr>
+                  <th rowspan="2">Responsable</th><th rowspan="2">Cargo</th>
+                  <th colspan="3">Corte 1 (días 1-10)</th>
+                  <th colspan="3">Corte 2 (días 11-20)</th>
+                  <th colspan="3">Corte 3 (días 21-31)</th>
+                  <th rowspan="2">Pendientes recuperados (C1 → C3)</th>
+                </tr>
+                <tr>
+                  <th>Entregadas</th><th>Pendientes</th><th>% Cumpl.</th>
+                  <th>Entregadas</th><th>Pendientes</th><th>% Cumpl.</th>
+                  <th>Entregadas</th><th>Pendientes</th><th>% Cumpl.</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="seguimiento-section">
+          <h3>🔎 Detalle por EPS, zona y bodega</h3>
+          <p class="seg-desc">Desglose de las líneas de cada responsable por EPS consolidada, zona y bodega, ordenado por pendientes de mayor a menor. En pantalla se muestran hasta 600 filas; el Excel trae el detalle completo.</p>
+          <div class="table-wrap" style="max-height:560px;">
+            <table class="data" id="tblCuentasDetalle">
+              <thead>
+                <tr>
+                  <th>Responsable</th><th>Cargo</th><th>EPS Consolidada</th><th>Zona</th><th>Bodega</th>
+                  <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
+                  <th>% Cumplimiento</th><th>Und. pendientes</th>
                 </tr>
               </thead>
               <tbody></tbody>
