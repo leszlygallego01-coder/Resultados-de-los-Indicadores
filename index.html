@@ -305,7 +305,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         </div>
 
         <div class="table-wrap">
-          <p class="seg-desc" style="margin-bottom:8px;"><b>Alcance:</b> se cuentan <b>solo las dispensas con Estado Activo</b>; las INACTIVO se excluyen. &nbsp;<b>Orden:</b> por defecto por <b>Efic. final</b> de Eficiencia Pareto (cantidad), de mayor a menor. <b>Puedes ordenar por cualquier columna</b>: haz clic en el encabezado que quieras (incluidas Zona y Bodega) o usa los filtros de abajo; un segundo clic invierte entre mayor→menor y menor→mayor. La columna <b>Sin Homologar</b> cuenta las líneas pendientes cuyo código no tiene clasificación PARETO / NO PARETO en el catálogo Homólogo.</p>
+          <p class="seg-desc" style="margin-bottom:8px;"><b>Alcance:</b> se cuentan <b>solo las dispensas con Estado Activo</b>; las INACTIVO se excluyen antes de cualquier cálculo. Por cada <b>Documento + Bodega Detalle</b>: <b>Total</b> = todas sus líneas activas, <b>Entregadas</b> = líneas con Unidades mayor a 0 y Diferencia igual a 0, <b>Pendientes</b> = líneas con Diferencia menor que 0, y <b>% Cumplimiento</b> = Entregadas ÷ Total. &nbsp;<b>Orden:</b> por defecto por <b>Efic. final</b> de Eficiencia Pareto (cantidad), de mayor a menor. <b>Puedes ordenar por cualquier columna</b>: haz clic en el encabezado que quieras (incluidas Zona y Bodega) o usa los filtros de abajo; un segundo clic invierte entre mayor→menor y menor→mayor. La columna <b>Sin Homologar</b> cuenta las líneas pendientes cuyo código no tiene clasificación PARETO / NO PARETO en el catálogo Homólogo.</p>
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
             <div class="field" style="max-width:300px;margin-bottom:0;">
               <label>Ordenar por</label>
@@ -315,6 +315,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
                 <option value="lineas">Líneas · Total</option>
                 <option value="lineasEnt">Líneas · Entregadas</option>
                 <option value="lineasPen">Líneas · Pendientes</option>
+                <option value="efLineas">Líneas · % Cumplimiento</option>
                 <option value="sinHomologar">Líneas · Sin Homologar</option>
                 <option value="molParetoPend">Pareto · Moléculas</option>
                 <option value="paretoAgotado">Pareto · Agotadas</option>
@@ -348,7 +349,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <thead>
               <tr>
                 <th rowspan="2" class="sortable" data-col="zona" title="Clic para ordenar por Zona">Zona<span class="sort-ind">⇅</span></th><th rowspan="2" class="sortable" data-col="bodega" title="Clic para ordenar por Bodega">Bodega<span class="sort-ind">⇅</span></th>
-                <th colspan="4">Líneas</th>
+                <th colspan="5">Líneas</th>
                 <th colspan="2" class="grp-pareto">Pareto</th>
                 <th colspan="2" class="grp-nopareto">No pareto</th>
                 <th colspan="2">Cierre (agotados)</th>
@@ -356,7 +357,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
                 <th colspan="6" class="grp-nopareto">Eficiencia No Pareto (cantidad)</th>
               </tr>
               <tr class="sub">
-                <th class="sortable" data-col="lineas" title="Clic para ordenar por Líneas · Total">Total<span class="sort-ind">⇅</span></th><th class="sortable" data-col="lineasEnt" title="Clic para ordenar por Líneas · Entregadas">Entregadas<span class="sort-ind">⇅</span></th><th class="sortable" data-col="lineasPen" title="Clic para ordenar por Líneas · Pendientes">Pendientes<span class="sort-ind">⇅</span></th>
+                <th class="sortable" data-col="lineas" title="Clic para ordenar por Líneas · Total">Total<span class="sort-ind">⇅</span></th><th class="sortable" data-col="lineasEnt" title="Clic para ordenar por Líneas · Entregadas">Entregadas<span class="sort-ind">⇅</span></th><th class="sortable" data-col="lineasPen" title="Clic para ordenar por Líneas · Pendientes">Pendientes<span class="sort-ind">⇅</span></th><th class="sortable" data-col="efLineas" title="Clic para ordenar por % Cumplimiento (Entregadas / Total)">% Cumplimiento<span class="sort-ind">⇅</span></th>
                 <th class="sortable" data-col="sinHomologar" title="Clic para ordenar por Sin Homologar">Sin Homologar<span class="sort-ind">⇅</span></th>
                 <th class="sortable" data-col="molParetoPend" title="Clic para ordenar por Pareto · Moléculas">Moléculas<span class="sort-ind">⇅</span></th><th class="sortable" data-col="paretoAgotado" title="Clic para ordenar por Pareto · Agotadas">Agotadas<span class="sort-ind">⇅</span></th>
                 <th class="sortable" data-col="molNoParetoPend" title="Clic para ordenar por No pareto · Moléculas">Moléculas<span class="sort-ind">⇅</span></th><th class="sortable" data-col="noParetoAgotado" title="Clic para ordenar por No pareto · Agotadas">Agotadas<span class="sort-ind">⇅</span></th>
