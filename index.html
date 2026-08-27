@@ -143,7 +143,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <!-- ---- Seguimiento de Dispensación agrupada por Bodega ---- -->
         <div class="seguimiento-section" id="seguimientoSection">
           <h3>📋 Seguimiento de Dispensación por Bodega</h3>
-          <p class="seg-desc">Muestra entregadas vs pendientes por bodega para cada corte del periodo, comparando los cargues acumulativos del Reporte de Dispensación (cada cargue nuevo actualiza el estado de la misma línea). <b>Orden:</b> las bodegas se listan por Índice de Pendientes de mayor a menor (las más críticas primero).</p>
+          <p class="seg-desc">Muestra entregadas vs pendientes por bodega para cada corte del periodo. Los cortes se arman con la <b>fecha de dispensación</b> de cada línea y el estado se toma de la última versión cargada (cada cargue nuevo actualiza el estado de la misma línea). <b>Orden:</b> las bodegas se listan por Índice de Pendientes de mayor a menor (las más críticas primero).</p>
           <div class="seg-no-datos" id="segNoDatos"><b>Aún no hay datos del Reporte de Dispensación.</b> Se habilita cuando el Reporte de Dispensación se cargue desde el Panel de Cargue.</div>
           <div id="segContent" style="display:none;">
             <div class="seguimiento-corte-sel">
@@ -185,12 +185,12 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
         <div class="chart-row" id="cmpDispensaRow" style="grid-template-columns:1fr 1fr;display:none;">
           <div class="chart-card">
-            <h4>Dispensas · Primer cargue</h4>
+            <h4>Dispensas · Estado inicial</h4>
             <svg id="cmpDispensaInicial" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpDispensaInicialLegend"></div>
           </div>
           <div class="chart-card">
-            <h4>Dispensas · Último cargue</h4>
+            <h4>Dispensas · Estado actual</h4>
             <svg id="cmpDispensaActual" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpDispensaActualLegend"></div>
           </div>
@@ -262,12 +262,12 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
         <div class="chart-row" id="cmpLineaRow" style="grid-template-columns:1fr 1fr;display:none;">
           <div class="chart-card">
-            <h4>Líneas · Primer cargue</h4>
+            <h4>Líneas · Estado inicial</h4>
             <svg id="cmpLineaInicial" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpLineaInicialLegend"></div>
           </div>
           <div class="chart-card">
-            <h4>Líneas · Último cargue</h4>
+            <h4>Líneas · Estado actual</h4>
             <svg id="cmpLineaActual" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpLineaActualLegend"></div>
           </div>
@@ -782,7 +782,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
   <div class="modal-box">
     <button class="modal-close" id="btnCerrarPeriodico">✕</button>
     <h2>Reporte Comparativo Periódico</h2>
-    <p style="font-size:12.5px;color:var(--ink-soft);margin:0;">Compara los cargues acumulativos del Reporte de Dispensación según su fecha de cargue, segmentada en 3 cortes del mes: días 1-10, 11-20 y 21-31. Cada corte muestra el estado ACUMULADO hasta ese día, tomando la última versión cargada de cada línea. <b>Alcance:</b> se cuentan solo las dispensas con <b>Estado Activo</b>; las INACTIVO se excluyen.</p>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:0;">Compara los cargues acumulativos del Reporte de Dispensación organizados por la <b>fecha de dispensación</b>, segmentada en 3 cortes del mes: días 1-10, 11-20 y 21-31. Cada corte muestra el estado ACUMULADO hasta ese día, tomando la última versión cargada de cada línea. <b>Alcance:</b> se cuentan solo las dispensas con <b>Estado Activo</b>; las INACTIVO se excluyen.</p>
     <div id="periodicoFilters" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
       <div class="field" style="flex:1;min-width:140px;"><label>EPS Consolidada</label><select id="pfEpsGrupo"><option value="">Todas</option></select></div>
       <div class="field" style="flex:1;min-width:140px;"><label>Modalidad</label><select id="pfModalidad"><option value="">Todas</option></select></div>
