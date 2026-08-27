@@ -1590,6 +1590,21 @@ function esEstadoActivo(v){
 function soloActivas(rows){
   return rows.filter(r=>esEstadoActivo(r.estadoDispensa));
 }
+
+/* ---- Reglas exactas de conteo del Indicador por Línea -----------------------
+   Se aplican SOLO sobre líneas activas (las INACTIVO ya salieron con soloActivas).
+   · ENTREGADA : Unidades > 0 y Diferencia = 0.
+   · PENDIENTE : Diferencia < 0 (faltó cantidad frente a lo autorizado).
+   Una línea con Diferencia > 0 (sobrante) o con Unidades en 0 y Diferencia en 0 no
+   suma en ninguno de los dos grupos, pero sí en el total de líneas.
+   Los códigos que no son medicamento (servicios, domicilios) nunca generan pendiente. */
+function lineaEsEntregada(r){
+  return toNumber(r && r.unidades) > 0 && toNumber(r && r.diferencia) === 0;
+}
+function lineaEsPendiente(r){
+  if(!r || r.noMedicamento) return false;
+  return toNumber(r.diferencia) < 0;
+}
 // Guarda las dispensas inactivas ya agrupadas (Documento + Bodega) del último render,
 // para que el botón de descarga por bodega exporte exactamente lo que se ve en pantalla.
 let _inactivasDispCache = [];
@@ -2772,8 +2787,12 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
     // sin clasificacion Pareto), se usa para las tarjetas resumen de esta bodega.
     let pendAgotadas=0;
     rs.forEach(r=>{
+      // Total: todas las líneas válidas/activas cargadas para la bodega.
       lineas++;
-      if(r.lineaPendiente==='NO'){ lineasEnt++; return; }
+      // Entregada: se entregó algo (Unidades > 0) y no quedó faltante (Diferencia = 0).
+      if(lineaEsEntregada(r)) lineasEnt++;
+      // Pendiente: quedó faltante frente a lo autorizado (Diferencia < 0).
+      if(!lineaEsPendiente(r)) return;
       lineasPen++;
       const agotado = r.estado==='TECNOLOGIA EN SALUD AGOTADO';
       if(agotado) pendAgotadas++;
@@ -2829,20 +2848,25 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
   // cambiar el buscador de bodega o la zona los acumulados se recalculan igual que la
   // tabla y los gráficos, y coinciden con la fila TOTAL.
   const totalPend = sumField(table,'lineasPen');
+  const totalLin = sumField(table,'lineas');
+  const totalEnt = sumField(table,'lineasEnt');
+  const pctCumpl = totalLin ? totalEnt/totalLin : null;   // % Cumplimiento = Entregadas / Total
   const totalAgot = sumField(table,'pendAgotadas');
   const totalPareto = sumField(table,'molParetoPend');
   const totalNoPareto = sumField(table,'molNoParetoPend');
   const alcanceLinea = describirAlcanceFiltro(table, bodegaSearch, zona);
   document.getElementById('statsLinea').innerHTML = `
+    <div class="stat"><div class="label">% Cumplimiento de líneas</div><div class="value">${fmtPct(pctCumpl)}</div><div class="sub">${fmtInt(totalEnt)} entregadas de ${fmtInt(totalLin)} líneas activas · ${alcanceLinea}</div></div>
     <div class="stat"><div class="label">Líneas pendientes</div><div class="value">${fmtInt(totalPend)}</div><div class="sub">${fmtInt(totalAgot)} por molécula agotada · ${alcanceLinea}</div></div>
     <div class="stat"><div class="label">Pareto pendientes</div><div class="value">${fmtInt(totalPareto)}</div><div class="sub">${alcanceLinea}</div></div>
     <div class="stat"><div class="label">No Pareto pendientes</div><div class="value">${fmtInt(totalNoPareto)}</div><div class="sub">${alcanceLinea}</div></div>
   `;
 
   // ---- dona: % de líneas ENTREGADAS vs % de líneas PENDIENTES ----
-  // Funciona tanto en "Todas las bodegas (general)" como al elegir una bodega puntual:
-  // en ambos casos los dos porcentajes se calculan sobre el total de líneas de ese alcance
-  // y siempre suman 100%.
+  // Funciona tanto en "Todas las bodegas (general)" como al elegir una bodega puntual: en
+  // ambos casos los porcentajes se calculan sobre el total de líneas activas de ese alcance.
+  // Con las reglas actuales una línea sin faltante pero sin unidades entregadas no cuenta ni
+  // como entregada ni como pendiente, por eso puede aparecer un tercer grupo "Otras".
   function aggregateLineasGeneral(tbl){
     const s=(f)=>sumField(tbl,f);
     const tL=s('lineas'), tE=s('lineasEnt'), tP=s('lineasPen');
@@ -2856,10 +2880,14 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
     // nunca dependa de un campo ausente.
     const pEnt = tot ? ent/tot : (row.efLineas||0);
     const pPen = tot ? pen/tot : (row.pendLineas||0);
-    return [
+    const pOtras = Math.max(0, 1 - pEnt - pPen);
+    const slices = [
       {label:'% Líneas entregadas', value: pEnt, color:'#1E8F5E'},
       {label:'% Líneas pendientes', value: pPen, color:'#D98A2B'}
     ];
+    // Solo se muestra el tercer grupo si realmente existe (evita una porción vacía).
+    if(pOtras > 1e-9) slices.push({label:'% Otras líneas', value: pOtras, color:'#9CA9B6'});
+    return slices;
   }, {
     centerFn:(slices)=>{
       const ef = slices.find(s=>s.label==='% Líneas entregadas');
@@ -2869,7 +2897,11 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
     notaFn:(row)=>{
       const tot=row.lineas||0;
       if(!tot) return 'Sin líneas en el alcance seleccionado.';
-      return 'Total líneas: '+fmtInt(tot)+' · entregadas: '+fmtInt(row.lineasEnt||0)+' · pendientes: '+fmtInt(row.lineasPen||0);
+      const ent=row.lineasEnt||0, pen=row.lineasPen||0;
+      const otras = Math.max(0, tot-ent-pen);
+      let txt='Total líneas: '+fmtInt(tot)+' · entregadas: '+fmtInt(ent)+' · pendientes: '+fmtInt(pen);
+      if(otras>0) txt += ' · otras: '+fmtInt(otras)+' (sin faltante y sin unidades entregadas)';
+      return txt;
     }
   });
 
@@ -2952,6 +2984,7 @@ function pintarTablaLinea(){
     <tr>
       <td class="txt">${t.zona}</td><td class="txt">${t.bodega}</td>
       <td>${fmtInt(t.lineas)}</td><td>${fmtInt(t.lineasEnt)}</td><td>${fmtInt(t.lineasPen)}</td>
+      <td class="${effClass(t.efLineas)}">${fmtPct(t.efLineas)}</td>
       <td>${fmtInt(t.sinHomologar)}</td>
       <td>${fmtInt(t.molParetoPend)}</td><td>${fmtInt(t.paretoAgotado)}</td>
       <td>${fmtInt(t.molNoParetoPend)}</td><td>${fmtInt(t.noParetoAgotado)}</td>
@@ -2959,7 +2992,7 @@ function pintarTablaLinea(){
       <td>${fmtInt(t.cantPuntoPareto)}</td><td class="${effClass(t.efPuntoPareto)}">${fmtPct(t.efPuntoPareto)}</td><td>${fmtInt(t.cantBodegaPareto)}</td><td class="${effClass(t.efBodegaPareto)}">${fmtPct(t.efBodegaPareto)}</td><td class="${effClass(t.efFinalPareto)}">${fmtPct(t.efFinalPareto)}</td><td class="pct-bad">${fmtPct(t.pctComprasPareto)}</td>
       <td>${fmtInt(t.cantPuntoNoPareto)}</td><td class="${effClass(t.efPuntoNoPareto)}">${fmtPct(t.efPuntoNoPareto)}</td><td>${fmtInt(t.cantBodegaNoPareto)}</td><td class="${effClass(t.efBodegaNoPareto)}">${fmtPct(t.efBodegaNoPareto)}</td><td class="${effClass(t.efFinalNoPareto)}">${fmtPct(t.efFinalNoPareto)}</td><td class="pct-bad">${fmtPct(t.pctComprasNoPareto)}</td>
     </tr>`).join('');
-  if(!table.length) bodyHtml='<tr><td colspan="24" class="txt" style="text-align:center;color:#9CA9B6;">Sin datos para el filtro seleccionado.</td></tr>';
+  if(!table.length) bodyHtml='<tr><td colspan="25" class="txt" style="text-align:center;color:#9CA9B6;">Sin datos para el filtro seleccionado.</td></tr>';
   else{
     const s=(f)=>sumField(table,f);
     const tLineas=s('lineas'), tEnt=s('lineasEnt'), tPen=s('lineasPen'), tSinHom=s('sinHomologar');
@@ -2970,6 +3003,7 @@ function pintarTablaLinea(){
     const tComprasP = tMolP? Math.max(0,1-tEfFP): null, tComprasNP = tMolNP? Math.max(0,1-tEfFNP): null;
     bodyHtml += `<tr class="total-row"><td class="txt">—</td><td class="txt">TOTAL (${table.length} bodegas)</td>
       <td>${fmtInt(tLineas)}</td><td>${fmtInt(tEnt)}</td><td>${fmtInt(tPen)}</td>
+      <td class="${effClass(tLineas?tEnt/tLineas:null)}">${fmtPct(tLineas?tEnt/tLineas:null)}</td>
       <td>${fmtInt(tSinHom)}</td>
       <td>${fmtInt(tMolP)}</td><td>${fmtInt(tParAg)}</td><td>${fmtInt(tMolNP)}</td><td>${fmtInt(tNoParAg)}</td>
       <td>${fmtInt(tAgot)}</td><td>${fmtPct(tPen?tAgot/tPen:null)}</td>
@@ -3277,7 +3311,7 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
   XLSX.utils.book_append_sheet(wb, wsD, 'INDICADOR DE DISPENSA');
 
   const wsL=XLSX.utils.json_to_sheet(lastTables.linea.map(t=>({
-    'Zona':t.zona,'Bodega':t.bodega,'Lineas':t.lineas,'Lineas Entregadas':t.lineasEnt,'Lineas Pendientes':t.lineasPen,'Sin Homologar':t.sinHomologar,
+    'Zona':t.zona,'Bodega':t.bodega,'Lineas':t.lineas,'Lineas Entregadas':t.lineasEnt,'Lineas Pendientes':t.lineasPen,'% Cumplimiento':t.efLineas,'Sin Homologar':t.sinHomologar,
     'Moleculas Pareto':t.molParetoPend,'Pareto Agotado':t.paretoAgotado,'Moleculas No Pareto':t.molNoParetoPend,'No Pareto Agotado':t.noParetoAgotado,
     'Total Lineas Agotadas':t.totalAgotadas,'% Cierre de Lineas':t.pctCierre,
     'Cant. en el Punto (Pareto)':t.cantPuntoPareto,'Cant. en Bodega (Pareto)':t.cantBodegaPareto,
@@ -3356,7 +3390,8 @@ document.getElementById('btnDescargarParetoExistencias').addEventListener('click
     if(!esEstadoActivo(r.estadoDispensa)) return false;
     if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
-    return r.lineaPendiente==='SI' && (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO');
+    // Misma regla del Indicador por Línea: pendiente = Diferencia < 0.
+    return lineaEsPendiente(r) && (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO');
   });
   const rowShape = r => ({
     'Zona':r.zona,'Bodega Detalle':r.bodegaDetalle,'Tipo':r.moleculaPareto,'Ubicación':r.sePuedeSubsanarPunto==='SI' ? 'Punto' : 'Bodega Principal','Documento':r.documento,
@@ -3389,8 +3424,8 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     if(!esEstadoActivo(r.estadoDispensa)) return false;
     if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
-    // Aún pendiente según el último cargue y sin existencia disponible en ningún lado.
-    const aunPendiente = r.lineaPendiente==='SI';
+    // Aún pendiente según el último cargue (Diferencia < 0) y sin existencia disponible en ningún lado.
+    const aunPendiente = lineaEsPendiente(r);
     return aunPendiente && r.sePuedeSubsanarPunto==='NO' && r.sePuedeSubsanarBodega==='NO';
   }).map(r=>({
     'Código a comprar': r.codigoArticulo,
@@ -3417,7 +3452,7 @@ document.getElementById('btnDescargarSinHomologar').addEventListener('click', ()
     if(!esEstadoActivo(r.estadoDispensa)) return false;
     if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
-    if(r.lineaPendiente!=='SI') return false;
+    if(!lineaEsPendiente(r)) return false;               // pendiente = Diferencia < 0
     return r.moleculaPareto!=='PARETO' && r.moleculaPareto!=='NO PARETO';
   }).map(r=>({
     'Código Artículo': r.codigoArticulo,
@@ -3449,7 +3484,7 @@ document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
   const agotadas = filteredRowsCache.filter(r=>{
     if(r.versionVigente===false) return false;          // versión superada por un recargue
     if(!esEstadoActivo(r.estadoDispensa)) return false;
-    if(r.lineaPendiente!=='SI') return false;
+    if(!lineaEsPendiente(r)) return false;               // pendiente = Diferencia < 0
     if(!normValue(r.estado).includes('AGOTAD')) return false;
     hayAgotadasSinFiltro=true;                          // hay agotadas, aunque no en este filtro
     if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
@@ -3497,10 +3532,38 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     'Codigo': r.codigoArticulo,
     'Descripción DCI': r.descripcionDci,
     'Cantidad': r.cantidadAutorizada,
+    'Unidades Entregadas': r.unidades,
+    'Diferencia': r.diferencia,
+    // Mismo criterio del Indicador por Línea: ENTREGADA (Unidades>0 y Diferencia=0),
+    // PENDIENTE (Diferencia<0) y OTRA para el resto de casos.
+    'Estado de la línea': lineaEsEntregada(r) ? 'ENTREGADA' : (lineaEsPendiente(r) ? 'PENDIENTE' : 'OTRA'),
     'Usuario Creación': r.usuarioCreacion
   }));
   if(!detalle.length){ showToast('No hay líneas para el filtro actual.', true); return; }
+  // Resumen por bodega con las mismas reglas del Indicador por Línea
+  // (Total = líneas activas, Entregadas = Unidades>0 y Diferencia=0, Pendientes = Diferencia<0).
+  const porBod=new Map();
+  detalle.forEach(d=>{
+    const k=d['Bodega detalle']||'N/D';
+    if(!porBod.has(k)) porBod.set(k, {bodega:k, total:0, ent:0, pen:0});
+    const g=porBod.get(k);
+    g.total++;
+    if(d['Estado de la línea']==='ENTREGADA') g.ent++;
+    else if(d['Estado de la línea']==='PENDIENTE') g.pen++;
+  });
+  const resumenBod=[...porBod.values()]
+    .sort((a,b)=>String(a.bodega).localeCompare(String(b.bodega),'es'))
+    .map(g=>({
+      'Bodega detalle': g.bodega,
+      'Total líneas activas': g.total,
+      'Líneas entregadas': g.ent,
+      'Líneas pendientes': g.pen,
+      '% Cumplimiento': g.total ? g.ent/g.total : ''
+    }));
+  const totGen = resumenBod.reduce((a,g)=>({t:a.t+g['Total líneas activas'], e:a.e+g['Líneas entregadas'], p:a.p+g['Líneas pendientes']}), {t:0,e:0,p:0});
+  resumenBod.push({'Bodega detalle':'TOTAL','Total líneas activas':totGen.t,'Líneas entregadas':totGen.e,'Líneas pendientes':totGen.p,'% Cumplimiento': totGen.t ? totGen.e/totGen.t : ''});
   const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenBod), 'Cumplimiento por Bodega');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle por Bodega');
   const fecha=new Date().toISOString().slice(0,10);
   const sufijo = (bodegaTexto || zona || 'Todas').replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]+/g,'').trim().replace(/\s+/g,'_');
