@@ -19,13 +19,19 @@ const EPS_GRUPO_MAP_RAW = {
   'FAMISANAR EPS CONTRIBUTIVO':'FAMISANAR','FAMISANAR EPS SUBSIDIADO':'FAMISANAR',
   'FIDEICOMISOS PATRIMONIOS AUTONOMOS FIDUCIARIA LA PREVISORA S.A-CAPITA':'FIDEICOMISOS','FIDEICOMISOS PATRIMONIOS AUTONOMOS FIDUCIARIA LA PREVISORA S.A-EVENTO':'FIDEICOMISOS',
   'NUEVA EMPRESA PROMOTORA DE SALUD S.A.-CONTRIBUTIVO':'NUEVA EPS','NUEVA EMPRESA PROMOTORA DE SALUD S.A.-TUTELAS':'NUEVA EPS','NUEVA EMPRESA PROMOTORA DE SALUD S.A.-TUTELAS SUB':'NUEVA EPS','NUEVA EMPRESA PROMOTORA DE SALUD S.A.-SUBSIDIADO':'NUEVA EPS',
+  'SERVICIO OCCIDENTAL DE SALUD S.O.S. S.A':'S.O.S','SERVICIO OCCIDENTAL DE SALUD S.O.S. S.A-CONTRIBUTIVO':'S.O.S','SERVICIO OCCIDENTAL DE SALUD S.O.S. S.A-SUBSIDIADO':'S.O.S',
   'POSITIVA COMPAÑÍA DE SEGUROS S.A.':'POSITIVA',
   'UNION TEMPORAL SALUD INTEGRAL MAISFEN':'UNION TEMPORAL SALUD INTEGRAL MAISFEN'
 };
 const EPS_GRUPO_MAP = new Map(Object.entries(EPS_GRUPO_MAP_RAW).map(([k,v])=>[normValue(k), v]));
 function epsAGrupo(eps){
-  const g = EPS_GRUPO_MAP.get(normValue(eps));
-  return g || String(eps||'').trim() || 'N/D'; // si no está en la tabla, queda como su propia sigla (no se pierde)
+  const nv = normValue(eps);
+  const g = EPS_GRUPO_MAP.get(nv);
+  if(g) return g;
+  // Respaldo para las variantes de S.O.S. (con o sin sufijo de régimen, puntos o espacios
+  // distintos): todas se consolidan en una sola EPS "S.O.S".
+  if(nv.includes('SERVICIO OCCIDENTAL DE SALUD') || /(^|[\s-])S\s?\.?\s?O\s?\.?\s?S(\b|\.)/.test(nv)) return 'S.O.S';
+  return String(eps||'').trim() || 'N/D'; // si no está en la tabla, queda como su propia sigla (no se pierde)
 }
 
 // Correcciones de siglas mal codificadas / duplicadas que llegan del archivo fuente
@@ -3420,7 +3426,7 @@ function hayContextoSoporte(){
 
 (function initDescargasSoporteEvento(){
   const bx=document.getElementById('btnSoporteExportXlsx');
-  const bc=document.getElementById('btnSoporteExportCsv');
+  const bs=document.getElementById('btnSoporteSinSoporte');
   const fecha=()=>new Date().toISOString().slice(0,10);
   if(bx) bx.addEventListener('click', ()=>{
     if(!hayContextoSoporte()) return;
@@ -3440,17 +3446,31 @@ function hayContextoSoporte(){
     XLSX.writeFile(wb, `Soporte_Evento_${fecha()}.xlsx`);
     showToast('Excel de Soporte Evento descargado.');
   });
-  if(bc) bc.addEventListener('click', ()=>{
+  // Descarga SOLO las dispensas de evento entregadas que siguen SIN soporte,
+  // con el mismo alcance (bodega/zona y corte) que se ve en pantalla.
+  if(bs) bs.addEventListener('click', ()=>{
     if(!hayContextoSoporte()) return;
-    const detalle=construirDetalleSoporteEvento();
-    if(!detalle.length){ showToast('No hay dispensas de Soporte Evento en el filtro actual.', true); return; }
-    const cols=Object.keys(detalle[0]);
-    const esc=v=>{ const s=(v==null?'':String(v)); return /[";\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
-    const lineas=[cols.join(';')].concat(detalle.map(d=>cols.map(c=>esc(d[c])).join(';')));
-    // BOM para que Excel reconozca los acentos al abrir el CSV.
-    const blob=new Blob(['\ufeff'+lineas.join('\r\n')], {type:'text/csv;charset=utf-8;'});
-    descargarArchivo(`Soporte_Evento_${fecha()}.csv`, blob);
-    showToast('CSV de Soporte Evento descargado.');
+    const sinSoporte=construirDetalleSoporteEvento().filter(d=>d['Estado soporte']==='SIN SOPORTE');
+    if(!sinSoporte.length){ showToast('No hay dispensas SIN soporte con los filtros actuales.', true); return; }
+    // Las columnas propias del soporte recuperado no aplican aqui: se omiten.
+    const filas=sinSoporte.map(d=>({
+      'Zona':d['Zona'],'Bodega':d['Bodega'],'Documento':d['Documento'],'Contrato':d['Contrato'],
+      'Estado dispensa':d['Estado dispensa'],'Estado soporte':d['Estado soporte'],
+      'Estado al':d['Estado al'],'Corte global filtrado':d['Corte global filtrado'],
+      'Fecha del ultimo cargue':d['Fecha del ultimo cargue']
+    }));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), 'DISPENSAS SIN SOPORTE');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+      'Alcance': lastSoporteCtx.alcance,
+      'Estado al': lastSoporteCtx.etqCorte,
+      'Corte global filtrado': lastSoporteCtx.corteGlobal,
+      'Filtro de bodega': lastSoporteCtx.bodegaSearch || '(todas)',
+      'Zona': lastSoporteCtx.zona || '(todas)',
+      'Dispensas SIN soporte': filas.length
+    }]), 'ALCANCE');
+    XLSX.writeFile(wb, `Dispensas_SIN_soporte_${fecha()}.xlsx`);
+    showToast(fmtInt(filas.length)+' dispensas SIN soporte descargadas.');
   });
 })();
 
@@ -5273,6 +5293,18 @@ function populatePeriodicoFilters(){
   const selM=document.getElementById('pfModalidad');
   const selZ=document.getElementById('pfZona');
   const selB=document.getElementById('pfBodega');
+  // Filtro por mes: se arman las opciones con los meses (fecha de dispensación) presentes
+  // en el histórico activo, ordenados cronológicamente.
+  const selMes=document.getElementById('pfMes');
+  if(selMes){
+    const activas=soloActivas(p.rows);
+    const mesesSet=new Set();
+    for(let i=0;i<activas.length;i++){ const k=mesKey(activas[i].fecha); if(k) mesesSet.add(k); }
+    const meses=Array.from(mesesSet).sort();
+    const prev=selMes.value;
+    selMes.innerHTML='<option value="">Todos</option>'+meses.map(k=>`<option value="${k}">${escHtml(mesLabel(k))}</option>`).join('');
+    selMes.value = meses.indexOf(prev)>=0 ? prev : '';
+  }
   selEG.innerHTML='<option value="">Todas</option>'+p.epsGrupos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selM.innerHTML='<option value="">Todas</option>'+p.contratos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selZ.innerHTML='<option value="">Todas</option>'+p.zonas.map(z=>`<option value="${z}">${z}</option>`).join('');
@@ -5280,7 +5312,7 @@ function populatePeriodicoFilters(){
   const bodegas=[...new Set(soloActivas(p.rows).map(r=>r.bodegaDetalle).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
   selB.innerHTML='<option value="">Todas</option>'+bodegas.map(b=>`<option value="${b}">${b}</option>`).join('');
 }
-['pfEpsGrupo','pfModalidad','pfZona','pfBodega'].forEach(id=>{
+['pfMes','pfEpsGrupo','pfModalidad','pfZona','pfBodega'].forEach(id=>{
   document.getElementById(id).addEventListener('change', renderReportePeriodico);
 });
 
@@ -5290,11 +5322,14 @@ function populatePeriodicoFilters(){
    Reporte Comparativo Periódico coincidan con el Indicador Soporte Evento.        */
 function getPeriodicoFilteredRows(){
   const allRows = soloActivas((state.processed && state.processed.rows) || []);
+  const selMes=document.getElementById('pfMes');
+  const fMesRP = selMes ? selMes.value : '';
   const fEG = document.getElementById('pfEpsGrupo').value;
   const fMod = document.getElementById('pfModalidad').value;
   const fZ = document.getElementById('pfZona').value;
   const fBod = document.getElementById('pfBodega').value;
   return allRows.filter(r => {
+    if(fMesRP && mesKey(r.fecha)!==fMesRP) return false;
     if(fEG && r.epsGrupo!==fEG) return false;
     if(fMod && r.contrato!==fMod) return false;
     if(fZ && r.zona!==fZ) return false;
