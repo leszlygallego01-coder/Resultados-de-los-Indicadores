@@ -852,8 +852,12 @@ async function calcularIndicadores(){
       // Unidades - Cantidad Autorizada (mismo criterio: negativo = línea pendiente).
       const diferenciaRaw = (r.diferencia!==undefined && r.diferencia!==null && String(r.diferencia).trim()!=='') ? toNumber(r.diferencia) : null;
       const diferencia = diferenciaRaw!==null ? diferenciaRaw : (unidades-cantidadAutorizada);
-      const lineaPendiente=(diferencia<0 && !esCodigoNoMedicamento(codigoArticulo, descripcionReporte)) ? 'SI':'NO';   // Linea pendiente
       const noMedicamento=esCodigoNoMedicamento(codigoArticulo, descripcionReporte);
+      /* ENTREGADA = se entregó algo (Unidades > 0) y no quedó faltante (Diferencia = 0).
+         Cualquier otro caso queda PENDIENTE: unidades en 0 (no se entregó nada) o
+         diferencia distinta de 0 (faltó o sobró cantidad frente a lo autorizado).
+         Los códigos que no son medicamento nunca generan pendiente.               */
+      const lineaPendiente = noMedicamento ? 'NO' : ((unidades>0 && diferencia===0) ? 'NO':'SI');   // Linea pendiente
       const bodegaDetalle=String(r.bodegaDetalle||'').trim();
       const bodegaNorm=normValue(bodegaDetalle);
       const existenciaPunto=invPuntoMap.get(homologo+'|'+bodegaNorm) || 0;
@@ -902,17 +906,21 @@ async function calcularIndicadores(){
       rows.forEach(r=>{ r.versionVigente = (ultimaPorLinea.get(claveLineaCargue(r))===r); });
     }
 
-    // Pendiente por Dispensa (a nivel Documento, sin importar bodega).
-    // Solo cuentan las versiones vigentes: una línea que ya llegó entregada en un
-    // recargue posterior no puede seguir dejando la dispensa como pendiente.
+    /* Pendiente por DISPENSA. Una dispensa se identifica por Documento + Bodega: el mismo
+       documento atendido en dos puntos son dos dispensas distintas.
+       La dispensa solo está ENTREGADA si TODAS sus líneas están entregadas; basta una
+       línea pendiente para que toda la dispensa quede pendiente.
+       Solo cuentan las versiones vigentes: una línea que ya llegó entregada en un
+       recargue posterior no puede seguir dejando la dispensa como pendiente.       */
     const docPendMap=new Map();
     rows.forEach(r=>{
       if(!r.documento || !r.versionVigente) return;
-      if(r.lineaPendiente==='SI') docPendMap.set(r.documento,true);
-      else if(!docPendMap.has(r.documento)) docPendMap.set(r.documento,false);
+      const k=claveDocBodega(r);
+      if(r.lineaPendiente==='SI') docPendMap.set(k,true);
+      else if(!docPendMap.has(k)) docPendMap.set(k,false);
     });
     rows.forEach(r=>{
-      r.pendienteDispensa = r.documento ? (docPendMap.get(r.documento) ? 'SI':'NO') : r.lineaPendiente;
+      r.pendienteDispensa = r.documento ? (docPendMap.get(claveDocBodega(r)) ? 'SI':'NO') : r.lineaPendiente;
       r.dispensaYPunto = r.bodegaDetalle + '||' + (r.documento || ('_R'+r.idx));   // Dispensa y Punto
     });
 
@@ -1216,12 +1224,12 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
 
   // Build per-bodega, per-corte metrics
   const cmAll = buildCorteMetrics(filtered); // returns {1:[...], 2:[...], 3:[...]}
-  // Cortes que de verdad recibieron un cargue. Un corte sin cargue queda en cero (“—”)
-  // y no repite las cifras del corte anterior.
+  // Cortes que de verdad tuvieron dispensaciones (por fecha de dispensación). Un corte
+  // sin dispensaciones queda en cero (“—”) y no repite las cifras del corte anterior.
   const cortesActivos = cortesConCargue(filtered);
   const hayCargues = cortesActivos.size > 0;
   const DASH = '—';
-  const tdVacio = '<td class="num" style="color:#9CA9B6;" title="Corte sin cargue: aún no se ha subido Reporte de Dispensación en estas fechas">' + DASH + '</td>';
+  const tdVacio = '<td class="num" style="color:#9CA9B6;" title="Corte sin dispensaciones: no hubo dispensaciones en estas fechas">' + DASH + '</td>';
   const tdSinCambio = '<td class="num" style="color:#9CA9B6;" title="Sin cambios frente al corte anterior: esta bodega no presentó movimientos nuevos en este corte">' + DASH + '</td>';
   const tdFuera = '<td class="num" style="color:#C3CCD6;" title="Corte posterior al corte global seleccionado en los filtros">' + DASH + '</td>';
   // Collect unique bodegas from all cortes
@@ -1243,7 +1251,7 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   const corteFinalSeg = corteVigenteHasta(cortesActivos, corteGlobalSeg);
   const cortePrevSeg  = corteFinalSeg>0 ? corteVigenteHasta(cortesActivos, corteFinalSeg-1) : 0;
   const hayPrevSeg    = corteFinalSeg>0;
-  const tituloPrevSeg = cortePrevSeg===0 ? 'primer cargue (línea base)' : 'corte '+cortePrevSeg;
+  const tituloPrevSeg = cortePrevSeg===0 ? 'estado inicial (línea base)' : 'corte '+cortePrevSeg;
   // Celda con dos cifras: estado del corte seleccionado (negro) y el del corte anterior (gris).
   const celdaDoble = (act, ant) => (act===ant
       ? '<td class="num" title="Sin cambios frente al ' + tituloPrevSeg + '">' + fmtInt(act) + '</td>'
@@ -1289,7 +1297,7 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   for(let c=1; c<=corteGlobalSeg; c++){
     const opt = document.createElement('option');
     opt.value = c;
-    opt.textContent = 'Corte ' + c + (cortesActivos.has(c) ? '' : ' (sin cargue)');
+    opt.textContent = 'Corte ' + c + (cortesActivos.has(c) ? '' : ' (sin dispensaciones)');
     selEl.appendChild(opt);
   }
   const ultimoActivo = [3,2,1].find(c => cortesActivos.has(c) && c<=corteGlobalSeg) || corteGlobalSeg;
@@ -1307,8 +1315,8 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
     if(sinCargue){
       drawDonut('segDonut', [{ label:'', value:1, color:'#E8EEF4' }], DASH, '#9CA9B6');
       document.getElementById('segDonutLegend').innerHTML =
-        '<div class="item" style="color:#9CA9B6;">Corte ' + c + ' sin cargue<span class="val">' + DASH + '</span></div>'
-        + '<div class="item" style="color:#9CA9B6;font-size:11.5px;">Aún no se ha subido Reporte de Dispensación en estas fechas; el corte se actualizará con el próximo cargue.</div>';
+        '<div class="item" style="color:#9CA9B6;">Corte ' + c + ' sin dispensaciones<span class="val">' + DASH + '</span></div>'
+        + '<div class="item" style="color:#9CA9B6;font-size:11.5px;">No se registran dispensaciones en estas fechas; el corte se actualizará cuando haya dispensaciones.</div>';
       return;
     }
     drawDonut('segDonut', [
@@ -1353,7 +1361,7 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
     if(c>corteGlobalSeg) hHtml += '<th style="color:#C3CCD6;">Fuera del corte</th><th style="color:#C3CCD6;">Fuera del corte</th>';
     else if(cortesActivos.has(c) && !corteConCambio[c]) hHtml += '<th style="color:#9CA9B6;">Sin cambios</th><th style="color:#9CA9B6;">Sin cambios</th>';
     else if(cortesActivos.has(c)) hHtml += '<th>Entregas</th><th>Pendientes</th>';
-    else hHtml += '<th style="color:#9CA9B6;">Sin cargue</th><th style="color:#9CA9B6;">Sin cargue</th>';
+    else hHtml += '<th style="color:#9CA9B6;">Sin dispensaciones</th><th style="color:#9CA9B6;">Sin dispensaciones</th>';
   }
   hHtml += '</tr>';
   document.getElementById('tblSeguimientoHead').innerHTML = hHtml;
@@ -1425,7 +1433,7 @@ function ymDeFecha(iso){
   return /^\d{4}-\d{2}$/.test(s) ? s : null;
 }
 function etiquetaMes(ym){
-  if(ym==='0000-00') return 'Sin fecha de cargue';
+  if(ym==='0000-00') return 'Sin fecha de dispensación';
   const p = ym.split('-');
   const mi = parseInt(p[1],10)-1;
   return (MESES_ES[mi]||p[1]) + '. ' + p[0];
@@ -1436,11 +1444,11 @@ function renderSegMeses(rows, corteGlobal){
   if(!headEl || !bodyEl) return;
   const SIN_FECHA = '0000-00';
 
-  // Solo versiones visibles según el corte global (los cortes son días dentro del mes).
+  // Solo las dispensaciones visibles según el corte global. El corte se mide por la
+  // FECHA DE DISPENSACIÓN (días 1-10, 11-20, 21-31), no por la fecha del archivo.
   const visibles = (rows||[]).filter(r => {
-    if(!r.fechaCargue) return true;                        // línea base
-    const p = getPeriodoDeCarga(r.fechaCargue);
-    return p===null || p<=corteGlobal;
+    const p = getPeriodoDeCarga(r.fecha);
+    return p===null || p<=corteGlobal;                     // sin fecha: se conserva
   });
 
   // Agrupar versiones por línea y ordenarlas cronológicamente.
@@ -1451,21 +1459,24 @@ function renderSegMeses(rows, corteGlobal){
     porLinea.get(k).push(r);
   });
 
-  const lineaInfo = [];                 // {mesOrigen, mesEntrega, documento}
-  const docsMap = new Map();            // documento -> {mesOrigen, meses:[], completo}
+  const lineaInfo = [];                 // {mesOrigen, mesEntrega}
+  const docsMap = new Map();            // dispensa (documento+bodega) -> {mesOrigen, mesEntrega, completo}
   porLinea.forEach(vs => {
     vs.sort((a,b) => esVersionPosterior(a,b) ? 1 : -1);
-    const mesOrigen = ymDeFecha(vs[0].fechaCargue) || SIN_FECHA;
+    // Mes de origen = mes en que se dispensó la línea (no el mes del cargue).
+    const mesOrigen = mesDeDispensacion(vs[0]) || SIN_FECHA;
     let mesEntrega = null;
     for(let i=0;i<vs.length;i++){
       if(vs[i].lineaPendiente==='NO'){
-        mesEntrega = ymDeFecha(vs[i].fechaCargue) || mesOrigen;
+        mesEntrega = mesDeDispensacion(vs[i]) || mesOrigen;
         if(mesEntrega < mesOrigen) mesEntrega = mesOrigen;
         break;
       }
     }
     lineaInfo.push({ mesOrigen: mesOrigen, mesEntrega: mesEntrega });
-    const doc = vs[0].documento;
+    // Una dispensa se identifica por Documento + Bodega: el mismo documento atendido
+    // en otro punto de entrega es una dispensa distinta.
+    const doc = claveDocBodega(vs[0]);
     if(!doc) return;
     if(!docsMap.has(doc)) docsMap.set(doc, { mesOrigen: mesOrigen, mesEntrega: mesOrigen, completo: true });
     const d = docsMap.get(doc);
@@ -1500,18 +1511,18 @@ function renderSegMeses(rows, corteGlobal){
   const claves = Array.from(meses.keys()).sort();
   if(!claves.length){
     headEl.innerHTML = '';
-    bodyEl.innerHTML = '<tr><td style="color:var(--ink-soft);">Aún no hay cargues con fecha para reasignar entregas por mes.</td></tr>';
+    bodyEl.innerHTML = '<tr><td style="color:var(--ink-soft);">Aún no hay dispensaciones con fecha para reasignar entregas por mes.</td></tr>';
     return;
   }
 
   headEl.innerHTML = '<tr><th rowspan="2">Mes</th><th colspan="5">Dispensas</th><th colspan="5">Líneas</th></tr>'
     + '<tr>'
-    + '<th title="Dispensas que aparecieron por primera vez en el mes">Originadas</th>'
+    + '<th title="Dispensas dispensadas por primera vez en el mes">Originadas</th>'
     + '<th title="Entregas contadas en el mes en que realmente se hicieron">Entregas del mes</th>'
     + '<th title="Entregas que venían pendientes de meses anteriores">Recibidas (+)</th>'
     + '<th title="Pendientes del mes que se entregaron después y por eso se descuentan de este mes">Descontadas (−)</th>'
     + '<th title="Pendientes del mes que siguen sin entregar">Pendientes</th>'
-    + '<th title="Líneas que aparecieron por primera vez en el mes">Originadas</th>'
+    + '<th title="Líneas dispensadas por primera vez en el mes">Originadas</th>'
     + '<th title="Entregas contadas en el mes en que realmente se hicieron">Entregas del mes</th>'
     + '<th title="Entregas que venían pendientes de meses anteriores">Recibidas (+)</th>'
     + '<th title="Pendientes del mes que se entregaron después y por eso se descuentan de este mes">Descontadas (−)</th>'
@@ -3287,7 +3298,7 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
   // --- Seguimiento de Dispensación por Bodega (cargue vs cargue) ---
   if(state.processed && filteredRowsCache.length){
     const cmAll = buildCorteMetrics(filteredRowsCache);
-    // Los cortes sin cargue se exportan vacíos (no repiten cifras del corte anterior).
+    // Los cortes sin dispensaciones se exportan vacíos (no repiten cifras del corte anterior).
     const cortesActivosExp = cortesConCargue(filteredRowsCache);
     const corteFinalExp = corteVigenteHasta(cortesActivosExp, 3);
     const bodegaSet = new Set();
@@ -4534,6 +4545,8 @@ document.querySelectorAll('.result-tabs button').forEach(b=>{
 /* =========================================================================
    14b. Reporte Comparativo Periódico (cargue vs cargue del Reporte de Dispensación)
    ========================================================================= */
+/* Corte al que pertenece una fecha: día 1-10 = Corte 1, día 11-20 = Corte 2,
+   día 21-31 = Corte 3. Sirve para cualquier fecha (dispensación o soporte).   */
 function getPeriodoDeCarga(iso){
   if(!iso) return null;
   const d=new Date(iso);
@@ -4541,19 +4554,38 @@ function getPeriodoDeCarga(iso){
   const day=d.getUTCDate();
   return day<=10 ? 1 : (day<=20 ? 2 : 3);
 }
+/* REGLA GENERAL DE CORTES Y PERIODOS:
+   el corte y el mes de una dispensa se miden por su FECHA DE DISPENSACIÓN, no por la
+   fecha en que se subió el archivo. Así una dispensa siempre queda contada en el corte
+   y el mes en que realmente ocurrió, aunque el archivo se cargue días después.
+   Devuelve 0 cuando la fila no tiene fecha de dispensación válida.              */
+function corteDeDispensacion(r){
+  const p=getPeriodoDeCarga(r && r.fecha);
+  return p===null ? 0 : p;
+}
+// Mes (AAAA-MM) de la fecha de dispensación de la fila.
+function mesDeDispensacion(r){
+  return mesKey(r && r.fecha) || '';
+}
+/* Identidad de una DISPENSA: Documento + Bodega. El mismo documento puede atenderse
+   en más de un punto de entrega, por eso la bodega hace parte de la clave: cada punto
+   maneja su propia dispensa y su propio estado de entrega.                      */
+function claveDocBodega(r){
+  if(!r || !r.documento) return '';
+  return r.bodegaDetalle+'|'+r.documento;
+}
 // ¿La dispensa/línea ya tenía soporte al cierre del corte indicado?
-// - Si hay fecha de soporte (llegó en un cargue posterior), cuenta desde ese corte.
-// - Si no hay fecha de soporte, cuenta desde el corte del cargue en que llegó esa versión
-//   de la línea (antes de ese cargue no se conocía el soporte).
+// El soporte cuenta EN SU PROPIA FECHA: si se conoce la fecha del soporte, ese es el
+// corte que lo acredita; si no se conoce, se toma el corte de la fecha de dispensación.
 function tieneSoporteHastaCorte(r, corteMax){
   if(r.tieneSoportes!=='TIENE SOPORTE') return false;
-  const p = r.fechaSoporte ? getPeriodoDeCarga(r.fechaSoporte) : corteDeCargue(r);
+  const p = r.fechaSoporte ? getPeriodoDeCarga(r.fechaSoporte) : corteDeDispensacion(r);
   return p===null ? true : p<=corteMax;
 }
 // Corte en el que la línea recuperó el soporte (null si nunca estuvo en 0).
 function corteRecuperacionSoporte(r){
   if(r.tieneSoportes!=='TIENE SOPORTE') return null;
-  const p = r.fechaSoporte ? getPeriodoDeCarga(r.fechaSoporte) : corteDeCargue(r);
+  const p = r.fechaSoporte ? getPeriodoDeCarga(r.fechaSoporte) : corteDeDispensacion(r);
   if(p===null || p<=0) return null;
   return p;
 }
@@ -4561,11 +4593,10 @@ function corteRecuperacionSoporte(r){
 function claveLineaCargue(r){
   return r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo;
 }
-// Corte al que pertenece el cargue en que llegó esta versión de la línea.
-// Las filas guardadas antes de registrar la fecha de cargue cuentan como línea base (0).
+// Corte de la línea según su FECHA DE DISPENSACIÓN (se conserva el nombre anterior
+// para no romper las llamadas existentes; internamente ya no usa la fecha del cargue).
 function corteDeCargue(r){
-  const p=getPeriodoDeCarga(r.fechaCargue);
-  return p===null ? 0 : p;
+  return corteDeDispensacion(r);
 }
 function esVersionPosterior(a, b){
   const fa=String(a.fechaCargue||''), fb=String(b.fechaCargue||'');
@@ -4592,28 +4623,25 @@ function entregaEnCarguePosterior(rPend, rEnt){
   if(cEnt && cPend) return cEnt>cPend;    // mismo cargue exacto => no se acredita
   return esVersionPosterior(rEnt, rPend); // sin fecha de cargue: basta que sea versión posterior
 }
-// Cortes que REALMENTE recibieron un cargue del Reporte de Dispensación.
-// Un corte sin cargue no debe mostrar cifras (queda en cero / “—”) hasta que
-// se suba información nueva en esos días; así las cifras solo cambian cuando
-// cambia la información y no se repite el mismo dato en los 3 cortes.
+// Cortes que REALMENTE tienen dispensaciones, según la FECHA DE DISPENSACIÓN.
+// Un corte sin dispensaciones no debe mostrar cifras (queda en cero / “—”): así las
+// cifras solo cambian cuando de verdad hubo movimiento en esos días y no se repite
+// el mismo dato en los 3 cortes.
 function cortesConCargue(rows){
   const s=new Set();
   (rows||[]).forEach(r=>{
-    if(!r.fechaCargue) return;                 // línea base (sin fecha de cargue)
-    const p=getPeriodoDeCarga(r.fechaCargue);
+    const p=getPeriodoDeCarga(r.fecha);        // sin fecha de dispensación no abre corte
     if(p) s.add(p);
   });
   return s;
 }
-// Cortes con cargue REAL pero calculados BODEGA POR BODEGA.
-// Un cargue del Reporte de Dispensación puede traer movimiento de unas bodegas y de
-// otras no. Para esas bodegas el corte no tiene información nueva y debe quedar en “—”,
-// aunque a nivel general sí hubo cargue en esas fechas.
+// Cortes con dispensaciones pero calculados BODEGA POR BODEGA.
+// Una bodega puede no haber dispensado en unos días en los que otras sí lo hicieron:
+// para esa bodega el corte no tiene información y debe quedar en “—”.
 function cortesConCarguePorBodega(rows){
   const m=new Map();
   (rows||[]).forEach(r=>{
-    if(!r.fechaCargue) return;                 // línea base (sin fecha de cargue)
-    const p=getPeriodoDeCarga(r.fechaCargue);
+    const p=getPeriodoDeCarga(r.fecha);
     if(!p) return;
     const b=r.bodegaDetalle;
     if(!m.has(b)) m.set(b, new Set());
@@ -4621,7 +4649,7 @@ function cortesConCarguePorBodega(rows){
   });
   return m;
 }
-// Último corte con cargue anterior o igual a `corte` (0 = línea base).
+// Último corte con dispensaciones anterior o igual a `corte` (0 = línea base).
 function corteVigenteHasta(activos, corte){
   for(let c=corte;c>=1;c--) if(activos.has(c)) return c;
   return 0;
@@ -4676,7 +4704,7 @@ function clavesEventoEntregadas(rows){
   const est=new Map();
   snapshotUltimaVersion(rows).forEach(r=>{
     if(r.contrato!=='EVENTO' || !r.documento) return;
-    const k=r.bodegaDetalle+'|'+r.documento;
+    const k=claveDocBodega(r);
     if(r.lineaPendiente==='SI') est.set(k, false);          // queda pendiente => se excluye
     else if(!est.has(k)) est.set(k, true);
   });
@@ -4687,18 +4715,21 @@ function clavesEventoEntregadas(rows){
 // Solo las filas de EVENTO cuyas dispensas están 100% entregadas.
 function filasSoporteEvento(rows){
   const ok=clavesEventoEntregadas(rows);
-  return (rows||[]).filter(r=>r.contrato==='EVENTO' && r.documento && ok.has(r.bodegaDetalle+'|'+r.documento));
+  return (rows||[]).filter(r=>r.contrato==='EVENTO' && r.documento && ok.has(claveDocBodega(r)));
 }
 // Estado ACUMULADO de líneas y documentos al cierre del corte indicado.
 function calcularEstadoHastaCorte(rows, corteMax){
   const snap=snapshotHastaCorte(rows, corteMax);
   const lineaPend=new Map();
   snap.forEach(r=>{ lineaPend.set(r.idx, r.lineaPendiente==='SI' ? 'SI':'NO'); });
+  /* Estado por DISPENSA (Documento + Bodega): la dispensa solo cuenta como entregada
+     cuando TODAS sus líneas están entregadas.                                      */
   const docPend=new Map();
   snap.forEach(r=>{
     if(!r.documento) return;
-    if(lineaPend.get(r.idx)==='SI') docPend.set(r.documento,true);
-    else if(!docPend.has(r.documento)) docPend.set(r.documento,false);
+    const k=claveDocBodega(r);
+    if(lineaPend.get(r.idx)==='SI') docPend.set(k,true);
+    else if(!docPend.has(k)) docPend.set(k,false);
   });
   return {snap, lineaPend, docPend};
 }
@@ -4722,8 +4753,9 @@ function buildCorteMetrics(rows){
     snap.forEach(r=>{
       const g=ensureG(r);
       if(r.documento){
-        g.docsSet.add(r.documento);
-        if(docPend.get(r.documento)===false) g.docsEntSet.add(r.documento);
+        const kd=claveDocBodega(r);
+        g.docsSet.add(kd);
+        if(docPend.get(kd)===false) g.docsEntSet.add(kd);
       }
       g.lineas++;
       if(lineaPend.get(r.idx)==='NO') g.lineasEnt++;
@@ -4733,15 +4765,16 @@ function buildCorteMetrics(rows){
     // soporte que llegó en un cargue suma en ese corte y ya no se pierde después.
     rows.forEach(r=>{
       if(r.contrato!=='EVENTO' || !r.documento) return;
-      if(!eventoOk.has(r.bodegaDetalle+'|'+r.documento)) return;   // aún con líneas pendientes
+      const kd=claveDocBodega(r);
+      if(!eventoOk.has(kd)) return;   // aún con líneas pendientes
       const g=ensureG(r);
-      g.eventoSet.add(r.documento);
-      if(tieneSoporteHastaCorte(r, corte)) g.eventoConSet.add(r.documento);
+      g.eventoSet.add(kd);
+      if(tieneSoporteHastaCorte(r, corte)) g.eventoConSet.add(kd);
       if(corte>0 && tieneSoporteHastaCorte(r, corte) && !tieneSoporteHastaCorte(r, corte-1)){
-        g.eventoRecSet.add(r.documento);
+        g.eventoRecSet.add(kd);
       }
       if(corte>0 && tieneSoporteHastaCorte(r, corte) && !tieneSoporteHastaCorte(r, 0)){
-        g.eventoRecAcumSet.add(r.documento);
+        g.eventoRecAcumSet.add(kd);
       }
     });
     out[corte]=Array.from(byBodega.values()).map(g=>({
@@ -4796,19 +4829,20 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
     const sinSopBase=new Map(), conSopFin=new Map(), info=new Map(), marcaSinSop=new Map(), marcaConSop=new Map();
     filtered.forEach(r=>{
       if(r.contrato!=='EVENTO' || !r.documento) return;
-      if(!eventoOk.has(r.bodegaDetalle+'|'+r.documento)) return;   // aún con líneas pendientes
-      if(!info.has(r.documento) || esVersionPosterior(r, info.get(r.documento))) info.set(r.documento, r);
-      if(tieneSoporteHastaCorte(r, 0)) sinSopBase.set(r.documento, false);
+      const kd=claveDocBodega(r);                                  // dispensa = documento + bodega
+      if(!eventoOk.has(kd)) return;   // aún con líneas pendientes
+      if(!info.has(kd) || esVersionPosterior(r, info.get(kd))) info.set(kd, r);
+      if(tieneSoporteHastaCorte(r, 0)) sinSopBase.set(kd, false);
       else {
-        if(!sinSopBase.has(r.documento)) sinSopBase.set(r.documento, true);
-        const d=marcaCargue(r), prevD=marcaSinSop.get(r.documento);
-        if(prevD===undefined || (d && (!prevD || d<prevD))) marcaSinSop.set(r.documento, d);
+        if(!sinSopBase.has(kd)) sinSopBase.set(kd, true);
+        const d=marcaCargue(r), prevD=marcaSinSop.get(kd);
+        if(prevD===undefined || (d && (!prevD || d<prevD))) marcaSinSop.set(kd, d);
       }
       if(tieneSoporteHastaCorte(r, corteFinal)){
         const c=corteRecuperacionSoporte(r);
         const cc=(c && c>=1 && c<=corteFinal) ? c : 0;
-        const prev=conSopFin.get(r.documento);
-        if(prev===undefined || cc<prev){ conSopFin.set(r.documento, cc); marcaConSop.set(r.documento, marcaSoporte(r)); }
+        const prev=conSopFin.get(kd);
+        if(prev===undefined || cc<prev){ conSopFin.set(kd, cc); marcaConSop.set(kd, marcaSoporte(r)); }
       }
     });
     const out=[];
@@ -4837,25 +4871,26 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
     return out;
   }
 
-  // ---- dispensas (documentos) ----
+  // ---- dispensas (documento + bodega) ----
   const porDoc=new Map();
   fin.snap.forEach(r=>{
     if(!r.documento) return;
-    if(!porDoc.has(r.documento)) porDoc.set(r.documento, {
+    const kd=claveDocBodega(r);
+    if(!porDoc.has(kd)) porDoc.set(kd, {
       documento:r.documento, zona:r.zona, bodega:r.bodegaDetalle, eps:r.eps, epsGrupo:r.epsGrupo,
       contrato:r.contrato, fecha:r.fecha, lineas:0, unidades:0, soporte:r.tieneSoportes, cargue:r.fechaCargue||''
     });
-    const g=porDoc.get(r.documento);
+    const g=porDoc.get(kd);
     g.lineas++; g.unidades+=(Number(r.unidades)||0);
     if(String(r.fechaCargue||'')>String(g.cargue)) g.cargue=r.fechaCargue||'';
   });
   const pendBase=new Map(), recLineas=new Map();
   base.snap.forEach(r=>{
     if(!r.documento) return;
-    const k=claveLineaCargue(r);
+    const k=claveLineaCargue(r), kd=claveDocBodega(r);
     if(base.lp.get(k)!=='SI') return;
-    pendBase.set(r.documento,(pendBase.get(r.documento)||0)+1);
-    if(corteRecuperacionLinea(k)) recLineas.set(r.documento,(recLineas.get(r.documento)||0)+1);
+    pendBase.set(kd,(pendBase.get(kd)||0)+1);
+    if(corteRecuperacionLinea(k)) recLineas.set(kd,(recLineas.get(kd)||0)+1);
   });
   const out=[];
   fin.docPend.forEach((pend, doc)=>{
@@ -5082,7 +5117,7 @@ function renderReportePeriodico(){
   const valT=(corte,bodega)=>{ const e=findEntry(corte,bodega); return e?e[fieldTot]:0; };
 
   // ---- totales acumulados por corte (para los 3 gráficos) ----
-  // Solo los cortes con cargue tienen cifras; un corte sin cargue queda en cero.
+  // Solo los cortes con dispensaciones tienen cifras; un corte sin dispensaciones queda en cero.
   const accA=[0,0,0,0], accB=[0,0,0,0];
   [0,1,2,3].forEach(c=>{
     if(c>0 && !activo(c)) return;
@@ -5090,7 +5125,7 @@ function renderReportePeriodico(){
   });
 
   // ---- una sola tabla con los 3 cortes ----
-  // Las columnas “totales” muestran el último estado con cargue real (no el corte 3 vacío).
+  // Las columnas “totales” muestran el último estado con dispensaciones reales (no el corte 3 vacío).
   const corteFinal = corteVigenteHasta(cortesActivos, corteGlobalRP);
   /* Referencia "Anterior": se calcula BODEGA POR BODEGA, no con un único corte para
      toda la tabla. Antes se elegía un solo corte de referencia a partir de los totales:
@@ -5101,7 +5136,7 @@ function renderReportePeriodico(){
      línea base), de modo que la variación real se ve siempre, con o sin filtro. */
   const estadosPrevios = [0].concat([1,2,3].filter(c=>c<corteFinal && activo(c)));
   const etqCorto = c => c===0 ? 'base' : 'C'+c;
-  const etqLargo = c => c===0 ? 'primer cargue (línea base)' : 'corte '+c;
+  const etqLargo = c => c===0 ? 'estado inicial (línea base)' : 'corte '+c;
   const refPrevBodega = (bodega) => {
     if(corteFinal===0 || !estadosPrevios.length) return null;
     const aNow=valA(corteFinal,bodega), bNow=valB(corteFinal,bodega);
@@ -5181,8 +5216,8 @@ function renderReportePeriodico(){
   };
 
   const dim='style="color:#9CA9B6;"';
-  const tdSinCargue='<td '+dim+' title="Corte sin cargue: aún no se ha subido Reporte de Dispensación en estas fechas">'+DASH+'</td>';
-  const tdSinCargueBod='<td '+dim+' title="Esta bodega no tuvo cargue (entrega ni dispensación) en este corte: el cargue de estas fechas no trajo información de la bodega">'+DASH+'</td>';
+  const tdSinCargue='<td '+dim+' title="Corte sin dispensaciones: no hubo dispensaciones en estas fechas">'+DASH+'</td>';
+  const tdSinCargueBod='<td '+dim+' title="Esta bodega no tuvo movimientos (entrega ni dispensación) en este corte">'+DASH+'</td>';
   /* Un corte solo muestra cifras si en ese corte hubo ENTREGAS REALES para esa bodega,
      usando exactamente la misma validación del Excel de descarga (recuperadasEnCortes).
      Si la bodega no entregó nada en el corte, sus celdas quedan en “—” en lugar de
@@ -5211,7 +5246,7 @@ function renderReportePeriodico(){
     let e=0, p=0;
     filas.forEach((f,fi)=>{
       const cc=filasMk[fi][i];
-      if(cc.fuera || cc.sin) return;   // corte fuera del filtro o bodega sin cargue
+      if(cc.fuera || cc.sin) return;   // corte fuera del filtro o bodega sin dispensaciones
       if(!f.rec[i]) return;            // la bodega no entregó nada en el corte
       if(cc.igual) return;             // sin cambios frente al corte anterior
       e+=cc.ent; p+=cc.pend;
@@ -5260,7 +5295,7 @@ function renderReportePeriodico(){
       ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin entregas</span></th>'
       : (activo(c) && !rpCambio[c-1])
         ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin cambios</span></th>'
-        : '<th colspan="2">'+txt+(activo(c)?'':' <span style="color:#9CA9B6;font-weight:600;">· sin cargue</span>')+'</th>';
+        : '<th colspan="2">'+txt+(activo(c)?'':' <span style="color:#9CA9B6;font-weight:600;">· sin dispensaciones</span>')+'</th>';
   let ths1='<tr><th rowspan="2">Bodega</th><th rowspan="2">Total</th>'
     +'<th rowspan="2">'+labelEnt+' totales<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Actual / Anterior (dif.)</span></th>'
     +'<th rowspan="2">'+labelPend+' totales<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Actual / Anterior (dif.)</span></th>'
@@ -5272,7 +5307,7 @@ function renderReportePeriodico(){
   const subCorte = (c) => fuera(c)
     ? '<th style="color:#C3CCD6;">Fuera del corte</th><th style="color:#C3CCD6;">Fuera del corte</th>'
     : !activo(c)
-      ? '<th style="color:#9CA9B6;">Sin cargue</th><th style="color:#9CA9B6;">Sin cargue</th>'
+      ? '<th style="color:#9CA9B6;">Sin dispensaciones</th><th style="color:#9CA9B6;">Sin dispensaciones</th>'
       : !tot.rec[c-1]
         ? '<th style="color:#9CA9B6;">Sin entregas</th><th style="color:#9CA9B6;">Sin entregas</th>'
         : !rpCambio[c-1]
@@ -5281,7 +5316,7 @@ function renderReportePeriodico(){
   let ths2='<tr>'+subCorte(1)+subCorte(2)+subCorte(3)+'</tr>';
 
   // ---- 3 gráficos, uno por corte (acumulado al cierre de cada corte) ----
-  // Un corte sin cargue se muestra vacío: no hereda ni repite las cifras del corte anterior.
+  // Un corte sin dispensaciones se muestra vacío: no hereda ni repite las cifras del corte anterior.
   let html='<div class="corte-grid">';
   [1,2,3].forEach(corte=>{
     if(fuera(corte)){
@@ -5306,7 +5341,7 @@ function renderReportePeriodico(){
         +'<div class="item" style="color:#9CA9B6;">'+labelPend+'<span class="val">'+DASH+'</span></div>'
         +'<div class="item" style="color:#9CA9B6;">'+labelRec+' en el corte<span class="val">'+DASH+'</span></div>'
         +'</div>'
-        +'<p style="margin:0;font-size:11.5px;line-height:1.45;color:#9CA9B6;">Pendiente de cargue: aún no se ha subido Reporte de Dispensación en estas fechas. El corte queda en cero y se llenará con el próximo cargue.</p>'
+        +'<p style="margin:0;font-size:11.5px;line-height:1.45;color:#9CA9B6;">Sin dispensaciones en estas fechas. El corte queda en cero y se actualizará cuando se registren dispensaciones.</p>'
         +'</div>';
       return;
     }
@@ -5315,9 +5350,9 @@ function renderReportePeriodico(){
     const aPrev=accA[cPrev], bPrev=accB[cPrev];
     const dA=a-accA[cPrev], dB=b-accB[cPrev];
     const sinCambio = dA===0 && dB===0;
-    const refPrev = cPrev===0 ? 'al primer cargue (línea base)' : 'al corte '+cPrev;
+    const refPrev = cPrev===0 ? 'al estado inicial (línea base)' : 'al corte '+cPrev;
     const nota = sinCambio
-      ? 'Sin variación frente '+refPrev+': el cargue de este corte no trajo cambios.'
+      ? 'Sin variación frente '+refPrev+': este corte no trajo cambios.'
       : 'Variación frente '+refPrev+': '+labelEnt+' '+(dA>=0?'+':'')+fmtInt(dA)+' · '+labelPend+' '+(dB>=0?'+':'')+fmtInt(dB)+'.';
     html+='<div class="corte-card">'
       +'<h4>'+cortesLabels[corte]+'</h4>'
@@ -5383,12 +5418,13 @@ document.getElementById('btnPeriodicoDocsPend').addEventListener('click', ()=>{
   const porDoc=new Map();
   estado.snap.forEach(r=>{
     if(!r.documento) return;
-    if(estado.docPend.get(r.documento)!==true) return;
-    if(!porDoc.has(r.documento)) porDoc.set(r.documento, {
+    const kd=claveDocBodega(r);                 // dispensa = documento + bodega
+    if(estado.docPend.get(kd)!==true) return;
+    if(!porDoc.has(kd)) porDoc.set(kd, {
       documento:r.documento, zona:r.zona, bodega:r.bodegaDetalle, eps:r.eps, epsGrupo:r.epsGrupo,
       contrato:r.contrato, fecha:r.fecha, lineas:0, pend:0, unidadesPend:0, soporte:r.tieneSoportes
     });
-    const g=porDoc.get(r.documento);
+    const g=porDoc.get(kd);
     g.lineas++;
     if(estado.lineaPend.get(r.idx)==='SI'){ g.pend++; g.unidadesPend+=Math.abs(r.diferencia||0); }
   });
@@ -5441,11 +5477,12 @@ document.getElementById('btnPeriodicoEventoSinSop').addEventListener('click', ()
   const conSoporte=new Set(), info=new Map();
   filtered.forEach(r=>{
     if(r.contrato!=='EVENTO' || !r.documento) return;
-    if(!eventoOk.has(r.bodegaDetalle+'|'+r.documento)) return;
-    if(tieneSoporteHastaCorte(r, corteFinal)) conSoporte.add(r.documento);
-    if(!info.has(r.documento) || esVersionPosterior(r, info.get(r.documento))) info.set(r.documento, r);
+    const kd=claveDocBodega(r);
+    if(!eventoOk.has(kd)) return;
+    if(tieneSoporteHastaCorte(r, corteFinal)) conSoporte.add(kd);
+    if(!info.has(kd) || esVersionPosterior(r, info.get(kd))) info.set(kd, r);
   });
-  const filas=[...info.values()].filter(r=>!conSoporte.has(r.documento))
+  const filas=[...info.entries()].filter(([kd])=>!conSoporte.has(kd)).map(([,r])=>r)
     .sort((a,b)=>String(a.bodegaDetalle+a.documento).localeCompare(String(b.bodegaDetalle+b.documento),'es'))
     .map(r=>({
       'Zona':r.zona, 'Bodega Detalle':r.bodegaDetalle, 'Documento':r.documento,
