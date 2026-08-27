@@ -383,7 +383,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-ghost" data-open-periodico="soporte">📊 Reporte Comparativo Periódico</button>
           <button class="btn btn-export" id="btnSoporteExportXlsx" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar soporte evento (Excel)</button>
-          <button class="btn btn-export" id="btnSoporteExportCsv" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar soporte evento (CSV)</button>
+          <button class="btn btn-export" id="btnSoporteSinSoporte" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar dispensas SIN soporte (Excel)</button>
         </div>
         <p class="seg-desc" id="soporteAlcanceTxt" style="margin:-6px 0 12px;"></p>
 
@@ -792,6 +792,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
     <h2>Reporte Comparativo Periódico</h2>
     <p style="font-size:12.5px;color:var(--ink-soft);margin:0;">Compara los cargues acumulativos del Reporte de Dispensación organizados por la <b>fecha de dispensación</b>, segmentada en 3 cortes del mes: días 1-10, 11-20 y 21-31. Cada corte muestra el estado ACUMULADO hasta ese día, tomando la última versión cargada de cada línea. <b>Alcance:</b> se cuentan solo las dispensas con <b>Estado Activo</b>; las INACTIVO se excluyen.</p>
     <div id="periodicoFilters" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+      <div class="field" style="flex:1;min-width:140px;"><label>Mes</label><select id="pfMes"><option value="">Todos</option></select></div>
       <div class="field" style="flex:1;min-width:140px;"><label>EPS Consolidada</label><select id="pfEpsGrupo"><option value="">Todas</option></select></div>
       <div class="field" style="flex:1;min-width:140px;"><label>Modalidad</label><select id="pfModalidad"><option value="">Todas</option></select></div>
       <div class="field" style="flex:1;min-width:140px;"><label>Zona</label><select id="pfZona"><option value="">Todas</option></select></div>
