@@ -745,6 +745,63 @@ function descargarArchivo(nombre, blob){
   setTimeout(()=>URL.revokeObjectURL(url), 4000);
 }
 /* =========================================================================
+   Descarga de listados MUY grandes: se arma un CSV separado por punto y coma
+   (el que abre Excel en español) con BOM, para que las tildes se vean bien.
+   Se usa como respaldo cuando el Excel no se puede generar por tamaño o
+   porque la librería XLSX no cargó.
+   ========================================================================= */
+function filasACsv(filas){
+  if(!filas || !filas.length) return '';
+  const cols=Object.keys(filas[0]);
+  const celda=v=>{
+    if(v===null || v===undefined) return '';
+    const s=String(v);
+    return /[";\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+  };
+  const partes=[cols.map(celda).join(';')];
+  // Se arma por bloques para no crear una sola cadena gigante de golpe.
+  const BLOQUE=5000;
+  for(let i=0;i<filas.length;i+=BLOQUE){
+    const trozo=[];
+    for(let j=i;j<Math.min(i+BLOQUE, filas.length);j++){
+      const f=filas[j];
+      trozo.push(cols.map(c=>celda(f[c])).join(';'));
+    }
+    partes.push(trozo.join('\r\n'));
+  }
+  return '\uFEFF'+partes.join('\r\n')+'\r\n';
+}
+function descargarCsv(nombre, filas){
+  descargarArchivo(nombre, new Blob([filasACsv(filas)], {type:'text/csv;charset=utf-8;'}));
+}
+// Límite prudente de filas por hoja de Excel en el navegador: por encima de esto
+// se entrega CSV, que abre igual en Excel y no agota la memoria del equipo.
+const MAX_FILAS_EXCEL=30000;
+/* Descarga genérica de un informe: intenta Excel con varias hojas y, si la librería
+   no cargó o el archivo es demasiado grande, entrega un CSV por hoja. Devuelve
+   'xlsx' o 'csv' según lo que se haya descargado. */
+function exportarInforme(nombreBase, hojas){
+  const utiles=(hojas||[]).filter(h=>h && h.filas && h.filas.length);
+  if(!utiles.length) return '';
+  const grande=utiles.some(h=>h.filas.length>MAX_FILAS_EXCEL);
+  const sinXlsx=(typeof XLSX==='undefined');
+  if(!sinXlsx && !grande){
+    try{
+      const wb=XLSX.utils.book_new();
+      utiles.forEach(h=>XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(h.filas), h.nombre.slice(0,31)));
+      XLSX.writeFile(wb, nombreBase+'.xlsx');
+      return 'xlsx';
+    }catch(e){ /* si falla, se sigue por CSV */ }
+  }
+  utiles.forEach((h,i)=>{
+    const nombre=nombreBase+(utiles.length>1 ? '_'+h.nombre.replace(/[^A-Za-z0-9]+/g,'_') : '')+'.csv';
+    // Se separan las descargas en el tiempo para que el navegador no bloquee las siguientes.
+    if(i===0) descargarCsv(nombre, h.filas);
+    else setTimeout(()=>descargarCsv(nombre, h.filas), 900*i);
+  });
+  return 'csv';
+}
+/* =========================================================================
    Filtro de Bodega del visor: lista desplegable + búsqueda por texto.
    La lista tiene prioridad; si no hay bodega elegida se usa el texto escrito.
    ========================================================================= */
@@ -4684,11 +4741,12 @@ function cohortesTopFiltrado(coh, bod){
       'Pacientes':r.pacientes, 'Pendientes':r.pendientes
     });
     const fecha=new Date().toISOString().slice(0,10);
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'RESUMEN COHORTES');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(_cohortesTop.map(mapTop)), 'TOP 10 COHORTE Y BODEGA');
-    XLSX.writeFile(wb, 'Informe_Cohortes_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(_cohortesTop.length)+' filas en el Top 10 por cohorte y bodega.');
+    const tipoC=exportarInforme('Informe_Cohortes_'+fecha, [
+      { nombre:'RESUMEN COHORTES', filas:resumen },
+      { nombre:'TOP 10 COHORTE Y BODEGA', filas:_cohortesTop.map(mapTop) }
+    ]);
+    if(!tipoC){ showToast('No se pudo generar la descarga.', true); return; }
+    showToast((tipoC==='xlsx'?'Excel exportado: ':'Exportado en CSV (abre en Excel): ')+fmtInt(_cohortesTop.length)+' filas en el Top 10 por cohorte y bodega.');
   });
 
   // Descarga de la zona del Top: Cohorte, Bodega, Codigo, Descripcion DCI y Unidades,
@@ -4704,10 +4762,10 @@ function cohortesTopFiltrado(coh, bod){
       .map(r=>({ 'Cohorte':(r.cohortes&&r.cohortes.length? r.cohortes.join(' / ') : r.cohorteLabel), 'Bodega':r.bodega, 'Codigo':r.codigo,
         'Descripcion DCI':r.descripcion||'', 'Pendientes':r.pendientes }));
     if(!filas.length){ showToast('No hay códigos con pendientes para los filtros seleccionados.', true); return; }
-    const wb2=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb2, XLSX.utils.json_to_sheet(filas), 'CODIGOS CON PENDIENTES');
-    XLSX.writeFile(wb2, 'Codigos_Cohortes_Pendientes_'+new Date().toISOString().slice(0,10)+'.xlsx');
-    showToast('Excel descargado: '+fmtInt(filas.length)+' códigos con pendientes.');
+    const tipoT=exportarInforme('Codigos_Cohortes_Pendientes_'+new Date().toISOString().slice(0,10),
+      [{ nombre:'CODIGOS CON PENDIENTES', filas:filas }]);
+    if(!tipoT){ showToast('No se pudo generar la descarga.', true); return; }
+    showToast((tipoT==='xlsx'?'Excel descargado: ':'Descargado en CSV (abre en Excel): ')+fmtInt(filas.length)+' códigos con pendientes.');
   });
 
   // Descarga de pendientes de la cohorte y bodega seleccionadas, detallado por DOCUMENTO:
@@ -4755,12 +4813,12 @@ function cohortesTopFiltrado(coh, bod){
       showToast('Todo está entregado: '+nombreCoh+(bod?' · '+bod:'')+' no tiene líneas pendientes.', true);
       return;
     }
-    const wbP=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wbP, XLSX.utils.json_to_sheet(filas), 'PENDIENTES');
     const sufijo=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
-    XLSX.writeFile(wbP, 'Pendientes_'+sufijo+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    const tipoP=exportarInforme('Pendientes_'+sufijo+'_'+new Date().toISOString().slice(0,10),
+      [{ nombre:'PENDIENTES', filas:filas }]);
+    if(!tipoP){ showToast('No se pudo generar la descarga.', true); return; }
     const docsUnicos=new Set(filas.map(f=>f.Documento)).size;
-    showToast('Excel descargado: '+fmtInt(filas.length)+' líneas pendientes de '+fmtInt(docsUnicos)+' documentos ('+nombreCoh+(bod?' · '+bod:'')+').');
+    showToast((tipoP==='xlsx'?'Excel descargado: ':'Descargado en CSV (abre en Excel): ')+fmtInt(filas.length)+' líneas pendientes de '+fmtInt(docsUnicos)+' documentos ('+nombreCoh+(bod?' · '+bod:'')+').');
   });
 
   // Descarga solo de los códigos que NO estan en la tabla Homólogo, respetando los filtros.
@@ -4775,22 +4833,39 @@ function cohortesTopFiltrado(coh, bod){
         'Descripcion (Reporte de Dispensacion)':r.descripcion||'',
         'Unidades':r.unidades, 'Lineas':r.lineas, 'Pendientes':r.pendientes }));
     if(!filas.length){ showToast('No hay códigos sin homologar para los filtros seleccionados.', true); return; }
-    const wb3=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb3, XLSX.utils.json_to_sheet(filas), 'CODIGOS SIN HOMOLOGAR');
-    XLSX.writeFile(wb3, 'Codigos_Cohortes_Sin_Homologar_'+new Date().toISOString().slice(0,10)+'.xlsx');
-    showToast('Excel descargado: '+fmtInt(filas.length)+' códigos sin homologar.');
+    const tipoSH=exportarInforme('Codigos_Cohortes_Sin_Homologar_'+new Date().toISOString().slice(0,10),
+      [{ nombre:'CODIGOS SIN HOMOLOGAR', filas:filas }]);
+    if(!tipoSH){ showToast('No se pudo generar la descarga.', true); return; }
+    showToast((tipoSH==='xlsx'?'Excel descargado: ':'Descargado en CSV (abre en Excel): ')+fmtInt(filas.length)+' códigos sin homologar.');
   });
 
   // Descarga del LISTADO COMPLETO línea a línea de la cohorte seleccionada, con el
   // diagnóstico (DESCRIPCION CIE 10) de cada dispensa. Respeta los filtros de cohorte y bodega.
   const btnDx=document.getElementById('btnExportCohortesDx');
-  if(btnDx) btnDx.addEventListener('click', ()=>{
+  if(btnDx) btnDx.addEventListener('click', ()=>{ try{ exportarCohorteConDiagnostico(); }
+    catch(err){ showToast('No se pudo generar la descarga: '+(err && err.message ? err.message : err), true); } });
+
+  function exportarCohorteConDiagnostico(){
     if(!_cohortesLineas.length){ showToast('Primero calcula los indicadores.', true); return; }
     const coh=(document.getElementById('fCohorte')||{}).value || '';
     const bod=(document.getElementById('fCohorteBodega')||{}).value || '';
     const nombreCoh=coh ? (COHORTE_LABEL.get(coh)||coh) : 'Todas las cohortes';
-    const filas=_cohortesLineas
-      .filter(l=>(!coh || l.cohortes.indexOf(coh)>=0) && (!bod || l.bodega===bod))
+    const seleccion=_cohortesLineas.filter(l=>(!coh || l.cohortes.indexOf(coh)>=0) && (!bod || l.bodega===bod));
+    if(!seleccion.length){
+      showToast('No hay dispensas de '+nombreCoh+(bod?' en la bodega '+bod:'')+': cambia la cohorte o la bodega.', true);
+      return;
+    }
+    // Aviso inmediato y el trabajo pesado se hace después, para que el mensaje se vea
+    // y el navegador no parezca congelado con listados de miles de líneas.
+    showToast('Generando el listado de '+fmtInt(seleccion.length)+' líneas… espera unos segundos.');
+    setTimeout(()=>{
+      try{ generarArchivoCohorteDx(seleccion, coh, bod, nombreCoh); }
+      catch(err){ showToast('No se pudo generar la descarga: '+(err && err.message ? err.message : err), true); }
+    }, 80);
+  }
+
+  function generarArchivoCohorteDx(seleccion, coh, bod, nombreCoh){
+    const filas=seleccion
       .map(l=>({
         'Cohorte': coh ? nombreCoh : l.cohortes.map(k=>COHORTE_LABEL.get(k)||k).join(' / '),
         'Zona':l.zona, 'Bodega':l.bodega, 'EPS':l.eps, 'EPS consolidada':l.epsGrupo,
@@ -4802,10 +4877,6 @@ function cohortesTopFiltrado(coh, bod){
         'Estado línea': l.pendiente?'PENDIENTE':'ENTREGADA',
         'Und. pendientes': l.pendiente ? l.undPend : 0
       }));
-    if(!filas.length){
-      showToast('No hay dispensas de '+nombreCoh+(bod?' en la bodega '+bod:'')+': cambia la cohorte o la bodega.', true);
-      return;
-    }
     // Orden: bodega, diagnóstico, documento y código, para revisar paciente por paciente.
     filas.sort((a,b)=> String(a.Bodega).localeCompare(String(b.Bodega),'es')
       || String(a['Diagnóstico (CIE 10)']).localeCompare(String(b['Diagnóstico (CIE 10)']),'es')
@@ -4826,14 +4897,18 @@ function cohortesTopFiltrado(coh, bod){
     const resumenDx=[...porDx.values()]
       .map(g=>Object.assign({}, g, {'Pacientes':g['Pacientes'].size}))
       .sort((a,b)=> b['Líneas']-a['Líneas'] || String(a['Diagnóstico (CIE 10)']).localeCompare(String(b['Diagnóstico (CIE 10)']),'es'));
-    const wbDx=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wbDx, XLSX.utils.json_to_sheet(filas), 'LISTADO CON DIAGNOSTICO');
-    XLSX.utils.book_append_sheet(wbDx, XLSX.utils.json_to_sheet(resumenDx), 'RESUMEN POR DIAGNOSTICO');
     const sufijoDx=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
-    XLSX.writeFile(wbDx, 'Cohorte_Diagnostico_'+sufijoDx+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    const fechaDx=new Date().toISOString().slice(0,10);
     const pac=new Set(filas.map(f=>f.Documento).filter(Boolean)).size;
-    showToast('Excel descargado: '+fmtInt(filas.length)+' líneas de '+fmtInt(pac)+' pacientes con diagnóstico ('+nombreCoh+(bod?' · '+bod:'')+').');
-  });
+    const tipo=exportarInforme('Cohorte_Diagnostico_'+sufijoDx+'_'+fechaDx, [
+      { nombre:'LISTADO CON DIAGNOSTICO', filas:filas },
+      { nombre:'RESUMEN POR DIAGNOSTICO', filas:resumenDx }
+    ]);
+    if(!tipo){ showToast('No se pudo generar la descarga. Vuelve a calcular los indicadores.', true); return; }
+    const detalle=fmtInt(filas.length)+' líneas de '+fmtInt(pac)+' pacientes con diagnóstico ('+nombreCoh+(bod?' · '+bod:'')+')';
+    if(tipo==='xlsx') showToast('Excel descargado: '+detalle+'.');
+    else showToast('Listado descargado en CSV (abre en Excel, son 2 archivos): '+detalle+'.');
+  }
 })();
 
 /* =========================================================================
