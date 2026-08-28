@@ -3661,11 +3661,18 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
    Respeta todos los filtros activos en pantalla (fecha, modalidad, EPS, EPS
    consolidada, diagnóstico, bodega y zona) y excluye las dispensas INACTIVO.     */
 document.getElementById('btnExportarABC').addEventListener('click', ()=>{
-  if(!filteredRowsCache.length){ showToast('No hay indicadores calculados para el Análisis ABC.', true); return; }
+ try{
+  // Si aún no se han aplicado filtros, se usan directamente las filas procesadas.
+  let baseRows = (filteredRowsCache && filteredRowsCache.length)
+    ? filteredRowsCache
+    : ((state && state.processed && state.processed.rows) ? state.processed.rows : []);
+  if(!baseRows.length){ showToast('Primero pulsa "Calcular indicadores" para tener datos del Análisis ABC.', true); return; }
+  if(typeof XLSX==='undefined'){ showToast('No se pudo cargar la librería de Excel. Revisa tu conexión a internet y recarga.', true); return; }
   const bodegaSearch = getBodegaFiltro();
-  const zona = document.getElementById('fZona').value;
+  const zonaSel = document.getElementById('fZona');
+  const zona = zonaSel ? zonaSel.value : '';
   // Estado ACTUAL: solo la última versión de cada línea y solo dispensas activas.
-  const vigentes = soloActivas(filteredRowsCache.filter(r=>r.versionVigente!==false));
+  const vigentes = soloActivas(baseRows.filter(r=>r.versionVigente!==false));
   const grupos = groupByBodega(vigentes, bodegaSearch, zona);
   if(!grupos.length){ showToast('No hay bodegas que cumplan los filtros actuales.', true); return; }
 
@@ -3720,6 +3727,11 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
   }]), 'CRITERIO');
   XLSX.writeFile(wb, `Analisis_ABC_Bodegas_${new Date().toISOString().slice(0,10)}.xlsx`);
   showToast('Análisis ABC descargado: '+fmtInt(filas.length)+' bodegas (A: '+nA+' · B: '+nB+' · C: '+nC+').');
+ }catch(err){
+  // Cualquier fallo se informa en pantalla para no dejar el botón "muerto".
+  console.error('Error al generar el Análisis ABC:', err);
+  showToast('Error al generar el Análisis ABC: '+(err && err.message ? err.message : err), true);
+ }
 });
 
 document.getElementById('btnDescargarParetoExistencias').addEventListener('click', ()=>{
