@@ -728,7 +728,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
             <div style="flex:1;min-width:220px;">
               <h3>🏆 Top 10 códigos por cohorte</h3>
-              <p class="seg-desc">Con <b>Todas las cohortes</b> ves los 10 códigos más dispensados del conjunto de las 6 cohortes (cada dispensa cuenta una sola vez); elige una cohorte concreta para ver su propio Top 10. Puedes además enfocar una bodega puntual. La descarga de códigos incluye únicamente los que tienen <b>pendientes mayores a 0</b>, respetando los filtros aplicados.</p>
+              <p class="seg-desc">Con <b>Todas las cohortes</b> ves los 10 códigos más dispensados del conjunto de las 6 cohortes (cada dispensa cuenta una sola vez); elige una cohorte concreta para ver su propio Top 10. Puedes además enfocar una bodega puntual. La descarga de códigos incluye únicamente los que tienen <b>pendientes mayores a 0</b>, respetando los filtros aplicados. Con <b>Descargar cohorte con diagnóstico</b> obtienes el listado completo línea a línea (paciente, fecha, diagnóstico CIE 10, código y estado) de la cohorte y bodega seleccionadas.</p>
             </div>
             <div class="field" style="min-width:200px;">
               <label>Cohorte</label>
@@ -741,6 +741,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <button class="btn btn-export" id="btnExportCohortesTop">⬇ Descargar códigos con pendientes (Excel)</button>
             <button class="btn btn-export" id="btnExportCohortesPendSimple">⬇ Descargar pendientes por documento (Cohorte, Bodega, Código, Documento, Cantidad)</button>
             <button class="btn btn-export" id="btnExportCohortesSinHom">⬇ Descargar códigos sin homologar (Excel)</button>
+            <button class="btn btn-export" id="btnExportCohortesDx">⬇ Descargar cohorte con diagnóstico (listado completo)</button>
           </div>
           <div class="table-wrap" style="max-height:560px;">
             <table class="data" id="tblCohortesTop">
@@ -758,27 +759,19 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
       <!-- ---- SUBVISTA: BASE CUENTAS (responsables por EPS, zona y bodega) ---- -->
       <div class="subview" id="sub-cuentas">
-        <div class="helpbox">Asigna cada dispensación al <b>Líder</b> y/o <b>Gestor de cuenta</b> que responde por esa EPS, para ver el cumplimiento por persona. La EPS se compara por la <b>EPS consolidada</b> (así los regímenes y tutelas de una misma EPS quedan en la cuenta correcta); si el responsable tiene una <b>zona</b> o una <b>bodega</b> asignada, solo se le suman las líneas de ese alcance, y si su zona es <b>GENERAL</b> atiende toda la EPS. Se cuentan <b>solo dispensas con Estado Activo</b> y se respetan los filtros de bodega y zona de la barra superior. Cuando un Líder y su Gestor comparten la misma cuenta, la línea suma para ambos y en la fila <b>TOTAL</b> se cuenta una sola vez.</div>
+        <div class="helpbox">Asigna cada dispensación al <b>Líder</b> que responde por esa EPS, para ver el cumplimiento por persona (los gestores de cuenta no se muestran: sus líneas quedan en el líder de la EPS). La EPS se compara por la <b>EPS consolidada</b> (así los regímenes y tutelas de una misma EPS quedan en la cuenta correcta); si el líder tiene una <b>zona</b> o una <b>bodega</b> asignada, solo se le suman las líneas de ese alcance, y si su zona es <b>GENERAL</b> atiende toda la EPS. Se cuentan <b>solo dispensas con Estado Activo</b> y se respetan los filtros de bodega y zona de la barra superior. Cuando dos líderes comparten la misma cuenta, la línea suma para ambos y en la fila <b>TOTAL</b> se cuenta una sola vez.</div>
         <div class="helpbox" id="cuentasDiag" style="display:none;"></div>
         <div class="stat-row" id="statsCuentas"></div>
 
         <div class="seguimiento-section">
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
             <div style="flex:1;min-width:240px;">
-              <h3>👥 Base de cuentas por responsable</h3>
-              <p class="seg-desc">Líneas a cargo, entregadas, pendientes y % de cumplimiento de cada responsable, con la EPS, la zona y la bodega que atiende.</p>
+              <h3>👥 Base de cuentas por líder</h3>
+              <p class="seg-desc">Líneas a cargo, entregadas, pendientes y % de cumplimiento de cada líder, con la EPS, la zona y la bodega que atiende.</p>
             </div>
             <div class="field" style="min-width:210px;">
-              <label>Responsable</label>
-              <select id="fCuentaResponsable"><option value="">Todos los responsables</option></select>
-            </div>
-            <div class="field" style="min-width:170px;">
-              <label>Cargo</label>
-              <select id="fCuentaCargo">
-                <option value="">Todos los cargos</option>
-                <option value="Líder">Líder</option>
-                <option value="Gestor cuenta">Gestor de cuenta</option>
-              </select>
+              <label>Líder</label>
+              <select id="fCuentaResponsable"><option value="">Todos los líderes</option></select>
             </div>
             <div class="field" style="min-width:210px;">
               <label>EPS a cargo</label>
@@ -790,7 +783,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <table class="data" id="tblCuentasResp">
               <thead>
                 <tr>
-                  <th>Responsable</th><th>Cargo</th><th>EPS a cargo</th><th>Zona</th><th>Bodega</th>
+                  <th>Líder</th><th>EPS a cargo</th><th>Zona</th><th>Bodega</th>
                   <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
                   <th>% Cumplimiento</th><th>Und. pendientes</th><th>Bodegas</th>
                 </tr>
@@ -802,12 +795,12 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
         <div class="seguimiento-section">
           <h3>📈 Evolución por cortes</h3>
-          <p class="seg-desc">Cómo avanzó cada responsable corte a corte. Los cortes se arman con la <b>fecha de dispensación</b> y en cada uno se toma el estado vigente al cierre de ese corte; un corte sin dispensaciones queda en <b>—</b> para no repetir la cifra anterior.</p>
+          <p class="seg-desc">Cómo avanzó cada líder corte a corte. Los cortes se arman con la <b>fecha de dispensación</b> y en cada uno se toma el estado vigente al cierre de ese corte; un corte sin dispensaciones queda en <b>—</b> para no repetir la cifra anterior.</p>
           <div class="table-wrap">
             <table class="data" id="tblCuentasCortes">
               <thead>
                 <tr>
-                  <th rowspan="2">Responsable</th><th rowspan="2">Cargo</th>
+                  <th rowspan="2">Líder</th>
                   <th colspan="3">Corte 1 (días 1-10)</th>
                   <th colspan="3">Corte 2 (días 11-20)</th>
                   <th colspan="3">Corte 3 (días 21-31)</th>
@@ -826,12 +819,12 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
         <div class="seguimiento-section">
           <h3>🔎 Detalle por EPS, zona y bodega</h3>
-          <p class="seg-desc">Desglose de las líneas de cada responsable por EPS consolidada, zona y bodega, ordenado por pendientes de mayor a menor. En pantalla se muestran hasta 600 filas; el Excel trae el detalle completo.</p>
+          <p class="seg-desc">Desglose de las líneas de cada líder por EPS consolidada, zona y bodega, ordenado por pendientes de mayor a menor. En pantalla se muestran hasta 600 filas; el Excel trae el detalle completo.</p>
           <div class="table-wrap" style="max-height:560px;">
             <table class="data" id="tblCuentasDetalle">
               <thead>
                 <tr>
-                  <th>Responsable</th><th>Cargo</th><th>EPS Consolidada</th><th>Zona</th><th>Bodega</th>
+                  <th>Líder</th><th>EPS Consolidada</th><th>Zona</th><th>Bodega</th>
                   <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
                   <th>% Cumplimiento</th><th>Und. pendientes</th>
                 </tr>
