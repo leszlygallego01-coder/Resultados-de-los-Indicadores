@@ -144,7 +144,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <!-- ---- Seguimiento de Dispensación agrupada por Bodega ---- -->
         <div class="seguimiento-section" id="seguimientoSection">
           <h3>📋 Seguimiento de Dispensación por Bodega</h3>
-          <p class="seg-desc">Muestra entregadas vs pendientes por bodega para cada corte del periodo. Los cortes se arman con la <b>fecha de dispensación</b> de cada línea y el estado se toma de la última versión cargada (cada cargue nuevo actualiza el estado de la misma línea). <b>Orden:</b> las bodegas se listan por Índice de Pendientes de mayor a menor (las más críticas primero).</p>
+          <p class="seg-desc">Muestra entregadas vs pendientes por bodega para cada corte del periodo. <b>Eje temporal único:</b> los cortes se arman siempre con la <b>fecha de dispensación</b> de cada línea (nunca con la fecha del cargue) y el estado se toma de la última versión cargada. Un pendiente se cuenta como recuperado cuando la entrega llega con una <b>fecha de dispensación posterior</b> o, si es la misma fecha, en un <b>cargue posterior</b>; la misma regla aplica al paso de <b>sin soporte a con soporte</b>, identificando la dispensa por <b>Documento + Bodega</b>. <b>Orden:</b> las bodegas se listan por Índice de Pendientes de mayor a menor (las más críticas primero).</p>
           <div class="seg-no-datos" id="segNoDatos"><b>Aún no hay datos del Reporte de Dispensación.</b> Se habilita cuando el Reporte de Dispensación se cargue desde el Panel de Cargue.</div>
           <div id="segContent" style="display:none;">
             <div class="seguimiento-corte-sel">
@@ -173,7 +173,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             </div>
             <div class="corte-card" style="margin-top:14px;">
               <h4>Reasignación mensual de entregas</h4>
-              <p style="margin:0 0 10px;color:var(--ink-soft);font-size:12px;line-height:1.5;">Cuando un pendiente se entrega en un mes posterior, la entrega <strong>cuenta en el mes en que se realizó</strong> y se <strong>descuenta del mes que originó el pendiente</strong>. Así ningún mes queda con una entrega que no le corresponde y el mes de origen deja de arrastrar ese pendiente.</p>
+              <p style="margin:0 0 10px;color:var(--ink-soft);font-size:12px;line-height:1.5;">Cuando un pendiente se entrega en un mes posterior, la entrega <strong>cuenta en el mes en que se realizó</strong> y se <strong>descuenta del mes que originó el pendiente</strong>. Así ningún mes queda con una entrega que no le corresponde y el mes de origen deja de arrastrar ese pendiente. Los meses se determinan con la <strong>fecha de dispensación</strong> (mismo eje temporal del resto del visor) y la reasignación solo se aplica cuando el cambio de pendiente a entregado está acreditado: <strong>fecha de dispensación posterior</strong> o, si es la misma fecha, un <strong>cargue posterior</strong>, tomando la dispensa por <strong>Documento + Bodega</strong>.</p>
               <div class="table-wrap" style="max-height:340px;margin-bottom:0;">
                 <table class="data" id="tblSegMeses">
                   <thead id="tblSegMesesHead"></thead>
@@ -870,7 +870,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
   <div class="modal-box">
     <button class="modal-close" id="btnCerrarPeriodico">✕</button>
     <h2>Reporte Comparativo Periódico</h2>
-    <p style="font-size:12.5px;color:var(--ink-soft);margin:0;">Compara los cargues acumulativos del Reporte de Dispensación organizados por la <b>fecha de dispensación</b>, segmentada en 3 cortes del mes: días 1-10, 11-20 y 21-31. Cada corte muestra el estado ACUMULADO hasta ese día, tomando la última versión cargada de cada línea. <b>Alcance:</b> se cuentan solo las dispensas con <b>Estado Activo</b>; las INACTIVO se excluyen.</p>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:0;">Compara los cargues acumulativos del Reporte de Dispensación organizados por la <b>fecha de dispensación</b> (eje temporal único), segmentada en 3 cortes del mes: días 1-10, 11-20 y 21-31. Cada corte muestra el estado ACUMULADO hasta ese día, tomando la última versión cargada de cada línea. Se acredita una recuperación (pendiente → entregado y sin soporte → con soporte, por <b>Documento + Bodega</b>) cuando el cumplimiento llega con <b>fecha de dispensación posterior</b> o, si es la misma fecha, en un <b>cargue posterior</b>. <b>Alcance:</b> se cuentan solo las dispensas con <b>Estado Activo</b>; las INACTIVO se excluyen.</p>
     <div id="periodicoFilters" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
       <div class="field" style="flex:1;min-width:140px;"><label>Mes</label><select id="pfMes"><option value="">Todos</option></select></div>
       <div class="field" style="flex:1;min-width:140px;"><label>EPS Consolidada</label><select id="pfEpsGrupo"><option value="">Todas</option></select></div>
