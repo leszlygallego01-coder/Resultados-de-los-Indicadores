@@ -933,6 +933,11 @@ async function calcularIndicadores(){
       // (solo si antes venía en 0). Se usan en el Reporte Comparativo Periódico.
       const fechaCargue=String(r._fechaCargue||'');
       const fechaSoporte=String(r._fechaSoporte||'');
+      // Número consecutivo del cargue en que entró la línea y del cargue en que llegó su
+      // soporte. Es el orden REAL de los cargues (1º, 2º, 3º...), sin depender de la fecha
+      // del archivo: así dos cargues del mismo día siguen distinguiéndose entre sí.
+      const secCargue=Number(r._secCargue)||0;
+      const secSoporte=Number(r._secSoporte)||0;
       const documento=String(r.documento||'').trim();
       const contrato=normValue(r.contrato);
       const eps=corregirEps(r.eps);
@@ -948,7 +953,7 @@ async function calcularIndicadores(){
         unidades, cantidadAutorizada, diferencia, lineaPendiente, noMedicamento, bodegaDetalle, bodegaNorm,
         zona: bodegaToZona.get(bodegaNorm) || 'N/D',
         existenciaPunto, existenciaBodega, sePuedeSubsanarPunto, sePuedeSubsanarBodega, tieneSoportes,
-        fechaCargue, fechaSoporte
+        fechaCargue, fechaSoporte, secCargue, secSoporte
       };
     });
 
@@ -957,21 +962,35 @@ async function calcularIndicadores(){
     // en la misma bodega (por ejemplo dos renglones del mismo medicamento). Si solo se
     // identificara la línea por documento + bodega + artículo, esas filas se confundirían
     // entre sí y el tablero contaría una sola. Para evitarlo se numera cada repetición
-    // por su orden de aparición DENTRO DEL MISMO CARGUE (1ª, 2ª, 3ª...). Así la primera
-    // repetición de un cargue se compara con la primera del recargue siguiente, la
-    // segunda con la segunda, y cada fila del archivo conserva su propia identidad.
+    // (1ª, 2ª, 3ª...) DENTRO DEL MISMO CARGUE.
+    // El orden de esa numeración NO es el orden en que vienen las filas en el archivo,
+    // porque de un cargue a otro las filas pueden venir en otro orden o con cantidades
+    // distintas. Se ordena por la CANTIDAD AUTORIZADA, que es el dato que no cambia
+    // cuando la línea se entrega (lo que cambia son las unidades entregadas y la
+    // diferencia). Así la línea autorizada por 2 unidades que llegó pendiente (0 de 2)
+    // se compara con la MISMA línea autorizada por 2 que después llegó entregada (2 de 2),
+    // y el tablero la reconoce como entregada (recuperada) en vez de contarla como una
+    // línea nueva.
     {
-      const conteoPorCargue=new Map();
+      const gruposPorCargue=new Map();
       rows.forEach(r=>{
-        const cargue=String(r.fechaCargue||'');
-        // Si la fila no trae fecha de cargue (acumulados guardados antes de incluir esa
-        // columna) no hay forma de saber a qué cargue pertenece: en ese caso se deja como
-        // repetición 1 para no partir por error las versiones de una misma línea.
+        // Se identifica el cargue por su NÚMERO consecutivo (orden real de los cargues) y,
+        // si el acumulado es antiguo y no lo trae, por la fecha del cargue. Usar el número
+        // evita que dos cargues subidos el mismo día se mezclen en uno solo.
+        const cargue = r.secCargue ? 'S'+r.secCargue : String(r.fechaCargue||'');
+        // Si la fila no trae ninguna marca de cargue (acumulados guardados antes de incluir
+        // esas columnas) no hay forma de saber a qué cargue pertenece: en ese caso se deja
+        // como repetición 1 para no partir por error las versiones de una misma línea.
         if(!cargue){ r.ocurrenciaLinea=1; return; }
         const k=cargue+'#'+r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo;
-        const n=(conteoPorCargue.get(k)||0)+1;
-        conteoPorCargue.set(k, n);
-        r.ocurrenciaLinea=n;
+        if(!gruposPorCargue.has(k)) gruposPorCargue.set(k, []);
+        gruposPorCargue.get(k).push(r);
+      });
+      gruposPorCargue.forEach(grupo=>{
+        // Una sola fila: no hay repeticiones que numerar.
+        if(grupo.length===1){ grupo[0].ocurrenciaLinea=1; return; }
+        grupo.sort((a,b)=> (a.cantidadAutorizada-b.cantidadAutorizada) || (a.idx-b.idx));
+        grupo.forEach((r,i)=>{ r.ocurrenciaLinea=i+1; });
       });
     }
 
@@ -5407,6 +5426,14 @@ function corteDeSoporte(r){
   const p=getPeriodoDeCarga((r && (r.fechaSoporte || r.fechaCargue)) || '');
   return p===null ? 0 : p;
 }
+/* NÚMERO del cargue (orden real: 1º, 2º, 3º...) en el que llegó esta versión de la
+   línea y en el que llegó su soporte. Es la forma más confiable de saber qué llegó
+   antes y qué después: no depende de la fecha del archivo, así que funciona incluso
+   si dos cargues se hicieron el mismo día o si los archivos se subieron desordenados.
+   Vale 0 en acumulados antiguos que todavía no guardaban este dato; en ese caso se
+   sigue usando la fecha del cargue como respaldo.                               */
+function numCargue(r){ return Number(r && r.secCargue) || 0; }
+function numSoporte(r){ return Number(r && (r.secSoporte || r.secCargue)) || 0; }
 /* Identidad de una DISPENSA: Documento + Bodega. El mismo documento puede atenderse
    en más de un punto de entrega, por eso la bodega hace parte de la clave: cada punto
    maneja su propia dispensa y su propio estado de entrega.                      */
@@ -5446,6 +5473,11 @@ function corteDeCargue(r){
   return p===null ? corteDeDispensacion(r) : p;
 }
 function esVersionPosterior(a, b){
+  // Primero manda el NÚMERO de cargue (orden real de los cargues); si alguno de los dos
+  // no lo trae (acumulado antiguo) se compara por la fecha del cargue, y en última
+  // instancia por el orden en que las filas quedaron guardadas.
+  const na=numCargue(a), nb=numCargue(b);
+  if(na && nb && na!==nb) return na>nb;
   const fa=String(a.fechaCargue||''), fb=String(b.fechaCargue||'');
   if(fa!==fb) return fa>fb;
   return a.idx>b.idx;
@@ -5477,9 +5509,23 @@ function marcaSoporte(r){ return String((r && (r.fechaSoporte || r.fechaCargue))
    Nunca se acredita hacia atrás: un cargue anterior o el mismo cargue no es recuperación. */
 function cambioAcreditado(rAnt, rNue){
   if(!rAnt || !rNue) return false;
+  // Vía principal: el NÚMERO de cargue. El cumplimiento debe llegar en un cargue con
+  // número mayor. Funciona aunque los dos cargues sean del mismo día.
+  const nAnt=numCargue(rAnt), nNue=numCargue(rNue);
+  if(nAnt && nNue) return nNue>nAnt;
   const cAnt=marcaCargue(rAnt), cNue=marcaCargue(rNue);
-  if(cAnt && cNue) return cNue>cAnt;                  // exige cargue posterior
+  if(cAnt && cNue) return cNue>cAnt;                  // respaldo: fecha del cargue
   return esVersionPosterior(rNue, rAnt);              // respaldo: orden de versiones
+}
+/* ¿El SOPORTE llegó en un cargue posterior al del registro que estaba sin soporte?
+   Misma regla que las entregas, pero fechada con el cargue en que apareció el soporte. */
+function soporteAcreditado(rSin, rCon){
+  if(!rSin || !rCon) return false;
+  const nSin=numCargue(rSin), nCon=numSoporte(rCon);
+  if(nSin && nCon) return nCon>nSin;
+  const cSin=marcaCargue(rSin), cCon=marcaSoporte(rCon);
+  if(cSin && cCon) return cCon>cSin;
+  return cambioAcreditado(rSin, rCon);
 }
 /* Cortes con movimiento real. Un corte cuenta cuando tuvo DISPENSACIONES (nacieron
    pendientes en esos días) o cuando hubo un CARGUE en esos días (pudo acreditar
@@ -5690,9 +5736,14 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
     const eventoOk=clavesEventoEntregadas(filtered);
     /* Se comparan dos filas de la MISMA dispensa (documento + bodega): la más antigua sin
        soporte y la que ya trae soporte. La recuperación se acredita con la misma regla de
-       las entregas (`cambioAcreditado`): el soporte debe llegar en un CARGUE POSTERIOR al
-       del registro que estaba sin soporte. El corte de la recuperación es el del cargue
-       en que llegó el soporte. */
+       las entregas: el soporte debe llegar en un CARGUE POSTERIOR al del registro que
+       estaba sin soporte. El corte de la recuperación es el del cargue en que llegó el
+       soporte.
+       Ojo: cuando una línea vuelve a cargarse y ahora sí trae soporte, la aplicación de
+       cargue ACTUALIZA la misma fila (guarda el soporte y el número del cargue en que
+       llegó), así que la fila “sin soporte” y la fila “con soporte” pueden ser la MISMA.
+       Por eso la comparación se hace entre el cargue de la línea y el cargue del soporte,
+       y no entre dos filas distintas.                                              */
     const sinSopBase=new Map(), conSopFin=new Map(), info=new Map(), filaSinSop=new Map(), filaConSop=new Map();
     filtered.forEach(r=>{
       if(r.contrato!=='EVENTO' || !r.documento) return;
@@ -5719,7 +5770,7 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
       if(!corteRec) return;                      // sin corte de recuperación identificable
       const rCon=filaConSop.get(doc), rSin=filaSinSop.get(doc);
       // El soporte debe llegar en un CARGUE POSTERIOR al del registro sin soporte.
-      if(!cambioAcreditado(rSin, rCon)) return;
+      if(!soporteAcreditado(rSin, rCon)) return;
       const r=info.get(doc);
       // dSop = día del cargue del soporte · dSin = día del cargue en que estaba sin soporte.
       if(r) out.push({bodega:r.bodegaDetalle, corteRec, r, dSop:diaSoporte(rCon), dSin:diaCargue(rSin), dDisp:diaDispensacion(r)});
