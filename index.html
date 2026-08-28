@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829">
+<link rel="stylesheet" href="styles.css?v=20260829b">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -95,7 +95,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="field"><label>&nbsp;</label><button class="btn btn-ghost" id="btnAplicarFiltro" style="padding:8px 14px;">Aplicar filtro</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-ghost" id="btnLimpiarFiltro" style="padding:8px 14px;">Limpiar</button></div>
       <div class="field" style="margin-left:auto;"><label>&nbsp;</label><button class="btn btn-export" id="btnExportar">⬇ Exportar a Excel</button></div>
-      <div class="field"><label>&nbsp;</label><button class="btn btn-abc" id="btnExportarABC" title="Ranking de bodegas por eficiencia de líneas, clasificadas A / B / C">📊 Descargar Análisis ABC</button></div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-abc" id="btnExportarABC" title="Ranking de bodegas por nivel de dispensación (mayor a menor), clasificadas A / B / C">📊 Descargar Análisis ABC</button></div>
     </div>
 
     <div class="subfilters" id="subfiltersBar" style="display:none;">
@@ -906,6 +906,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829"></script>
+<script src="script.js?v=20260829b"></script>
 </body>
 </html>
