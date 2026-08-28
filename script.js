@@ -4928,25 +4928,13 @@ function cohortesTopFiltrado(coh, bod){
    ========================================================================= */
 const RESPONSABLES_CUENTA = [
   {nombre:'Sebastian Morales',  cargo:'Líder',           eps:['ASMET SALUD','CRUZ VERDE'], zonas:[],                 bodega:''},
-  {nombre:'Astrid Salinas',     cargo:'Líder',           eps:['ASMET SALUD'],              zonas:['CAUCA'],          bodega:''},
-  {nombre:'Kelly Cardenas',     cargo:'Líder',           eps:['ASMET SALUD'],              zonas:['VALLE','TOLIMA'], bodega:''},
   {nombre:'Neysa Correa',       cargo:'Líder',           eps:['COOSALUD'],                 zonas:[],                 bodega:''},
-  {nombre:'Valentina Franco',   cargo:'Gestor cuenta',   eps:['COOSALUD'],                 zonas:[],                 bodega:''},
-  {nombre:'Angela Paredes',     cargo:'Gestor cuenta',   eps:['CRUZ VERDE'],               zonas:[],                 bodega:''},
   {nombre:'Paola Ascuntar',     cargo:'Líder',           eps:['FAMISANAR'],                zonas:[],                 bodega:''},
-  {nombre:'Karol Martinez',     cargo:'Gestor cuenta',   eps:['FAMISANAR'],                zonas:[],                 bodega:''},
   {nombre:'Juan Carlos Mendez', cargo:'Líder',           eps:['FIDEICOMISOS','UNION TEMPORAL SALUD INTEGRAL MAISFEN'], zonas:[], bodega:''},
-  {nombre:'Daniela Carvajal',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Sara Cruz',          cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Yenifer Pulgarin',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Edwin Salcedo',      cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
   {nombre:'Lida Victoria',      cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Julian Ramirez',     cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
   {nombre:'Noemy Durasovic',    cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:'M243'},
-  {nombre:'Nataly Hernandez',   cargo:'Gestor cuenta',   eps:['SANITAS'],                  zonas:[],                 bodega:''},
   {nombre:'Laura Gonzalez',     cargo:'Líder',           eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
-  {nombre:'Marinela Amaya',     cargo:'Gestor cuenta',   eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
-  {nombre:'Valentina Vargas',   cargo:'Gestor cuenta',   eps:['S.O.S'],                    zonas:[],                 bodega:''}
+  {nombre:'Valentina Vargas',   cargo:'Líder',           eps:['S.O.S'],                    zonas:[],                 bodega:''}
 ];
 // La pestaña muestra Únicamente a los LÍDERES: cada uno responde por su EPS consolidada.
 // Los Gestores de cuenta quedan fuera del tablero (sus líneas se acumulan en el Líder de la EPS).
