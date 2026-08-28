@@ -4347,6 +4347,9 @@ let _cohortesTop=[];
 let _cohortesDetalle=[];
 let _cohortesGlobalCodigos=[];   // consolidado de todas las cohortes juntas (sin duplicar lineas)
 let _cohortesBodegas=[];
+// Listado línea a línea de las dispensas clasificadas en alguna cohorte, con su diagnóstico
+// (DESCRIPCION CIE 10). Se usa para la descarga "cohorte con diagnóstico (listado completo)".
+let _cohortesLineas=[];
 
 function clasificarCohortesLinea(r){
   const dx=normValue(r.codigoCie10);
@@ -4374,7 +4377,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     if(diagEl){ diagEl.style.display=''; diagEl.innerHTML='<b>Sin datos.</b> Carga las tablas y pulsa <b>Calcular indicadores</b> para ver el informe de cohortes.'; }
     tb.innerHTML='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     tbTop.innerHTML='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
-    _cohortesResumen=[]; _cohortesTop=[]; _cohortesDetalle=[]; _cohortesGlobalCodigos=[];
+    _cohortesResumen=[]; _cohortesTop=[]; _cohortesDetalle=[]; _cohortesGlobalCodigos=[]; _cohortesLineas=[];
     ['pieCohortes','pieCohortesPend'].forEach(id=>drawDonut(id, [{label:'',value:1,color:'#DCE4EC'}], '—'));
     ['pieCohortesLegend','pieCohortesPendLegend'].forEach(id=>{ const l=document.getElementById(id); if(l) l.innerHTML=''; });
     return;
@@ -4394,6 +4397,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
   const porCodigo=new Map();      // cohorte|bodega|codigo
   const porCodigoGlobal=new Map(); // bodega|codigo  (una sola vez por linea, para "Todas las cohortes")
   let lineasClasificadas=0, sinDx=0;
+  const lineasCoh=[];             // una fila por línea clasificada, con su diagnóstico
 
   // Descripción a usar: la del catálogo de Homólogos y, si el código no está homologado,
   // la descripción que trae el propio Reporte de Dispensación.
@@ -4406,6 +4410,15 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     if(!cohortes.length) return;
     lineasClasificadas++;
     const bodega=r.bodegaDetalle||'SIN BODEGA';
+    // Fila del listado completo: se guarda tal como viene la línea, con su diagnóstico.
+    lineasCoh.push({
+      cohortes, bodega, zona:r.zona||'N/D', eps:r.eps||'', epsGrupo:r.epsGrupo||'N/D',
+      documento:String(r.documento||'').trim(), fecha:(r.fecha instanceof Date && !isNaN(r.fecha)) ? dateToISO(r.fecha) : '',
+      codigo:r.codigoArticulo||'SIN CODIGO', descripcion:descLinea(r),
+      homologado:!sinHomologarLinea(r), diagnostico:String(r.codigoCie10||'').trim(),
+      autorizada:r.cantidadAutorizada||0, unidades:r.unidades||0, diferencia:r.diferencia||0,
+      pendiente:r.lineaPendiente==='SI', undPend:Math.abs(r.diferencia||0)
+    });
     if(!porBodega.has(bodega)){
       const fila={ bodega, zona:r.zona||'N/D', lineas:0, ent:0, pen:0 };
       COHORTES_DEF.forEach(c=>{ fila['c_'+c.key]=0; });
@@ -4459,6 +4472,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
     if(!gg.descripcion) gg.descripcion=descLinea(r);
     cohortes.forEach(k=>gg.cohortesSet.add(k));
   });
+  _cohortesLineas=lineasCoh;
 
   const tabla=[...resumen.values()].map(g=>({
     key:g.key, label:g.label, color:g.color,
@@ -4766,21 +4780,75 @@ function cohortesTopFiltrado(coh, bod){
     XLSX.writeFile(wb3, 'Codigos_Cohortes_Sin_Homologar_'+new Date().toISOString().slice(0,10)+'.xlsx');
     showToast('Excel descargado: '+fmtInt(filas.length)+' códigos sin homologar.');
   });
+
+  // Descarga del LISTADO COMPLETO línea a línea de la cohorte seleccionada, con el
+  // diagnóstico (DESCRIPCION CIE 10) de cada dispensa. Respeta los filtros de cohorte y bodega.
+  const btnDx=document.getElementById('btnExportCohortesDx');
+  if(btnDx) btnDx.addEventListener('click', ()=>{
+    if(!_cohortesLineas.length){ showToast('Primero calcula los indicadores.', true); return; }
+    const coh=(document.getElementById('fCohorte')||{}).value || '';
+    const bod=(document.getElementById('fCohorteBodega')||{}).value || '';
+    const nombreCoh=coh ? (COHORTE_LABEL.get(coh)||coh) : 'Todas las cohortes';
+    const filas=_cohortesLineas
+      .filter(l=>(!coh || l.cohortes.indexOf(coh)>=0) && (!bod || l.bodega===bod))
+      .map(l=>({
+        'Cohorte': coh ? nombreCoh : l.cohortes.map(k=>COHORTE_LABEL.get(k)||k).join(' / '),
+        'Zona':l.zona, 'Bodega':l.bodega, 'EPS':l.eps, 'EPS consolidada':l.epsGrupo,
+        'Documento':l.documento, 'Fecha dispensación':l.fecha,
+        'Diagnóstico (CIE 10)':l.diagnostico||'SIN DIAGNOSTICO',
+        'Código':l.codigo, 'Descripción DCI':l.descripcion||'',
+        'Homologado':l.homologado?'SI':'NO',
+        'Cant. autorizada':l.autorizada, 'Unidades dispensadas':l.unidades,
+        'Estado línea': l.pendiente?'PENDIENTE':'ENTREGADA',
+        'Und. pendientes': l.pendiente ? l.undPend : 0
+      }));
+    if(!filas.length){
+      showToast('No hay dispensas de '+nombreCoh+(bod?' en la bodega '+bod:'')+': cambia la cohorte o la bodega.', true);
+      return;
+    }
+    // Orden: bodega, diagnóstico, documento y código, para revisar paciente por paciente.
+    filas.sort((a,b)=> String(a.Bodega).localeCompare(String(b.Bodega),'es')
+      || String(a['Diagnóstico (CIE 10)']).localeCompare(String(b['Diagnóstico (CIE 10)']),'es')
+      || String(a.Documento).localeCompare(String(b.Documento),'es')
+      || String(a['Código']).localeCompare(String(b['Código']),'es'));
+    // Resumen por diagnóstico para leer rápido de qué se compone la cohorte.
+    const porDx=new Map();
+    filas.forEach(f=>{
+      const k=f['Diagnóstico (CIE 10)'];
+      if(!porDx.has(k)) porDx.set(k, { 'Diagnóstico (CIE 10)':k, 'Líneas':0, 'Pacientes':new Set(),
+        'Entregadas':0, 'Pendientes':0, 'Und. pendientes':0 });
+      const g=porDx.get(k);
+      g['Líneas']++;
+      if(f.Documento) g['Pacientes'].add(f.Documento);
+      if(f['Estado línea']==='PENDIENTE'){ g['Pendientes']++; g['Und. pendientes']+=f['Und. pendientes']; }
+      else g['Entregadas']++;
+    });
+    const resumenDx=[...porDx.values()]
+      .map(g=>Object.assign({}, g, {'Pacientes':g['Pacientes'].size}))
+      .sort((a,b)=> b['Líneas']-a['Líneas'] || String(a['Diagnóstico (CIE 10)']).localeCompare(String(b['Diagnóstico (CIE 10)']),'es'));
+    const wbDx=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbDx, XLSX.utils.json_to_sheet(filas), 'LISTADO CON DIAGNOSTICO');
+    XLSX.utils.book_append_sheet(wbDx, XLSX.utils.json_to_sheet(resumenDx), 'RESUMEN POR DIAGNOSTICO');
+    const sufijoDx=(nombreCoh+(bod?'_'+bod:'')).replace(/[^A-Za-z0-9]+/g,'_').slice(0,60);
+    XLSX.writeFile(wbDx, 'Cohorte_Diagnostico_'+sufijoDx+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    const pac=new Set(filas.map(f=>f.Documento).filter(Boolean)).size;
+    showToast('Excel descargado: '+fmtInt(filas.length)+' líneas de '+fmtInt(pac)+' pacientes con diagnóstico ('+nombreCoh+(bod?' · '+bod:'')+').');
+  });
 })();
 
 /* =========================================================================
-   13c. BASE CUENTAS — Responsables por EPS, zona y bodega
-   Cada dispensación se asigna al Líder y/o Gestor de cuenta que responde por
-   esa EPS. Reglas de asignación:
+   13c. BASE CUENTAS — Líderes por EPS, zona y bodega
+   Cada dispensación se asigna al Líder que responde por esa EPS (los gestores
+   de cuenta quedan fuera del tablero). Reglas de asignación:
    · La EPS se compara SIEMPRE por la EPS consolidada (la sigla “madre”), así
      los regímenes (contributivo / subsidiado / tutelas) quedan en la misma cuenta.
-   · Si el responsable tiene ZONA definida, solo se le asignan las líneas de esa
+   · Si el líder tiene ZONA definida, solo se le asignan las líneas de esa
      zona; si su zona es GENERAL (vacía) atiende todas las zonas de su EPS.
-   · Si el responsable tiene BODEGA definida, solo se le asignan las líneas de
+   · Si el líder tiene BODEGA definida, solo se le asignan las líneas de
      esa bodega.
-   · Cuando varios responsables pueden atender la misma línea, gana el más
-     específico (bodega > zona > EPS completa). Si dos responsables comparten
-     exactamente el mismo alcance (por ejemplo un Líder y su Gestor de cuenta),
+   · Cuando varios líderes pueden atender la misma línea, gana el más
+     específico (bodega > zona > EPS completa). Si dos líderes comparten
+     exactamente el mismo alcance,
      la línea cuenta para AMBOS y en el TOTAL se cuenta una sola vez.
    ========================================================================= */
 const RESPONSABLES_CUENTA = [
@@ -4805,6 +4873,9 @@ const RESPONSABLES_CUENTA = [
   {nombre:'Marinela Amaya',     cargo:'Gestor cuenta',   eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
   {nombre:'Valentina Vargas',   cargo:'Gestor cuenta',   eps:['S.O.S'],                    zonas:[],                 bodega:''}
 ];
+// La pestaña muestra Únicamente a los LÍDERES: cada uno responde por su EPS consolidada.
+// Los Gestores de cuenta quedan fuera del tablero (sus líneas se acumulan en el Líder de la EPS).
+const LIDERES_CUENTA = RESPONSABLES_CUENTA.filter(r=>r.cargo==='Líder');
 // Nombre bonito para mostrar la EPS a cargo (la clave técnica es la EPS consolidada).
 const CUENTA_EPS_LABEL = {
   'FIDEICOMISOS':'FOMAG (Fideicomisos La Previsora)',
@@ -4813,10 +4884,10 @@ const CUENTA_EPS_LABEL = {
   'S.O.S':'S.O.S (Servicio Occidental de Salud)'
 };
 function cuentaEpsLabel(k){ return CUENTA_EPS_LABEL[k] || k; }
-// Índice EPS consolidada -> responsables que la atienden (para asignar rápido).
+// Índice EPS consolidada -> líderes que la atienden (para asignar rápido).
 const _CUENTAS_POR_EPS = (function(){
   const m=new Map();
-  RESPONSABLES_CUENTA.forEach(resp=>{
+  LIDERES_CUENTA.forEach(resp=>{
     resp.eps.forEach(e=>{
       const k=normValue(e);
       if(!m.has(k)) m.set(k, []);
@@ -4838,7 +4909,7 @@ function cuentaBodegaCoincide(resp, r){
   if(!resp.bodega) return true;                            // sin bodega definida: no restringe
   return normValue(r.bodegaDetalle).includes(normValue(resp.bodega));
 }
-// Responsables que se hacen cargo de una línea (puede ser Líder + Gestor a la vez).
+// Líderes que se hacen cargo de una línea (puede ser más de uno si comparten alcance).
 function cuentaResponsablesDeLinea(r){
   const eps = r.epsGrupo || epsAGrupo(r.eps);
   const cand = _CUENTAS_POR_EPS.get(normValue(eps));
@@ -4888,7 +4959,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   const rows=soloActivas(base).filter(enFiltro);
 
   const acc=new Map();
-  RESPONSABLES_CUENTA.forEach(resp=>acc.set(resp.nombre, {
+  LIDERES_CUENTA.forEach(resp=>acc.set(resp.nombre, {
     resp, lineas:0, ent:0, pen:0, und:0, undPend:0,
     docs:new Set(), bodegas:new Set(), epsSet:new Set()
   }));
@@ -4901,7 +4972,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     const entregada = r.lineaPendiente==='NO';
     const pendUnd = Math.abs(r.diferencia||0);
     if(!lista.length){ sinResp++; epsSinResp.add(r.epsGrupo||'N/D'); return; }
-    // El TOTAL cuenta la línea una sola vez, aunque la atiendan Líder y Gestor.
+    // El TOTAL cuenta la línea una sola vez, aunque la atiendan varios líderes.
     lineasAsignadas++;
     if(entregada) entGlobal++; else { penGlobal++; undPendGlobal+=pendUnd; }
     if(r.documento) docsGlobal.add(r.bodegaDetalle+'|'+r.documento);
@@ -4925,7 +4996,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     });
   });
 
-  _cuentasMatriz=RESPONSABLES_CUENTA.map(resp=>{
+  _cuentasMatriz=LIDERES_CUENTA.map(resp=>{
     const g=acc.get(resp.nombre);
     return {
       nombre:resp.nombre, cargo:resp.cargo,
@@ -4963,7 +5034,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     if(!cEff || yaCalculado.has(cEff)) return;
     const snap=snapshotHastaCorte(hist, cEff);
     const m=new Map();
-    RESPONSABLES_CUENTA.forEach(resp=>m.set(resp.nombre, {lineas:0, ent:0, pen:0}));
+    LIDERES_CUENTA.forEach(resp=>m.set(resp.nombre, {lineas:0, ent:0, pen:0}));
     snap.forEach(r=>{
       const entregada = r.lineaPendiente==='NO';
       cuentaResponsablesDeLinea(r).forEach(resp=>{
@@ -4974,7 +5045,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     yaCalculado.set(cEff, m);
   });
   [1,2,3].forEach((c,i)=>{ porCorte[c]=yaCalculado.get(_cuentasCortesAct[i]) || null; });
-  _cuentasEvol=RESPONSABLES_CUENTA.map(resp=>({
+  _cuentasEvol=LIDERES_CUENTA.map(resp=>({
     nombre:resp.nombre, cargo:resp.cargo,
     cortes:[1,2,3].map(c=>{
       const m=porCorte[c];
@@ -4987,7 +5058,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   if(diagEl){
     const avisos=[];
     if(sinResp>0){
-      avisos.push('<b>'+fmtInt(sinResp)+'</b> líneas activas no tienen responsable en la matriz'+
+      avisos.push('<b>'+fmtInt(sinResp)+'</b> líneas activas no tienen líder asignado en la matriz'+
         (_cuentasGlobal.epsSinResp.length ? ' (EPS: '+escHtml(_cuentasGlobal.epsSinResp.join(', '))+')' : '')+'.');
     }
     const vacios=_cuentasMatriz.filter(t=>t.lineas===0).map(t=>t.nombre);
@@ -5000,15 +5071,15 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   const selR=document.getElementById('fCuentaResponsable');
   if(selR){
     const prev=selR.value;
-    const nombres=RESPONSABLES_CUENTA.map(r=>r.nombre).sort((a,b)=>a.localeCompare(b,'es'));
-    selR.innerHTML='<option value="">Todos los responsables</option>'+
+    const nombres=LIDERES_CUENTA.map(r=>r.nombre).sort((a,b)=>a.localeCompare(b,'es'));
+    selR.innerHTML='<option value="">Todos los líderes</option>'+
       nombres.map(n=>'<option value="'+escHtml(n)+'">'+escHtml(n)+'</option>').join('');
     if(prev && nombres.includes(prev)) selR.value=prev;
   }
   const selE=document.getElementById('fCuentaEps');
   if(selE){
     const prev=selE.value;
-    const eps=[...new Set(RESPONSABLES_CUENTA.flatMap(r=>r.eps))].sort((a,b)=>a.localeCompare(b,'es'));
+    const eps=[...new Set(LIDERES_CUENTA.flatMap(r=>r.eps))].sort((a,b)=>a.localeCompare(b,'es'));
     selE.innerHTML='<option value="">Todas las EPS</option>'+
       eps.map(e=>'<option value="'+escHtml(e)+'">'+escHtml(cuentaEpsLabel(e))+'</option>').join('');
     if(prev && eps.includes(prev)) selE.value=prev;
@@ -5017,17 +5088,15 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   pintarBaseCuentas();
 }
 
-// Filtros de la pestaña: responsable, cargo y EPS a cargo.
+// Filtros de la pestaña: líder y EPS a cargo.
 function _cuentasFiltrosActuales(){
   return {
     resp:(document.getElementById('fCuentaResponsable')||{}).value || '',
-    cargo:(document.getElementById('fCuentaCargo')||{}).value || '',
     eps:(document.getElementById('fCuentaEps')||{}).value || ''
   };
 }
 function _cuentasFilaVisible(t, f){
   if(f.resp && t.nombre!==f.resp) return false;
-  if(f.cargo && t.cargo!==f.cargo) return false;
   if(f.eps){
     const keys=t.epsKeys || (t.eps ? [t.eps] : []);
     if(!keys.includes(f.eps)) return false;
@@ -5061,29 +5130,28 @@ function pintarBaseCuentas(){
   const sumP=matriz.reduce((a,b)=>a+b.pen,0);
   const sumUP=matriz.reduce((a,b)=>a+b.undPend,0);
   const critico=matriz.slice().sort((a,b)=>b.pen-a.pen)[0];
-  const hayFiltro=!!(f.resp||f.cargo||f.eps);
+  const hayFiltro=!!(f.resp||f.eps);
   if(statsEl){
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Líneas de la selección</div><div class="value">'+fmtInt(sumL)+'</div>'+
-      '<div class="sub">'+(hayFiltro ? 'responsables filtrados' : 'suma por responsable')+' · '+fmtInt(G.lineasAsignadas)+' líneas sin duplicar</div></div>'+
+      '<div class="sub">'+(hayFiltro ? 'líderes filtrados' : 'suma por líder')+' · '+fmtInt(G.lineasAsignadas)+' líneas sin duplicar</div></div>'+
       '<div class="stat"><div class="label">Entregadas</div><div class="value">'+fmtInt(sumE)+'</div>'+
       '<div class="sub">de '+fmtInt(sumL)+' líneas a cargo</div></div>'+
       '<div class="stat"><div class="label">Pendientes</div><div class="value">'+fmtInt(sumP)+'</div>'+
       '<div class="sub">'+fmtInt(sumUP)+' unidades por entregar</div></div>'+
       '<div class="stat"><div class="label">% Cumplimiento</div><div class="value '+effClass(sumL?sumE/sumL:null)+'">'+fmtPct(sumL?sumE/sumL:null)+'</div>'+
       '<div class="sub">líneas entregadas sobre líneas a cargo</div></div>'+
-      '<div class="stat"><div class="label">Responsable con más pendientes</div><div class="value" style="font-size:18px;">'+escHtml(critico && critico.pen ? critico.nombre : '—')+'</div>'+
+      '<div class="stat"><div class="label">Líder con más pendientes</div><div class="value" style="font-size:18px;">'+escHtml(critico && critico.pen ? critico.nombre : '—')+'</div>'+
       '<div class="sub">'+fmtInt(critico?critico.pen:0)+' líneas pendientes</div></div>'+
-      '<div class="stat"><div class="label">Líneas sin responsable</div><div class="value '+(G.sinResp?'pct-bad':'')+'">'+fmtInt(G.sinResp)+'</div>'+
-      '<div class="sub">EPS que no están en la matriz</div></div>';
+      '<div class="stat"><div class="label">Líneas sin líder</div><div class="value '+(G.sinResp?'pct-bad':'')+'">'+fmtInt(G.sinResp)+'</div>'+
+      '<div class="sub">EPS sin líder asignado en la matriz</div></div>';
   }
 
-  // ---- Matriz de responsables ----
+  // ---- Matriz de líderes ----
   const orden=matriz.slice().sort((a,b)=>
-    a.epsTxt.localeCompare(b.epsTxt,'es') || a.cargo.localeCompare(b.cargo,'es') || a.nombre.localeCompare(b.nombre,'es'));
+    a.epsTxt.localeCompare(b.epsTxt,'es') || a.nombre.localeCompare(b.nombre,'es'));
   let h=orden.map(t=>
     '<tr><td class="txt"><b>'+escHtml(t.nombre)+'</b></td>'+
-    '<td class="txt">'+escHtml(t.cargo)+'</td>'+
     '<td class="txt">'+escHtml(t.epsTxt)+'</td>'+
     '<td class="txt">'+escHtml(t.zonaTxt)+'</td>'+
     '<td class="txt">'+escHtml(t.bodegaTxt)+'</td>'+
@@ -5095,20 +5163,20 @@ function pintarBaseCuentas(){
     '<td>'+fmtInt(t.undPend)+'</td>'+
     '<td>'+fmtInt(t.bodegas)+'</td></tr>'
   ).join('');
-  if(!orden.length) h='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">Ningún responsable cumple los filtros elegidos.</td></tr>';
-  else h+='<tr class="total-row"><td class="txt">TOTAL (líneas sin duplicar entre Líder y Gestor)</td>'+
-    '<td>—</td><td>—</td><td>—</td><td>—</td>'+
+  if(!orden.length) h='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">Ningún líder cumple los filtros elegidos.</td></tr>';
+  else h+='<tr class="total-row"><td class="txt">TOTAL (líneas sin duplicar entre líderes)</td>'+
+    '<td>—</td><td>—</td><td>—</td>'+
     '<td>'+fmtInt(G.dispensas)+'</td><td>'+fmtInt(G.lineasAsignadas)+'</td>'+
     '<td>'+fmtInt(G.ent)+'</td><td>'+fmtInt(G.pen)+'</td>'+
     '<td>'+fmtPct(G.lineasAsignadas?G.ent/G.lineasAsignadas:null)+'</td>'+
     '<td>'+fmtInt(G.undPend)+'</td><td>—</td></tr>';
   tb.innerHTML=h;
 
-  // ---- Detalle por responsable, EPS, zona y bodega ----
+  // ---- Detalle por líder, EPS, zona y bodega ----
   if(tbDet){
     const det=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f));
     let hd=det.slice(0, 600).map(d=>
-      '<tr><td class="txt">'+escHtml(d.nombre)+'</td><td class="txt">'+escHtml(d.cargo)+'</td>'+
+      '<tr><td class="txt">'+escHtml(d.nombre)+'</td>'+
       '<td class="txt">'+escHtml(cuentaEpsLabel(d.eps))+'</td>'+
       '<td class="txt">'+escHtml(d.zona)+'</td><td class="txt">'+escHtml(d.bodega)+'</td>'+
       '<td>'+fmtInt(d.dispensas)+'</td><td>'+fmtInt(d.lineas)+'</td>'+
@@ -5116,8 +5184,8 @@ function pintarBaseCuentas(){
       '<td class="'+effClass(d.cumpl)+'">'+fmtPct(d.cumpl)+'</td>'+
       '<td>'+fmtInt(d.undPend)+'</td></tr>'
     ).join('');
-    if(!det.length) hd='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">No hay detalle para los filtros elegidos.</td></tr>';
-    else if(det.length>600) hd+='<tr class="total-row"><td class="txt" colspan="11">Se muestran las primeras 600 filas de '+fmtInt(det.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
+    if(!det.length) hd='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">No hay detalle para los filtros elegidos.</td></tr>';
+    else if(det.length>600) hd+='<tr class="total-row"><td class="txt" colspan="10">Se muestran las primeras 600 filas de '+fmtInt(det.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
     tbDet.innerHTML=hd;
   }
 
@@ -5129,17 +5197,17 @@ function pintarBaseCuentas(){
       : '<td>'+fmtInt(c.ent)+'</td><td class="'+(c.pen?'pct-bad':'')+'">'+fmtInt(c.pen)+'</td>'+
         '<td class="'+effClass(c.cumpl)+'">'+fmtPct(c.cumpl)+'</td>';
     let hc=evol.map(e=>
-      '<tr><td class="txt"><b>'+escHtml(e.nombre)+'</b></td><td class="txt">'+escHtml(e.cargo)+'</td>'+
+      '<tr><td class="txt"><b>'+escHtml(e.nombre)+'</b></td>'+
       celdas(e.cortes[0])+celdas(e.cortes[1])+celdas(e.cortes[2])+
       '<td>'+(e.cortes[2] && e.cortes[0] ? fmtInt((e.cortes[0].pen||0)-(e.cortes[2].pen||0)) : '—')+'</td></tr>'
     ).join('');
-    if(!evol.length) hc='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay evolución para los filtros elegidos.</td></tr>';
+    if(!evol.length) hc='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">No hay evolución para los filtros elegidos.</td></tr>';
     tbCor.innerHTML=hc;
   }
 }
 
 (function initBaseCuentas(){
-  ['fCuentaResponsable','fCuentaCargo','fCuentaEps'].forEach(id=>{
+  ['fCuentaResponsable','fCuentaEps'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.addEventListener('change', pintarBaseCuentas);
   });
@@ -5150,14 +5218,14 @@ function pintarBaseCuentas(){
     const matriz=_cuentasMatriz.filter(t=>_cuentasFilaVisible(t, f));
     const nombresVis=new Set(matriz.map(t=>t.nombre));
     const hojaMatriz=matriz.map(t=>({
-      'Responsable':t.nombre, 'Cargo':t.cargo, 'EPS a cargo':t.epsTxt, 'Zona':t.zonaTxt,
+      'Lider':t.nombre, 'EPS a cargo':t.epsTxt, 'Zona':t.zonaTxt,
       'Bodega':t.bodegaTxt==='—'?'':t.bodegaTxt,
       'Dispensas':t.dispensas, 'Lineas':t.lineas, 'Entregadas':t.ent, 'Pendientes':t.pen,
       '% Cumplimiento':t.cumpl===null?'':+(t.cumpl*100).toFixed(1),
       'Unidades pendientes':t.undPend, 'Unidades dispensadas':t.und, 'Bodegas':t.bodegas
     }));
     const hojaDet=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f)).map(d=>({
-      'Responsable':d.nombre, 'Cargo':d.cargo, 'EPS Consolidada':cuentaEpsLabel(d.eps),
+      'Lider':d.nombre, 'EPS Consolidada':cuentaEpsLabel(d.eps),
       'Zona':d.zona, 'Bodega':d.bodega,
       'Dispensas':d.dispensas, 'Lineas':d.lineas, 'Entregadas':d.ent, 'Pendientes':d.pen,
       '% Cumplimiento':d.cumpl===null?'':+(d.cumpl*100).toFixed(1),
@@ -5166,13 +5234,13 @@ function pintarBaseCuentas(){
     const val=(c,campo)=> c===null ? '' : c[campo];
     const pct=(c)=> (c===null || c.cumpl===null) ? '' : +(c.cumpl*100).toFixed(1);
     const hojaEvol=_cuentasEvol.filter(e=>nombresVis.has(e.nombre)).map(e=>({
-      'Responsable':e.nombre, 'Cargo':e.cargo,
+      'Lider':e.nombre,
       'Entregadas Corte 1':val(e.cortes[0],'ent'), 'Pendientes Corte 1':val(e.cortes[0],'pen'), '% Cumpl. Corte 1':pct(e.cortes[0]),
       'Entregadas Corte 2':val(e.cortes[1],'ent'), 'Pendientes Corte 2':val(e.cortes[1],'pen'), '% Cumpl. Corte 2':pct(e.cortes[1]),
       'Entregadas Corte 3':val(e.cortes[2],'ent'), 'Pendientes Corte 3':val(e.cortes[2],'pen'), '% Cumpl. Corte 3':pct(e.cortes[2]),
       'Pendientes recuperados (C1 a C3)':(e.cortes[0] && e.cortes[2]) ? (e.cortes[0].pen-e.cortes[2].pen) : ''
     }));
-    if(!hojaMatriz.length){ showToast('No hay responsables para los filtros elegidos.', true); return; }
+    if(!hojaMatriz.length){ showToast('No hay líderes para los filtros elegidos.', true); return; }
     const fecha=new Date().toISOString().slice(0,10);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaMatriz), 'BASE CUENTAS');
