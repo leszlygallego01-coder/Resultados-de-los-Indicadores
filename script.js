@@ -3653,11 +3653,14 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
 });
 
 /* ---- Análisis ABC por Bodega Detalle -----------------------------------------
-   Clasifica cada bodega según su Índice de Eficiencia de líneas (líneas entregadas
-   sobre líneas totales) y la ordena de la mejor a la peor:
-     · A : eficiencia >= 85%
-     · B : eficiencia entre 70% y 84,9%
-     · C : eficiencia < 70%
+   Clasifica cada bodega según su NIVEL DE DISPENSACIÓN (cantidad de dispensas),
+   ordenadas de MAYOR a MENOR. Se usa el criterio ABC clásico (Pareto) sobre el
+   porcentaje ACUMULADO de dispensas del total filtrado:
+     · A : bodegas de mayor volumen que acumulan hasta el 80% de las dispensas
+     · B : las siguientes, hasta acumular el 95%
+     · C : el resto (último 5%), bodegas de menor volumen
+   La bodega que cruza cada umbral se incluye en esa misma categoría, de modo que
+   A siempre tiene al menos una bodega.
    Respeta todos los filtros activos en pantalla (fecha, modalidad, EPS, EPS
    consolidada, diagnóstico, bodega y zona) y excluye las dispensas INACTIVO.     */
 document.getElementById('btnExportarABC').addEventListener('click', ()=>{
@@ -3687,22 +3690,37 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
       rs.filter(r=>r.contrato==='EVENTO' && r.tieneSoportes==='TIENE SOPORTE')
         .map(r=>claveDocBodega(r)).filter(Boolean)
     ).size;
-    const cat = efic>=85 ? 'A' : (efic>=70 ? 'B' : 'C');
-    return { bodega:g.bodega, dispensas, lineas, lineasEnt, efic, soportesEvento, cat };
+    return { bodega:g.bodega, zona:g.zona, dispensas, lineas, lineasEnt, efic, soportesEvento, cat:'C', part:0, acum:0 };
   });
-  // Mejor -> peor. Desempate: más líneas totales primero y luego orden alfabético.
+  // MAYOR -> MENOR nivel de dispensación. Desempate: más líneas y luego alfabético.
   filas.sort((a,b)=>{
-    const d = b.efic - a.efic;
-    if(Math.abs(d) > 1e-9) return d;
+    if(b.dispensas !== a.dispensas) return b.dispensas - a.dispensas;
     if(b.lineas !== a.lineas) return b.lineas - a.lineas;
     return a.bodega.localeCompare(b.bodega,'es');
+  });
+
+  // Clasificación ABC por participación acumulada de dispensas (80% / 95% / resto).
+  const totalDisp = filas.reduce((s,f)=>s+f.dispensas, 0);
+  let acumulado = 0;
+  filas.forEach((f,i)=>{
+    acumulado += f.dispensas;
+    f.part = totalDisp ? (f.dispensas/totalDisp)*100 : 0;
+    f.acum = totalDisp ? (acumulado/totalDisp)*100 : 0;
+    const acumAnterior = totalDisp ? ((acumulado - f.dispensas)/totalDisp)*100 : 0;
+    // La bodega que cruza el umbral queda dentro de la categoría que lo cruza.
+    if(i === 0 || acumAnterior < 80) f.cat = 'A';
+    else if(acumAnterior < 95) f.cat = 'B';
+    else f.cat = 'C';
   });
 
   const datos = filas.map((f,i)=>({
     'Ranking': i+1,
     'Categoría ABC': f.cat,
+    'Zona': f.zona || '',
     'Bodega Detalle': f.bodega,
     'Cantidad de Dispensas': f.dispensas,
+    '% Participación': Math.round(f.part*100)/100,
+    '% Acumulado': Math.round(f.acum*100)/100,
     'Líneas Totales': f.lineas,
     'Líneas Entregadas': f.lineasEnt,
     'Índice de Eficiencia (%)': Math.round(f.efic*100)/100,
@@ -3710,23 +3728,33 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
   }));
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(datos);
-  ws['!cols'] = [{wch:9},{wch:14},{wch:34},{wch:22},{wch:14},{wch:18},{wch:22},{wch:28}];
+  ws['!cols'] = [{wch:9},{wch:14},{wch:16},{wch:34},{wch:22},{wch:16},{wch:14},{wch:14},{wch:18},{wch:22},{wch:28}];
   XLSX.utils.book_append_sheet(wb, ws, 'ANALISIS ABC');
   const nA = filas.filter(f=>f.cat==='A').length;
   const nB = filas.filter(f=>f.cat==='B').length;
   const nC = filas.filter(f=>f.cat==='C').length;
+  const dispDe = c => filas.filter(f=>f.cat===c).reduce((s,f)=>s+f.dispensas, 0);
+  const pct = n => totalDisp ? Math.round((n/totalDisp)*10000)/100 : 0;
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
-    'Criterio': 'A: eficiencia >= 85% | B: 70% a 84,9% | C: < 70%',
+    'Criterio': 'ABC por nivel de dispensación (cantidad de dispensas), de mayor a menor',
+    'Regla': 'A: hasta 80% acumulado | B: hasta 95% acumulado | C: resto',
+    'Total de dispensas': totalDisp,
     'Bodegas categoría A': nA,
+    'Dispensas categoría A': dispDe('A'),
+    '% dispensas A': pct(dispDe('A')),
     'Bodegas categoría B': nB,
+    'Dispensas categoría B': dispDe('B'),
+    '% dispensas B': pct(dispDe('B')),
     'Bodegas categoría C': nC,
+    'Dispensas categoría C': dispDe('C'),
+    '% dispensas C': pct(dispDe('C')),
     'Bodegas evaluadas': filas.length,
     'Filtro de bodega': bodegaSearch || '(todas)',
     'Zona': zona || '(todas)',
     'Alcance': 'Solo dispensas activas (se excluye INACTIVO), última versión de cada línea'
   }]), 'CRITERIO');
   XLSX.writeFile(wb, `Analisis_ABC_Bodegas_${new Date().toISOString().slice(0,10)}.xlsx`);
-  showToast('Análisis ABC descargado: '+fmtInt(filas.length)+' bodegas (A: '+nA+' · B: '+nB+' · C: '+nC+').');
+  showToast('Análisis ABC por nivel de dispensación descargado: '+fmtInt(filas.length)+' bodegas · '+fmtInt(totalDisp)+' dispensas (A: '+nA+' · B: '+nB+' · C: '+nC+').');
  }catch(err){
   // Cualquier fallo se informa en pantalla para no dejar el botón "muerto".
   console.error('Error al generar el Análisis ABC:', err);
