@@ -3652,6 +3652,76 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
   showToast('Excel exportado.');
 });
 
+/* ---- Análisis ABC por Bodega Detalle -----------------------------------------
+   Clasifica cada bodega según su Índice de Eficiencia de líneas (líneas entregadas
+   sobre líneas totales) y la ordena de la mejor a la peor:
+     · A : eficiencia >= 85%
+     · B : eficiencia entre 70% y 84,9%
+     · C : eficiencia < 70%
+   Respeta todos los filtros activos en pantalla (fecha, modalidad, EPS, EPS
+   consolidada, diagnóstico, bodega y zona) y excluye las dispensas INACTIVO.     */
+document.getElementById('btnExportarABC').addEventListener('click', ()=>{
+  if(!filteredRowsCache.length){ showToast('No hay indicadores calculados para el Análisis ABC.', true); return; }
+  const bodegaSearch = getBodegaFiltro();
+  const zona = document.getElementById('fZona').value;
+  // Estado ACTUAL: solo la última versión de cada línea y solo dispensas activas.
+  const vigentes = soloActivas(filteredRowsCache.filter(r=>r.versionVigente!==false));
+  const grupos = groupByBodega(vigentes, bodegaSearch, zona);
+  if(!grupos.length){ showToast('No hay bodegas que cumplan los filtros actuales.', true); return; }
+
+  const filas = grupos.map(g=>{
+    const rs = g.rows;
+    const dispensas = new Set(rs.map(r=>claveDocBodega(r)).filter(Boolean)).size;
+    const lineas = rs.length;
+    const lineasEnt = rs.filter(r=>lineaEsEntregada(r)).length;
+    const efic = lineas ? (lineasEnt/lineas)*100 : 0;
+    // Soportes de dispensas EVENTO: dispensas de contrato EVENTO que ya tienen soporte.
+    const soportesEvento = new Set(
+      rs.filter(r=>r.contrato==='EVENTO' && r.tieneSoportes==='TIENE SOPORTE')
+        .map(r=>claveDocBodega(r)).filter(Boolean)
+    ).size;
+    const cat = efic>=85 ? 'A' : (efic>=70 ? 'B' : 'C');
+    return { bodega:g.bodega, dispensas, lineas, lineasEnt, efic, soportesEvento, cat };
+  });
+  // Mejor -> peor. Desempate: más líneas totales primero y luego orden alfabético.
+  filas.sort((a,b)=>{
+    const d = b.efic - a.efic;
+    if(Math.abs(d) > 1e-9) return d;
+    if(b.lineas !== a.lineas) return b.lineas - a.lineas;
+    return a.bodega.localeCompare(b.bodega,'es');
+  });
+
+  const datos = filas.map((f,i)=>({
+    'Ranking': i+1,
+    'Categoría ABC': f.cat,
+    'Bodega Detalle': f.bodega,
+    'Cantidad de Dispensas': f.dispensas,
+    'Líneas Totales': f.lineas,
+    'Líneas Entregadas': f.lineasEnt,
+    'Índice de Eficiencia (%)': Math.round(f.efic*100)/100,
+    'Soportes de Dispensas Evento': f.soportesEvento
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos);
+  ws['!cols'] = [{wch:9},{wch:14},{wch:34},{wch:22},{wch:14},{wch:18},{wch:22},{wch:28}];
+  XLSX.utils.book_append_sheet(wb, ws, 'ANALISIS ABC');
+  const nA = filas.filter(f=>f.cat==='A').length;
+  const nB = filas.filter(f=>f.cat==='B').length;
+  const nC = filas.filter(f=>f.cat==='C').length;
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+    'Criterio': 'A: eficiencia >= 85% | B: 70% a 84,9% | C: < 70%',
+    'Bodegas categoría A': nA,
+    'Bodegas categoría B': nB,
+    'Bodegas categoría C': nC,
+    'Bodegas evaluadas': filas.length,
+    'Filtro de bodega': bodegaSearch || '(todas)',
+    'Zona': zona || '(todas)',
+    'Alcance': 'Solo dispensas activas (se excluye INACTIVO), última versión de cada línea'
+  }]), 'CRITERIO');
+  XLSX.writeFile(wb, `Analisis_ABC_Bodegas_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('Análisis ABC descargado: '+fmtInt(filas.length)+' bodegas (A: '+nA+' · B: '+nB+' · C: '+nC+').');
+});
+
 document.getElementById('btnDescargarParetoExistencias').addEventListener('click', ()=>{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
   // Incluye PARETO y NO PARETO, respetando todos los filtros activos en pantalla
