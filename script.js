@@ -1550,15 +1550,21 @@ function renderSegMeses(rows, corteGlobal){
   const docsMap = new Map();            // dispensa (documento+bodega) -> {mesOrigen, mesEntrega, completo}
   porLinea.forEach(vs => {
     vs.sort((a,b) => esVersionPosterior(a,b) ? 1 : -1);
-    // Mes de origen = mes en que se dispensó la línea (no el mes del cargue).
-    const mesOrigen = mesDeDispensacion(vs[0]) || SIN_FECHA;
+    // Mes de origen = mes de la FECHA DE DISPENSACIÓN de la línea (eje temporal único).
+    const rBase = vs[0];
+    const mesOrigen = mesDeDispensacion(rBase) || SIN_FECHA;
+    const pendienteAlInicio = rBase.lineaPendiente==='SI';
     let mesEntrega = null;
     for(let i=0;i<vs.length;i++){
-      if(vs[i].lineaPendiente==='NO'){
-        mesEntrega = mesDeDispensacion(vs[i]) || mesOrigen;
-        if(mesEntrega < mesOrigen) mesEntrega = mesOrigen;
-        break;
-      }
+      if(vs[i].lineaPendiente!=='NO') continue;
+      /* Solo se reasigna a otro mes cuando el cambio pendiente → entregado está
+         acreditado con la MISMA regla del resto del visor: fecha de dispensación
+         posterior o, si es la misma fecha, un cargue posterior. Si la línea nunca
+         estuvo pendiente, la entrega pertenece a su propio mes de dispensación. */
+      const acreditado = pendienteAlInicio && cambioAcreditado(rBase, vs[i]);
+      mesEntrega = acreditado ? (mesDeDispensacion(vs[i]) || mesOrigen) : mesOrigen;
+      if(mesEntrega < mesOrigen) mesEntrega = mesOrigen;
+      break;
     }
     lineaInfo.push({ mesOrigen: mesOrigen, mesEntrega: mesEntrega });
     // Una dispensa se identifica por Documento + Bodega: el mismo documento atendido
@@ -3337,10 +3343,12 @@ if(document.readyState==='loading') document.addEventListener('DOMContentLoaded'
 function renderIndicadorSoporteEvento(rowsEventoRaw, bodegaSearch, zona){
   // Solo dispensas con Estado Activo (se excluyen las INACTIVO).
   const rowsEvento = soloActivas(rowsEventoRaw);
-  // BASE UNICA del indicador: dispensas de evento ENTREGADAS, ya filtradas por el
-  // buscador de bodega y por zona. Todo (tarjetas, tabla, dona y descargas) se calcula
-  // sobre esta misma base para que las cifras siempre coincidan entre si.
-  const rowsEntregadas = rowsEvento.filter(r=>r.pendienteDispensa==='NO');
+  /* BASE UNICA del indicador: dispensas de EVENTO con TODAS sus lineas entregadas,
+     identificadas por Documento + Bodega y evaluadas sobre la ultima version cargada
+     de cada linea. Es la MISMA base del Reporte Comparativo Periodico (pestana de
+     soporte), por lo que las cifras de las tres zonas del visor coinciden.
+     Todo (tarjetas, tabla, dona y descargas) se calcula sobre esta base. */
+  const rowsEntregadas = filasSoporteEvento(rowsEvento);
   const groups = groupByBodega(rowsEntregadas, bodegaSearch, zona);
   const rowsBase = groups.reduce((acc,g)=>acc.concat(g.rows), []);
   // Corte de trazabilidad: el corte global de los filtros, ajustado al ultimo corte con
@@ -3352,7 +3360,7 @@ function renderIndicadorSoporteEvento(rowsEventoRaw, bodegaSearch, zona){
   // Estado por dispensa (bodega + documento) acumulado hasta el corte.
   const estadoDisp = new Map();
   rowsBase.forEach(r=>{
-    const k = r.dispensaYPunto;
+    const k = claveDocBodega(r);
     if(!k) return;
     const con = tieneSoporteHastaCorte(r, corteFinalSop);
     if(!estadoDisp.has(k)) estadoDisp.set(k, con);
@@ -3375,7 +3383,7 @@ function renderIndicadorSoporteEvento(rowsEventoRaw, bodegaSearch, zona){
   const table=groups.map(g=>{
     const estado=new Map();
     g.rows.forEach(r=>{
-      const k=r.dispensaYPunto;
+      const k=claveDocBodega(r);
       if(!k) return;
       const con=tieneSoporteHastaCorte(r, corteFinalSop);
       if(!estado.has(k)) estado.set(k, con);
@@ -3436,7 +3444,7 @@ function construirDetalleSoporteEvento(){
   const ctx=lastSoporteCtx;
   const porDisp=new Map();
   ctx.rows.forEach(r=>{
-    const k=r.dispensaYPunto;
+    const k=claveDocBodega(r);
     if(!k) return;
     const prev=porDisp.get(k);
     // Se conserva la version mas reciente de la dispensa (ultimo cargue) para los datos de
@@ -3457,8 +3465,8 @@ function construirDetalleSoporteEvento(){
       'Estado al': ctx.etqCorte,
       'Corte global filtrado': ctx.corteGlobal,
       'Corte en que llego el soporte': con ? (corteRec===null ? 'Linea base' : 'Corte '+corteRec) : '',
-      'Fecha de soporte': con ? diaSoporte(r) : '',
-      'Fecha del ultimo cargue': diaCargue(r)
+      // Eje temporal unico: todo se fecha por la FECHA DE DISPENSACION.
+      'Fecha de dispensacion': diaDispensacion(r)
     });
   });
   det.sort((a,b)=> String(a['Bodega']).localeCompare(String(b['Bodega']),'es')
@@ -3516,7 +3524,7 @@ function hayContextoSoporte(){
       'Zona':d['Zona'],'Bodega':d['Bodega'],'Documento':d['Documento'],'Contrato':d['Contrato'],
       'Estado dispensa':d['Estado dispensa'],'Estado soporte':d['Estado soporte'],
       'Estado al':d['Estado al'],'Corte global filtrado':d['Corte global filtrado'],
-      'Fecha del ultimo cargue':d['Fecha del ultimo cargue']
+      'Fecha de dispensacion':d['Fecha de dispensacion']
     }));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), 'DISPENSAS SIN SOPORTE');
@@ -4928,13 +4936,25 @@ function cohortesTopFiltrado(coh, bod){
    ========================================================================= */
 const RESPONSABLES_CUENTA = [
   {nombre:'Sebastian Morales',  cargo:'Líder',           eps:['ASMET SALUD','CRUZ VERDE'], zonas:[],                 bodega:''},
+  {nombre:'Astrid Salinas',     cargo:'Líder',           eps:['ASMET SALUD'],              zonas:['CAUCA'],          bodega:''},
+  {nombre:'Kelly Cardenas',     cargo:'Líder',           eps:['ASMET SALUD'],              zonas:['VALLE','TOLIMA'], bodega:''},
   {nombre:'Neysa Correa',       cargo:'Líder',           eps:['COOSALUD'],                 zonas:[],                 bodega:''},
+  {nombre:'Valentina Franco',   cargo:'Gestor cuenta',   eps:['COOSALUD'],                 zonas:[],                 bodega:''},
+  {nombre:'Angela Paredes',     cargo:'Gestor cuenta',   eps:['CRUZ VERDE'],               zonas:[],                 bodega:''},
   {nombre:'Paola Ascuntar',     cargo:'Líder',           eps:['FAMISANAR'],                zonas:[],                 bodega:''},
+  {nombre:'Karol Martinez',     cargo:'Gestor cuenta',   eps:['FAMISANAR'],                zonas:[],                 bodega:''},
   {nombre:'Juan Carlos Mendez', cargo:'Líder',           eps:['FIDEICOMISOS','UNION TEMPORAL SALUD INTEGRAL MAISFEN'], zonas:[], bodega:''},
+  {nombre:'Daniela Carvajal',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
+  {nombre:'Sara Cruz',          cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
+  {nombre:'Yenifer Pulgarin',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
+  {nombre:'Edwin Salcedo',      cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
   {nombre:'Lida Victoria',      cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
+  {nombre:'Julian Ramirez',     cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
   {nombre:'Noemy Durasovic',    cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:'M243'},
+  {nombre:'Nataly Hernandez',   cargo:'Gestor cuenta',   eps:['SANITAS'],                  zonas:[],                 bodega:''},
   {nombre:'Laura Gonzalez',     cargo:'Líder',           eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
-  {nombre:'Valentina Vargas',   cargo:'Líder',           eps:['S.O.S'],                    zonas:[],                 bodega:''}
+  {nombre:'Marinela Amaya',     cargo:'Gestor cuenta',   eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
+  {nombre:'Valentina Vargas',   cargo:'Gestor cuenta',   eps:['S.O.S'],                    zonas:[],                 bodega:''}
 ];
 // La pestaña muestra Únicamente a los LÍDERES: cada uno responde por su EPS consolidada.
 // Los Gestores de cuenta quedan fuera del tablero (sus líneas se acumulan en el Líder de la EPS).
@@ -5365,20 +5385,21 @@ function claveDocBodega(r){
   if(!r || !r.documento) return '';
   return r.bodegaDetalle+'|'+r.documento;
 }
-// ¿La dispensa/línea ya tenía soporte al cierre del corte indicado?
-// El soporte cuenta EN SU PROPIA FECHA: si se conoce la fecha del soporte, ese es el
-// corte que lo acredita; si no se conoce, se toma el corte de la fecha de dispensación.
+/* ¿La dispensa/línea ya tenía soporte al cierre del corte indicado?
+   EJE TEMPORAL ÚNICO: el soporte se acredita en el corte de la FECHA DE DISPENSACIÓN
+   de la fila que llegó con soporte. No se usa la fecha del archivo ni la fecha propia
+   del soporte, para que entregas y soportes se midan siempre en la misma línea de
+   tiempo. Una fila sin fecha de dispensación conserva su soporte en cualquier corte. */
 function tieneSoporteHastaCorte(r, corteMax){
   if(r.tieneSoportes!=='TIENE SOPORTE') return false;
-  const p = r.fechaSoporte ? getPeriodoDeCarga(r.fechaSoporte) : corteDeDispensacion(r);
-  return p===null ? true : p<=corteMax;
+  const p = corteDeDispensacion(r);
+  return p===0 ? true : p<=corteMax;
 }
-// Corte en el que la línea recuperó el soporte (null si nunca estuvo en 0).
+// Corte (por fecha de dispensación) en el que la fila aporta el soporte.
 function corteRecuperacionSoporte(r){
   if(r.tieneSoportes!=='TIENE SOPORTE') return null;
-  const p = r.fechaSoporte ? getPeriodoDeCarga(r.fechaSoporte) : corteDeDispensacion(r);
-  if(p===null || p<=0) return null;
-  return p;
+  const p = corteDeDispensacion(r);
+  return p>0 ? p : null;
 }
 // Identidad de una línea a través de los distintos cargues del Reporte de Dispensación.
 // Incluye el número de repetición dentro del cargue: si un documento trae dos filas del
@@ -5398,6 +5419,15 @@ function esVersionPosterior(a, b){
 }
 // Día (AAAA-MM-DD) del cargue en que llegó esta versión de la línea (para mostrar).
 function diaCargue(r){ return String((r && r.fechaCargue) || '').slice(0,10); }
+// Marca completa de la FECHA DE DISPENSACIÓN: es el eje temporal de todo el visor.
+function marcaDispensacion(r){
+  const f = r && r.fecha;
+  if(!f) return '';
+  const d = f instanceof Date ? f : new Date(f);
+  return isNaN(d) ? '' : d.toISOString();
+}
+// Día (AAAA-MM-DD) de dispensación de la fila.
+function diaDispensacion(r){ return marcaDispensacion(r).slice(0,10); }
 // Día en que llegó el soporte de la dispensa (o el del cargue de esa versión).
 function diaSoporte(r){ return String((r && (r.fechaSoporte || r.fechaCargue)) || '').slice(0,10); }
 // Marca completa (fecha + hora) del cargue: sirve para saber si dos registros vienen
@@ -5405,16 +5435,22 @@ function diaSoporte(r){ return String((r && (r.fechaSoporte || r.fechaCargue)) |
 function marcaCargue(r){ return String((r && r.fechaCargue) || ''); }
 // Marca completa del soporte (o del cargue en que llegó esa versión).
 function marcaSoporte(r){ return String((r && (r.fechaSoporte || r.fechaCargue)) || ''); }
-// REGLA para acreditar una entrega:
-// la entrega debe llegar en un cargue POSTERIOR al del pendiente. Si el pendiente y la
-// entrega vienen del mismo cargue es la información de ese mismo momento y no hay
-// entrega real que reconocer; si el cargue es posterior (aunque sea el mismo día, en
-// otra hora) sí se trata de una recuperación.
-function entregaEnCarguePosterior(rPend, rEnt){
-  if(!rPend || !rEnt) return false;
-  const cEnt=marcaCargue(rEnt), cPend=marcaCargue(rPend);
-  if(cEnt && cPend) return cEnt>cPend;    // mismo cargue exacto => no se acredita
-  return esVersionPosterior(rEnt, rPend); // sin fecha de cargue: basta que sea versión posterior
+/* REGLA ÚNICA para acreditar un cambio de estado (pendiente → entregado y
+   sin soporte → con soporte):
+   1) El hecho que cumple debe ocurrir en una FECHA DE DISPENSACIÓN POSTERIOR a la del
+      registro que estaba pendiente / sin soporte. Esa fecha es el único eje temporal:
+      define el corte y el mes en que se acredita la recuperación.
+   2) Si ambas fechas de dispensación son iguales, el cumplimiento debe llegar al menos
+      en un CARGUE POSTERIOR: así se descarta la información del mismo momento, que no
+      representa un cambio real de estado.
+   3) Nunca se acredita hacia atrás: un hecho con fecha anterior no es recuperación.   */
+function cambioAcreditado(rAnt, rNue){
+  if(!rAnt || !rNue) return false;
+  const fAnt=marcaDispensacion(rAnt), fNue=marcaDispensacion(rNue);
+  if(fAnt && fNue && fNue!==fAnt) return fNue>fAnt;   // eje único: fecha de dispensación
+  const cAnt=marcaCargue(rAnt), cNue=marcaCargue(rNue);
+  if(cAnt && cNue) return cNue>cAnt;                  // misma fecha => exige cargue posterior
+  return esVersionPosterior(rNue, rAnt);
 }
 // Cortes que REALMENTE tienen dispensaciones, según la FECHA DE DISPENSACIÓN.
 // Un corte sin dispensaciones no debe mostrar cifras (queda en cero / “—”): así las
@@ -5611,7 +5647,7 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
     for(let c=1;c<=corteFinal;c++){
       if(estados[c].lp.get(k)!=='NO') continue;
       const rc=estados[c].byKey.get(k);
-      if(rc && entregaEnCarguePosterior(rb, rc)) return c;
+      if(rc && cambioAcreditado(rb, rc)) return c;
     }
     return null;
   };
@@ -5619,7 +5655,12 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
   if(tipo==='soporte'){
     // Solo cuentan los soportes cargados para dispensas de evento YA entregadas por completo.
     const eventoOk=clavesEventoEntregadas(filtered);
-    const sinSopBase=new Map(), conSopFin=new Map(), info=new Map(), marcaSinSop=new Map(), marcaConSop=new Map();
+    /* Se comparan dos filas de la MISMA dispensa (documento + bodega): la más antigua sin
+       soporte y la que ya trae soporte. La recuperación se acredita con la misma regla de
+       las entregas (`cambioAcreditado`): fecha de dispensación posterior o, si es la misma
+       fecha, cargue posterior. El corte de la recuperación es el de la fecha de
+       dispensación de la fila con soporte. */
+    const sinSopBase=new Map(), conSopFin=new Map(), info=new Map(), filaSinSop=new Map(), filaConSop=new Map();
     filtered.forEach(r=>{
       if(r.contrato!=='EVENTO' || !r.documento) return;
       const kd=claveDocBodega(r);                                  // dispensa = documento + bodega
@@ -5628,25 +5669,26 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
       if(tieneSoporteHastaCorte(r, 0)) sinSopBase.set(kd, false);
       else {
         if(!sinSopBase.has(kd)) sinSopBase.set(kd, true);
-        const d=marcaCargue(r), prevD=marcaSinSop.get(kd);
-        if(prevD===undefined || (d && (!prevD || d<prevD))) marcaSinSop.set(kd, d);
+        const prev=filaSinSop.get(kd);
+        // se guarda la fila sin soporte más antigua según el eje de dispensación
+        if(!prev || cambioAcreditado(r, prev)) filaSinSop.set(kd, r);
       }
       if(tieneSoporteHastaCorte(r, corteFinal)){
         const c=corteRecuperacionSoporte(r);
         const cc=(c && c>=1 && c<=corteFinal) ? c : 0;
         const prev=conSopFin.get(kd);
-        if(prev===undefined || cc<prev){ conSopFin.set(kd, cc); marcaConSop.set(kd, marcaSoporte(r)); }
+        if(prev===undefined || cc<prev){ conSopFin.set(kd, cc); filaConSop.set(kd, r); }
       }
     });
     const out=[];
     conSopFin.forEach((corteRec, doc)=>{
       if(sinSopBase.get(doc)!==true) return;      // ya tenía soporte desde el inicio
       if(!corteRec) return;                      // sin corte de recuperación identificable
-      const mSop=marcaConSop.get(doc)||'', mSin=marcaSinSop.get(doc)||'';
-      // Mismo cargue (o anterior) => el soporte no llegó después: no es recuperación.
-      if(mSop && mSin && !(mSop>mSin)) return;
+      const rCon=filaConSop.get(doc), rSin=filaSinSop.get(doc);
+      // El soporte debe llegar después en el eje de dispensación (o en un cargue posterior).
+      if(!cambioAcreditado(rSin, rCon)) return;
       const r=info.get(doc);
-      if(r) out.push({bodega:r.bodegaDetalle, corteRec, r, dSop:mSop.slice(0,10), dSin:mSin.slice(0,10)});
+      if(r) out.push({bodega:r.bodegaDetalle, corteRec, r, dSop:diaDispensacion(rCon), dSin:diaDispensacion(rSin)});
     });
     return out;
   }
@@ -5671,11 +5713,15 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
     const kd=claveDocBodega(r);
     if(!porDoc.has(kd)) porDoc.set(kd, {
       documento:r.documento, zona:r.zona, bodega:r.bodegaDetalle, eps:r.eps, epsGrupo:r.epsGrupo,
-      contrato:r.contrato, fecha:r.fecha, lineas:0, unidades:0, soporte:r.tieneSoportes, cargue:r.fechaCargue||''
+      contrato:r.contrato, fecha:r.fecha, lineas:0, unidades:0, soporte:r.tieneSoportes,
+      cargue:r.fechaCargue||'', dispEntrega:diaDispensacion(r)
     });
     const g=porDoc.get(kd);
     g.lineas++; g.unidades+=(Number(r.unidades)||0);
     if(String(r.fechaCargue||'')>String(g.cargue)) g.cargue=r.fechaCargue||'';
+    // Eje único: se guarda la fecha de dispensación más reciente de la dispensa.
+    const dd=diaDispensacion(r);
+    if(dd>String(g.dispEntrega||'')) g.dispEntrega=dd;
   });
   const pendBase=new Map(), recLineas=new Map();
   base.snap.forEach(r=>{
@@ -6297,7 +6343,9 @@ document.getElementById('btnPeriodicoEventoSinSop').addEventListener('click', ()
       'EPS':r.eps, 'EPS Consolidada':r.epsGrupo, 'Modalidad':r.contrato,
       'Fecha Dispensación':periodicoFechaTxt(r.fecha),
       'Entrega de la dispensa':'Todas las líneas entregadas',
-      'Soportes':r.tieneSoportes, 'Fecha del cargue':r.fechaCargue||'',
+      'Soportes':r.tieneSoportes,
+      // Eje temporal único: la dispensa se fecha por su FECHA DE DISPENSACIÓN.
+      'Fecha Dispensación del último registro':diaDispensacion(r),
       'Estado al':etqCorte
     }));
   if(!filas.length){ showToast('No hay dispensas de evento entregadas y sin soporte con los filtros y el corte actuales.', true); return; }
@@ -6342,9 +6390,9 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
         'Cantidad pendiente inicial':rb?Math.abs(rb.diferencia||0):'',
         'Unidades Entregadas':r.unidades, 'Diferencia':r.diferencia,
         'Recuperada en':etqRec(corteRec),
-        'Fecha del pendiente':diaCargue(rb),
-        'Fecha de la entrega':diaCargue(r),
-        'Fecha del cargue que la entregó':r.fechaCargue||'',
+        // Eje temporal único: ambas fechas son FECHAS DE DISPENSACIÓN.
+        'Fecha Dispensación del pendiente':diaDispensacion(rb),
+        'Fecha Dispensación de la entrega':diaDispensacion(r),
         'Soportes':r.tieneSoportes, 'Estado al':etqCorte
       }));
   } else if(tipo==='soporte'){
@@ -6360,10 +6408,11 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
         'EPS':r.eps, 'EPS Consolidada':r.epsGrupo, 'Modalidad':r.contrato,
         'Fecha Dispensación':periodicoFechaTxt(r.fecha),
         'Soportes':r.tieneSoportes,
-        'Fecha del soporte':periodicoFechaTxt(r.fechaSoporte),
-        'Soporte cargado en':etqRec(corteRec),
-        'Fecha sin soporte':dSin, 'Fecha con soporte':dSop,
-        'Fecha del cargue':r.fechaCargue||'', 'Estado al':etqCorte
+        'Soporte acreditado en':etqRec(corteRec),
+        // Eje temporal único: ambas fechas son FECHAS DE DISPENSACIÓN.
+        'Fecha Dispensación sin soporte':dSin,
+        'Fecha Dispensación con soporte':dSop,
+        'Estado al':etqCorte
       }));
   } else {
     hoja='Dispensas recuperadas'; archivo='Periodico_Dispensas_Entregadas_Recuperadas';
@@ -6381,7 +6430,8 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
         'Líneas entregadas en fecha posterior':recLineas||0,
         'Unidades entregadas':g.unidades,
         'Entregada en':etqRec(corteRec),
-        'Fecha del cargue que la entregó':g.cargue,
+        // Eje temporal único: fecha de dispensación del registro que completó la entrega.
+        'Fecha Dispensación de la entrega':g.dispEntrega||'',
         'Soportes':g.soporte, 'Estado al':etqCorte
       }));
   }
