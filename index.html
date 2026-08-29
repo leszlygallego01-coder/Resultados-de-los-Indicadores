@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829g">
+<link rel="stylesheet" href="styles.css?v=20260829h">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -581,7 +581,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
             <div style="flex:1;min-width:220px;">
               <h3>📄 Detalle por factura y código</h3>
-              <p class="seg-desc">Cada fila es un <b>código dentro de una factura</b>. La <b>Cantidad Pendiente</b> se toma del <b>Reporte de Dispensación</b> (líneas con Diferencia negativa) cruzando la <b>Bodega Detalle</b> equivalente al punto de venta de la factura con el <b>Código de Homologación</b> del código facturado; el <b>% Subsanar</b> es la proporción de lo facturado que aún está pendiente. Esta tabla respeta los <b>filtros generales</b> de la pantalla (fechas, EPS, bodega/punto) además del filtro de punto de venta de arriba.</p>
+              <p class="seg-desc">Cada fila es un <b>código dentro de una factura</b>. La <b>Cantidad Pendiente</b> se toma del <b>Reporte de Dispensación</b> (líneas con Diferencia negativa) cruzando la <b>Bodega Detalle</b> equivalente al punto de venta de la factura con el <b>Código de Homologación</b> del código facturado; el <b>% Subsanar</b> se calcula como <b>Cantidad / Cantidad Pendiente</b> y se topa en <b>100%</b> cuando el resultado lo supera. Esta tabla respeta los <b>filtros generales</b> de la pantalla (fechas, EPS, bodega/punto) además del filtro de punto de venta de arriba.</p>
             </div>
             <div style="margin-left:auto;align-self:center;display:flex;gap:8px;flex-wrap:wrap;">
               <button class="btn btn-export" id="btnDescargarPuntosSinBodega" style="display:none;">⬇ Descargar códigos sin bodega equivalente</button>
@@ -593,7 +593,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <table class="data" id="tblFacturasDetalle">
               <thead>
                 <tr>
-                  <th>Factura</th><th>Código</th><th>Cód. Homologación</th><th>Cantidad</th><th>Punto de Venta</th><th>Cantidad Pendiente</th><th>% Subsanar</th>
+                  <th>Factura</th><th>Código</th><th>Cód. Homologación</th><th>Descripción DCI</th><th>Cantidad</th><th>Punto de Venta</th><th>Cantidad Pendiente</th><th>% Subsanar</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -940,6 +940,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829g"></script>
+<script src="script.js?v=20260829h"></script>
 </body>
 </html>
