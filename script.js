@@ -2021,6 +2021,9 @@ function renderAllTablesFromCache(){
   if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
   // Base cuentas: la matriz usa el estado actual y la evolución por cortes el historial.
   if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
+  // El detalle por factura usa la cantidad pendiente del reporte, así que se
+  // repinta cada vez que cambian los filtros generales.
+  if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
 }
 
 /* =========================================================================
@@ -2433,6 +2436,7 @@ function renderInfoPorFactura(){
     }
     tb.innerHTML='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">No hay facturas cargadas.</td></tr>';
     _facturasPuntoCache=[];
+    renderFacturasDetalle([]);
     return;
   }
 
@@ -2492,6 +2496,7 @@ function renderInfoPorFactura(){
 
   if(!lista.length){
     tb.innerHTML='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">No hay facturas para los filtros seleccionados.</td></tr>';
+    renderFacturasDetalle([]);
     return;
   }
 
@@ -2510,11 +2515,198 @@ function renderInfoPorFactura(){
      '<td>'+fmtInt(sumC)+'</td><td>'+fmtInt(sumH)+'</td><td>'+fmtInt(sumN)+'</td>'+
      '<td>'+fmtPct(sumC?sumH/sumC:null)+'</td></tr>';
   tb.innerHTML=h;
+  renderFacturasDetalle(filas);
+}
+
+/* =========================================================================
+   Detalle por factura y código con su Cantidad Pendiente
+   La cantidad pendiente sale del Reporte de Dispensación (Diferencia < 0) y
+   respeta los filtros generales de la pantalla (fechas, EPS, contrato, CIE10,
+   bodega/punto y zona), igual que los demás indicadores.
+   ========================================================================= */
+let _facturasDetalleCache=[];
+
+// Porcentaje por subsanar: pendiente sobre lo facturado. Si la cantidad facturada
+// es 0 o no viene informada, se muestra 0% (no hay base para calcular).
+function fmtPctSubsanar(pendiente, cantidad){
+  const c=toNumber(cantidad);
+  if(!c) return '0%';
+  return ((toNumber(pendiente)/c)*100).toFixed(1)+'%';
+}
+
+/* Unidades pendientes del Reporte de Dispensación agrupadas por código y por
+   código + punto (bodega detalle). Solo la última versión vigente de cada línea,
+   dispensas activas y con los filtros generales ya aplicados. */
+function getPendientesReporte(){
+  const res={ porCodigoPunto:new Map(), porCodigo:new Map(), puntos:new Set(), hayReporte:false };
+  if(!filteredRowsCache || !filteredRowsCache.length) return res;
+  res.hayReporte=true;
+  const bodegaSearch=getBodegaFiltro();
+  const zonaEl=document.getElementById('fZona');
+  const zona=zonaEl? zonaEl.value : '';
+  const idxUltima=new Set(snapshotUltimaVersion(filteredRowsCache).map(r=>r.idx));
+  filteredRowsCache.forEach(r=>{
+    if(r.versionVigente===false) return;
+    if(!idxUltima.has(r.idx)) return;
+    if(!esEstadoActivo(r.estadoDispensa)) return;
+    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return;
+    if(zona && r.zona!==zona) return;
+    if(!lineaEsPendiente(r)) return;
+    const und=Math.abs(toNumber(r.diferencia));
+    if(!und) return;
+    const cod=normValue(r.codigoArticulo);
+    const pto=normValue(r.bodegaDetalle);
+    if(pto) res.puntos.add(pto);
+    res.porCodigo.set(cod, (res.porCodigo.get(cod)||0)+und);
+    const k=cod+'||'+pto;
+    res.porCodigoPunto.set(k, (res.porCodigoPunto.get(k)||0)+und);
+  });
+  return res;
+}
+
+function renderFacturasDetalle(filas){
+  const tb=document.querySelector('#tblFacturasDetalle tbody');
+  if(!tb) return;
+  const diagEl=document.getElementById('facturasDetalleDiag');
+  const vaciar=(msg)=>{
+    tb.innerHTML='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">'+escHtml(msg)+'</td></tr>';
+    _facturasDetalleCache=[];
+  };
+  if(!filas || !filas.length){ if(diagEl){diagEl.style.display='none';diagEl.innerHTML='';} vaciar('No hay facturas para los filtros seleccionados.'); return; }
+
+  /* Filtros generales de la pantalla aplicados al detalle: rango de fechas / mes
+     sobre la fecha de la factura y bodega-punto sobre el punto de venta. */
+  const desdeStr=(document.getElementById('fFechaDesde')||{}).value||'';
+  const hastaStr=(document.getElementById('fFechaHasta')||{}).value||'';
+  const desde=desdeStr? new Date(desdeStr+'T00:00:00Z'):null;
+  const hasta=hastaStr? new Date(hastaStr+'T23:59:59Z'):null;
+  const mesSel=(document.getElementById('fMes')||{}).value||'';
+  const bodegaTxt=getBodegaFiltro();
+  filas=filas.filter(r=>{
+    if(bodegaTxt && !normValue(r.puntoVenta).includes(bodegaTxt)) return false;
+    if(r.fechaFactura){
+      if(mesSel && mesKey(r.fechaFactura)!==mesSel) return false;
+      if(desde && r.fechaFactura<desde) return false;
+      if(hasta && r.fechaFactura>hasta) return false;
+    }
+    return true;
+  });
+  if(!filas.length){ if(diagEl){diagEl.style.display='none';diagEl.innerHTML='';} vaciar('No hay facturas para los filtros generales seleccionados.'); return; }
+
+  const pend=getPendientesReporte();
+
+  // Una fila por Factura + Código + Punto de venta (se suman las cantidades repetidas).
+  const g=new Map();
+  filas.forEach(r=>{
+    const factura=String(r.factura||'').trim() || 'SIN NÚMERO';
+    const codigo=normValue(r.codigo);
+    const punto=r.puntoVenta || 'SIN PUNTO DE VENTA';
+    const k=factura+'||'+codigo+'||'+punto;
+    if(!g.has(k)) g.set(k, {factura, codigo, descripcion:r.descripcion||'', punto, cantidad:0, fecha:r.fechaFactura||null});
+    const o=g.get(k);
+    o.cantidad+=toNumber(r.cantidad);
+    if(!o.descripcion && r.descripcion) o.descripcion=r.descripcion;
+    if(!o.fecha && r.fechaFactura) o.fecha=r.fechaFactura;
+  });
+  const lista=[...g.values()];
+
+  /* Reparto del pendiente: el Reporte de Dispensación no trae el número de factura,
+     por eso el pendiente de un código en un punto se distribuye entre las facturas
+     de ese mismo código y punto en proporción a la cantidad facturada. Así la suma
+     de la columna coincide con el pendiente real del reporte. */
+  const grupos=new Map();
+  lista.forEach(o=>{
+    const k=o.codigo+'||'+normValue(o.punto);
+    if(!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k).push(o);
+  });
+  let sinCruce=0;
+  grupos.forEach((items, k)=>{
+    const cod=k.split('||')[0];
+    let total=pend.porCodigoPunto.get(k);
+    if(total===undefined){
+      // El punto de venta de la factura no coincide con ninguna bodega del reporte:
+      // se usa el pendiente total del código para no perder la información.
+      total=pend.porCodigo.get(cod);
+      if(total!==undefined) sinCruce++;
+    }
+    total=toNumber(total);
+    const suma=items.reduce((a,o)=>a+toNumber(o.cantidad),0);
+    if(!total){ items.forEach(o=>{ o.pendiente=0; }); return; }
+    if(!suma){ items.forEach((o,i)=>{ o.pendiente = i===0 ? total : 0; }); return; }
+    let repartido=0;
+    items.forEach((o,i)=>{
+      if(i===items.length-1){ o.pendiente=Math.max(0, total-repartido); return; }
+      const parte=Math.round(total*(toNumber(o.cantidad)/suma));
+      o.pendiente=parte; repartido+=parte;
+    });
+  });
+
+  lista.forEach(o=>{ o.pctSubsanar = o.cantidad>0 ? (o.pendiente/o.cantidad)*100 : 0; });
+  lista.sort((a,b)=>
+    (b.pendiente-a.pendiente) ||
+    a.punto.localeCompare(b.punto,'es') ||
+    a.factura.localeCompare(b.factura,'es') ||
+    a.codigo.localeCompare(b.codigo,'es')
+  );
+  _facturasDetalleCache=lista;
+
+  if(diagEl){
+    let t='';
+    if(!pend.hayReporte) t='<b>Sin Reporte de Dispensación calculado.</b> La <b>Cantidad Pendiente</b> aparece en 0 hasta que se calculen los indicadores con el reporte cargado.';
+    else if(sinCruce>0) t='<b>Nota:</b> en '+fmtInt(sinCruce)+' códigos el punto de venta de la factura no coincide con ninguna bodega del Reporte de Dispensación; para ellos se muestra el pendiente total del código.';
+    diagEl.innerHTML=t;
+    diagEl.style.display = t ? '' : 'none';
+  }
+
+  const MAX_FILAS=1500;
+  const visibles=lista.slice(0, MAX_FILAS);
+  let h=visibles.map(o=>
+    '<tr><td class="txt">'+escHtml(o.factura)+'</td>'+
+    '<td class="txt">'+escHtml(o.codigo)+'</td>'+
+    '<td>'+fmtInt(o.cantidad)+'</td>'+
+    '<td class="txt">'+escHtml(o.punto)+'</td>'+
+    '<td><b>'+fmtInt(o.pendiente)+'</b></td>'+
+    '<td>'+fmtPctSubsanar(o.pendiente, o.cantidad)+'</td></tr>'
+  ).join('');
+  const sumCant=lista.reduce((a,o)=>a+o.cantidad,0);
+  const sumPend=lista.reduce((a,o)=>a+o.pendiente,0);
+  h+='<tr class="total-row"><td class="txt">TOTAL ('+fmtInt(lista.length)+' filas)</td><td>—</td>'+
+     '<td>'+fmtInt(sumCant)+'</td><td>—</td><td>'+fmtInt(sumPend)+'</td>'+
+     '<td>'+fmtPctSubsanar(sumPend, sumCant)+'</td></tr>';
+  if(lista.length>MAX_FILAS){
+    h+='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">Se muestran las primeras '+fmtInt(MAX_FILAS)+' filas de '+fmtInt(lista.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
+  }
+  tb.innerHTML=h;
 }
 
 (function(){
   const el=document.getElementById('fFacturaPunto');
   if(el) el.addEventListener('change', renderInfoPorFactura);
+})();
+
+/* ---- Excel del detalle por factura y código (mismas columnas de la tabla) ---- */
+(function(){
+  const btn=document.getElementById('btnDescargarFacturasDetalle');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    if(!_facturasDetalleCache.length){ showToast('No hay detalle por factura para exportar.', true); return; }
+    const detalle=_facturasDetalleCache.map(o=>({
+      'Factura': o.factura,
+      'Código': o.codigo,
+      'Descripción': o.descripcion||'',
+      'Cantidad': o.cantidad,
+      'Punto de Venta': o.punto,
+      'Cantidad Pendiente': o.pendiente,
+      '% Subsanar': Number((o.cantidad>0 ? (o.pendiente/o.cantidad)*100 : 0).toFixed(1))
+    }));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle por factura');
+    const punto=(document.getElementById('fFacturaPunto')||{}).value||'';
+    const sufijo=(punto || 'Todos').replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]+/g,'').trim().replace(/\s+/g,'_');
+    XLSX.writeFile(wb, 'Detalle_por_Factura_'+sufijo+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(detalle.length)+' filas de detalle por factura.');
+  });
 })();
 
 /* ---- Excel de códigos facturados SIN homólogo (un registro por código y punto de venta) ---- */
