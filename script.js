@@ -1014,8 +1014,22 @@ function pqDriveMensaje(err){
   if(err && err.httpStatus===404) return 'La carpeta de resultados no existe o tu cuenta no la ve (404). Pide al administrador que comparta la carpeta contigo.';
   if(err && err.httpStatus) return 'Error '+err.httpStatus+' de Google Drive. ['+(detail||'sin detalle')+']';
   if(msg==='DRIVE_NETWORK') return 'Error de red al contactar Google. Revisa la conexion, la VPN o el bloqueador de anuncios.';
+  if(msg==='OAUTH_TIMEOUT') return 'El navegador no mostro la ventana de Google. Permite las ventanas emergentes de este sitio, recarga con Ctrl+F5 y vuelve a pulsar el boton.';
+  if(msg==='LISTA_TIMEOUT') return 'Google Drive no respondio al revisar la carpeta de resultados. Revisa la conexion e intenta de nuevo.';
+  if(msg==='DESCARGA_TIMEOUT') return 'La descarga del paquete tardo demasiado y se detuvo. Intenta de nuevo con una conexion mas estable.';
   if(msg==='CARPETA_VACIA') return 'La carpeta de resultados esta vacia: el responsable del Panel de Cargue todavia no ha enviado el paquete.';
   return 'No se pudo traer el paquete de la carpeta: '+(msg||'error desconocido')+(detail?' ['+detail+']':'');
+}
+// Corta la espera si Google no responde, para que el boton no se quede colgado.
+function pqConTiempoLimite(promesa, ms, codigo){
+  return new Promise((resolve,reject)=>{
+    let listo=false;
+    const t=setTimeout(()=>{ if(!listo){ listo=true; reject(new Error(codigo)); } }, ms);
+    Promise.resolve(promesa).then(
+      v=>{ if(!listo){ listo=true; clearTimeout(t); resolve(v); } },
+      e=>{ if(!listo){ listo=true; clearTimeout(t); reject(e); } }
+    );
+  });
 }
 // Descarga el archivo mas reciente de la carpeta y lo abre.
 async function traerPaqueteDeCarpetaDrive(){
@@ -1024,19 +1038,19 @@ async function traerPaqueteDeCarpetaDrive(){
   try{
     botones.forEach(b=>{ b.disabled=true; b.textContent='Buscando en la carpeta…'; });
     showToast('Conectando con Google Drive…');
-    const token=await pqAutenticarDrive();
+    const token=await pqConTiempoLimite(pqAutenticarDrive(), 120000, 'OAUTH_TIMEOUT');
     const q="'"+DRIVE_FOLDER_PAQUETE+"' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'";
     const url='https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)
       + '&fields=files(id,name,mimeType,modifiedTime,size)'
       + '&orderBy=modifiedTime desc&pageSize=50'
       + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
-    const lista=await (await pqDriveFetch(url, token)).json();
+    const lista=await (await pqConTiempoLimite(pqDriveFetch(url, token), 45000, 'LISTA_TIMEOUT')).json();
     const archivos=(lista.files||[]);
     if(!archivos.length) throw new Error('CARPETA_VACIA');
     const archivo=archivos[0]; // la carpeta no es acumulativa: siempre el mas reciente
     botones.forEach(b=>{ b.textContent='Descargando…'; });
     showToast('Descargando el paquete de resultados…');
-    const resp=await pqDriveFetch('https://www.googleapis.com/drive/v3/files/'+archivo.id+'?alt=media&supportsAllDrives=true', token);
+    const resp=await pqConTiempoLimite(pqDriveFetch('https://www.googleapis.com/drive/v3/files/'+archivo.id+'?alt=media&supportsAllDrives=true', token), 600000, 'DESCARGA_TIMEOUT');
     const texto=await resp.text();
     await procesarPaqueteTexto(texto);
   }catch(err){
