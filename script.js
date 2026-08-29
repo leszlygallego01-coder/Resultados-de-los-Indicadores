@@ -815,11 +815,18 @@ async function paqueteCargarGuardado(){
 
 async function abrirPaqueteVisor(file){
   if(!file) return;
+  let texto;
+  try{ texto=await file.text(); }
+  catch(err){ console.error(err); showToast('No se pudo leer el archivo: '+err.message,true); return; }
+  await procesarPaqueteTexto(texto);
+}
+
+// Abre el contenido del paquete (venga de un archivo local o de la carpeta de Drive).
+async function procesarPaqueteTexto(texto){
   try{
     if(!(window.crypto && crypto.subtle)){
       showToast('Este navegador no permite abrir paquetes cifrados. Usa Chrome o Edge actualizado.',true); return;
     }
-    const texto=await file.text();
     let sobre;
     try{ sobre=JSON.parse(texto); }catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
     if(!sobre || sobre.app!==PAQUETE_APP_ID || !sobre.datos){
@@ -883,6 +890,167 @@ async function abrirPaqueteVisor(file){
   if(b1) b1.addEventListener('click', abrir);
   if(b2) b2.addEventListener('click', abrir);
   input.addEventListener('change', e=>{ const f=e.target.files && e.target.files[0]; if(f) abrirPaqueteVisor(f); });
+})();
+
+/* =========================================================================
+   Traer el paquete directamente de la carpeta de Google Drive
+   La carpeta guarda un solo archivo (el mas reciente que envio el Panel de
+   Cargue). Aqui solo se LEE: se descarga, se pide la contrasena y se
+   muestran los indicadores. Nada se ve en pantalla hasta cargarlo.
+   ========================================================================= */
+const DRIVE_FOLDER_PAQUETE = '1RbpCEBkBSTXuschQBnG2olZ4SSoqP90Y'; // Resultados de los indicadores
+const PAQUETE_DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
+const DRIVE_CLIENT_ID_STORAGE = 'drive_oauth_client_id';
+let _pqToken=null, _pqTokenAt=0, _pqTokenClient=null, _pqTokenClientId='';
+
+function pqLimpiarClientId(raw){
+  let s=String(raw==null?'':raw).replace(/\s+/g,' ').trim();
+  s=s.replace(/^["'\s]+|["',;\s]+$/g,'');
+  const m=s.match(/[0-9][0-9A-Za-z._-]*\.apps\.googleusercontent\.com/);
+  return m ? m[0] : s;
+}
+function pqClientIdValido(id){
+  return /^[0-9][0-9A-Za-z._-]*\.apps\.googleusercontent\.com$/.test(String(id||'').trim());
+}
+function pqGetClientId(){
+  try{ const g=localStorage.getItem(DRIVE_CLIENT_ID_STORAGE); if(g && g.trim()) return g.trim(); }catch(e){}
+  return '';
+}
+function pqSetClientId(id){
+  const limpio=pqLimpiarClientId(id);
+  try{ if(limpio) localStorage.setItem(DRIVE_CLIENT_ID_STORAGE, limpio); else localStorage.removeItem(DRIVE_CLIENT_ID_STORAGE); }catch(e){}
+  _pqTokenClient=null; _pqToken=null; _pqTokenAt=0;
+  return limpio;
+}
+function pqOrigenActual(){ try{ return window.location.origin||'(origen desconocido)'; }catch(e){ return '(origen desconocido)'; } }
+// Pide (una sola vez por navegador) el ID de cliente OAuth de Google.
+function pqPedirClientId(){
+  const ayuda='Pega el ID de cliente OAuth de Google que te entrego el administrador.\n\n'
+    + 'Debe verse asi:  123456789012-abc123def456.apps.googleusercontent.com\n\n'
+    + 'Es el mismo que se usa en el Panel de Cargue. En Google Cloud > Credenciales,\n'
+    + 'en "Origenes autorizados de JavaScript" debe figurar exactamente:\n   ' + pqOrigenActual();
+  let sug=pqGetClientId();
+  for(let i=0;i<3;i++){
+    const txt=window.prompt(ayuda, sug);
+    if(txt===null) return '';
+    const limpio=pqLimpiarClientId(txt);
+    if(!limpio){ pqSetClientId(''); return ''; }
+    if(pqClientIdValido(limpio)) return pqSetClientId(limpio);
+    sug=limpio;
+    window.alert('Ese ID no tiene el formato correcto: debe terminar en .apps.googleusercontent.com');
+  }
+  return '';
+}
+// Obtiene un token de solo lectura de Drive (reutiliza el vigente 45 minutos).
+async function pqAutenticarDrive(forzar){
+  if(!forzar && _pqToken && (Date.now()-_pqTokenAt) < 45*60*1000) return _pqToken;
+  if(typeof google==='undefined' || !google.accounts || !google.accounts.oauth2) throw new Error('GIS_NOT_LOADED');
+  let clientId=pqGetClientId();
+  if(clientId && !pqClientIdValido(clientId)){ pqSetClientId(''); clientId=''; }
+  if(!clientId) clientId=pqPedirClientId();
+  if(!clientId) throw new Error('NO_CLIENT_ID');
+  if(_pqTokenClient && _pqTokenClientId!==clientId) _pqTokenClient=null;
+  let token;
+  try{
+    token=await new Promise((resolve,reject)=>{
+      try{
+        if(!_pqTokenClient){
+          _pqTokenClient=google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: PAQUETE_DRIVE_SCOPES,
+            callback:(resp)=>{
+              if(resp && resp.access_token){ resolve(resp.access_token); return; }
+              const e=new Error(resp && resp.error ? resp.error : 'OAUTH_NO_TOKEN');
+              e.oauthDetail=(resp && (resp.error_description||resp.error))||'';
+              reject(e);
+            },
+            error_callback:(err)=>{
+              const tipo=(err && err.type)||'';
+              if(tipo==='popup_closed'){ reject(new Error('POPUP_CLOSED')); return; }
+              if(tipo==='popup_failed_to_open'){ reject(new Error('POPUP_BLOCKED')); return; }
+              const e=new Error((err && err.message)||'OAUTH_ERROR'); e.oauthDetail=tipo; reject(e);
+            }
+          });
+          _pqTokenClientId=clientId;
+        }
+        _pqTokenClient.requestAccessToken({ prompt: forzar ? 'consent' : '' });
+      }catch(err){ reject(err); }
+    });
+  }catch(err){
+    const texto=((err&&err.message)||'')+' '+((err&&err.oauthDetail)||'');
+    if(/invalid_client|client was not found|unauthorized_client|deleted_client/i.test(texto)){
+      pqSetClientId('');
+      const e=new Error('INVALID_CLIENT'); e.oauthDetail=(err&&(err.oauthDetail||err.message))||''; throw e;
+    }
+    throw err;
+  }
+  _pqToken=token; _pqTokenAt=Date.now();
+  return _pqToken;
+}
+// Lectura simple de la API de Drive con el detalle del error.
+async function pqDriveFetch(url, token){
+  let resp;
+  try{ resp=await fetch(url, { headers:{ 'Authorization':'Bearer '+token } }); }
+  catch(netErr){ const e=new Error('DRIVE_NETWORK'); e.driveDetail=(netErr&&netErr.message)||'fallo de red'; throw e; }
+  if(!resp.ok){
+    let detail='';
+    try{ const j=await resp.json(); if(j && j.error) detail=j.error.message||j.error.status||''; }catch(e){}
+    const e=new Error('DRIVE_HTTP_'+resp.status); e.httpStatus=resp.status; e.driveDetail=detail; throw e;
+  }
+  return resp;
+}
+// Traduce el fallo a un aviso entendible.
+function pqDriveMensaje(err){
+  const msg=(err&&err.message)||'', detail=(err&&err.driveDetail)||'';
+  if(msg==='GIS_NOT_LOADED') return 'No se pudo cargar el acceso de Google. Revisa la conexion o el bloqueador de anuncios y recarga la pagina.';
+  if(msg==='NO_CLIENT_ID') return 'Falta el ID de cliente OAuth de Google. Pide al administrador el ID que termina en .apps.googleusercontent.com y vuelve a intentarlo.';
+  if(msg==='INVALID_CLIENT') return 'Google respondio "Acceso bloqueado / invalid_client": el ID de cliente no sirve para este sitio. El administrador debe agregar este origen en Google Cloud: '+pqOrigenActual();
+  if(msg==='POPUP_BLOCKED') return 'El navegador bloqueo la ventana de Google. Permite las ventanas emergentes de este sitio e intenta de nuevo.';
+  if(msg==='POPUP_CLOSED') return 'Se cerro la ventana de Google antes de terminar. Vuelve a intentarlo y acepta el permiso de lectura de Drive.';
+  if(msg==='access_denied') return 'Se rechazo el permiso en la pantalla de Google. Vuelve a intentarlo y acepta "Ver tus archivos de Google Drive".';
+  if(msg==='OAUTH_NO_TOKEN'||msg==='OAUTH_ERROR') return 'Google no devolvio un token de acceso. Vuelve a intentarlo y acepta el permiso de lectura de Drive.';
+  if(err && err.httpStatus===401) return 'Google rechazo el acceso (401): la sesion expiro. Vuelve a pulsar el boton y acepta el permiso.';
+  if(err && err.httpStatus===403) return 'Google Drive rechazo la peticion (403). Revisa que aceptaste el permiso de lectura y que la Drive API este habilitada. ['+(detail||'sin detalle')+']';
+  if(err && err.httpStatus===404) return 'La carpeta de resultados no existe o tu cuenta no la ve (404). Pide al administrador que comparta la carpeta contigo.';
+  if(err && err.httpStatus) return 'Error '+err.httpStatus+' de Google Drive. ['+(detail||'sin detalle')+']';
+  if(msg==='DRIVE_NETWORK') return 'Error de red al contactar Google. Revisa la conexion, la VPN o el bloqueador de anuncios.';
+  if(msg==='CARPETA_VACIA') return 'La carpeta de resultados esta vacia: el responsable del Panel de Cargue todavia no ha enviado el paquete.';
+  return 'No se pudo traer el paquete de la carpeta: '+(msg||'error desconocido')+(detail?' ['+detail+']':'');
+}
+// Descarga el archivo mas reciente de la carpeta y lo abre.
+async function traerPaqueteDeCarpetaDrive(){
+  const botones=[document.getElementById('btnTraerDrive'), document.getElementById('btnTraerDriveVacio')].filter(Boolean);
+  const textos=botones.map(b=>b.textContent);
+  try{
+    botones.forEach(b=>{ b.disabled=true; b.textContent='Buscando en la carpeta…'; });
+    showToast('Conectando con Google Drive…');
+    const token=await pqAutenticarDrive();
+    const q="'"+DRIVE_FOLDER_PAQUETE+"' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'";
+    const url='https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)
+      + '&fields=files(id,name,mimeType,modifiedTime,size)'
+      + '&orderBy=modifiedTime desc&pageSize=50'
+      + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
+    const lista=await (await pqDriveFetch(url, token)).json();
+    const archivos=(lista.files||[]);
+    if(!archivos.length) throw new Error('CARPETA_VACIA');
+    const archivo=archivos[0]; // la carpeta no es acumulativa: siempre el mas reciente
+    botones.forEach(b=>{ b.textContent='Descargando…'; });
+    showToast('Descargando el paquete de resultados…');
+    const resp=await pqDriveFetch('https://www.googleapis.com/drive/v3/files/'+archivo.id+'?alt=media&supportsAllDrives=true', token);
+    const texto=await resp.text();
+    await procesarPaqueteTexto(texto);
+  }catch(err){
+    console.error(err);
+    showToast(pqDriveMensaje(err), true);
+  }finally{
+    botones.forEach((b,i)=>{ b.disabled=false; b.textContent=textos[i]; });
+  }
+}
+(function conectarBotonesDrivePaquete(){
+  const b1=document.getElementById('btnTraerDrive');
+  const b2=document.getElementById('btnTraerDriveVacio');
+  if(b1) b1.addEventListener('click', traerPaqueteDeCarpetaDrive);
+  if(b2) b2.addEventListener('click', traerPaqueteDeCarpetaDrive);
 })();
 
 function descargarArchivo(nombre, blob){
