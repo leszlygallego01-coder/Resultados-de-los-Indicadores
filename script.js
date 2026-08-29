@@ -2371,7 +2371,13 @@ async function ensureFacturasData(){
     if(!filas.length){ _facturasStandalone=[]; return; }
     const recH=await idbGet('homologo');
     const homSet=new Set();
-    ((recH && recH.rows) ? recH.rows : []).forEach(r=>{ const c=normValue(r.codigo); if(c) homSet.add(c); });
+    const homMap=new Map();
+    ((recH && recH.rows) ? recH.rows : []).forEach(r=>{
+      const c=normValue(r.codigo);
+      if(!c) return;
+      homSet.add(c);
+      if(!homMap.has(c)) homMap.set(c, normValue(r.homologo));
+    });
     _facturasStandalone=filas.map(r=>{
       const codigo=normValue(r.codigo);
       return {
@@ -2381,6 +2387,9 @@ async function ensureFacturasData(){
         descripcion: String(r.descripcion||'').trim(),
         cantidad: toNumber(r.cantidad),
         puntoVenta: String(r.puntoVenta||'').trim() || 'SIN PUNTO DE VENTA',
+        // Código de homologación del artículo facturado: es la llave con la que se
+        // cruza el pendiente del Reporte de Dispensación.
+        homologo: homMap.get(codigo) || '',
         tieneHomologo: homSet.has(codigo)
       };
     });
@@ -2525,6 +2534,8 @@ function renderInfoPorFactura(){
    bodega/punto y zona), igual que los demás indicadores.
    ========================================================================= */
 let _facturasDetalleCache=[];
+// Códigos cuyo punto de venta no corresponde a ninguna bodega detalle del reporte.
+let _facturasSinBodegaCache=[];
 
 // Porcentaje por subsanar: pendiente sobre lo facturado. Si la cantidad facturada
 // es 0 o no viene informada, se muestra 0% (no hay base para calcular).
@@ -2534,11 +2545,12 @@ function fmtPctSubsanar(pendiente, cantidad){
   return ((toNumber(pendiente)/c)*100).toFixed(1)+'%';
 }
 
-/* Unidades pendientes del Reporte de Dispensación agrupadas por código y por
-   código + punto (bodega detalle). Solo la última versión vigente de cada línea,
-   dispensas activas y con los filtros generales ya aplicados. */
+/* Unidades pendientes del Reporte de Dispensación agrupadas por BODEGA DETALLE +
+   CÓDIGO DE HOMOLOGACIÓN (el homólogo del código del reporte). Solo la última
+   versión vigente de cada línea, dispensas activas y con los filtros generales
+   ya aplicados. */
 function getPendientesReporte(){
-  const res={ porCodigoPunto:new Map(), porCodigo:new Map(), puntos:new Set(), hayReporte:false };
+  const res={ porBodegaHom:new Map(), porHom:new Map(), bodegas:new Set(), hayReporte:false };
   if(!filteredRowsCache || !filteredRowsCache.length) return res;
   res.hayReporte=true;
   const bodegaSearch=getBodegaFiltro();
@@ -2554,14 +2566,56 @@ function getPendientesReporte(){
     if(!lineaEsPendiente(r)) return;
     const und=Math.abs(toNumber(r.diferencia));
     if(!und) return;
-    const cod=normValue(r.codigoArticulo);
-    const pto=normValue(r.bodegaDetalle);
-    if(pto) res.puntos.add(pto);
-    res.porCodigo.set(cod, (res.porCodigo.get(cod)||0)+und);
-    const k=cod+'||'+pto;
-    res.porCodigoPunto.set(k, (res.porCodigoPunto.get(k)||0)+und);
+    // Llave de cruce: código de homologación; si el código no está homologado se
+    // usa el propio código para no perder la línea.
+    const hom=normValue(r.homologo) || normValue(r.codigoArticulo);
+    const bod=normValue(r.bodegaDetalle);
+    if(!bod) return;
+    res.bodegas.add(bod);
+    res.porHom.set(hom, (res.porHom.get(hom)||0)+und);
+    const k=bod+'||'+hom;
+    res.porBodegaHom.set(k, (res.porBodegaHom.get(k)||0)+und);
   });
   return res;
+}
+
+/* Relaciona el PUNTO DE VENTA de la factura con una BODEGA DETALLE del reporte.
+   Primero busca coincidencia exacta del nombre normalizado; luego que uno
+   contenga al otro; por último compara el código inicial del nombre (por
+   ejemplo "M15", "N11", "B05"). Devuelve '' cuando no hay ninguna bodega
+   equivalente en el reporte. */
+function codigoBodega(nombre){
+  const t=String(nombre||'').trim().split(/[\s.\-_/]+/).filter(Boolean);
+  for(const p of t){
+    const s=p.replace(/[^A-Z0-9]/gi,'').toUpperCase();
+    if(s.length>=2 && s.length<=6 && /[0-9]/.test(s) && /^[A-Z]*[0-9]+$/.test(s)) return s;
+  }
+  return '';
+}
+function resolverBodegaReporte(punto, bodegas, cache){
+  const p=normValue(punto);
+  if(!p || !bodegas || !bodegas.size) return '';
+  if(cache.has(p)) return cache.get(p);
+  let r='';
+  if(bodegas.has(p)) r=p;
+  if(!r){
+    let mejor='';
+    bodegas.forEach(b=>{
+      if(!b || b.length<4) return;
+      if(p.includes(b) || b.includes(p)){ if(b.length>mejor.length) mejor=b; }
+    });
+    r=mejor;
+  }
+  if(!r){
+    const cp=codigoBodega(p);
+    if(cp){
+      let mejor='';
+      bodegas.forEach(b=>{ if(codigoBodega(b)===cp && b.length>mejor.length) mejor=b; });
+      r=mejor;
+    }
+  }
+  cache.set(p, r);
+  return r;
 }
 
 function renderFacturasDetalle(filas){
@@ -2569,8 +2623,11 @@ function renderFacturasDetalle(filas){
   if(!tb) return;
   const diagEl=document.getElementById('facturasDetalleDiag');
   const vaciar=(msg)=>{
-    tb.innerHTML='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">'+escHtml(msg)+'</td></tr>';
+    tb.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">'+escHtml(msg)+'</td></tr>';
     _facturasDetalleCache=[];
+    _facturasSinBodegaCache=[];
+    const b=document.getElementById('btnDescargarPuntosSinBodega');
+    if(b) b.style.display='none';
   };
   if(!filas || !filas.length){ if(diagEl){diagEl.style.display='none';diagEl.innerHTML='';} vaciar('No hay facturas para los filtros seleccionados.'); return; }
 
@@ -2602,7 +2659,7 @@ function renderFacturasDetalle(filas){
     const codigo=normValue(r.codigo);
     const punto=r.puntoVenta || 'SIN PUNTO DE VENTA';
     const k=factura+'||'+codigo+'||'+punto;
-    if(!g.has(k)) g.set(k, {factura, codigo, descripcion:r.descripcion||'', punto, cantidad:0, fecha:r.fechaFactura||null});
+    if(!g.has(k)) g.set(k, {factura, codigo, homologo:normValue(r.homologo)||codigo, descripcion:r.descripcion||'', punto, cantidad:0, fecha:r.fechaFactura||null});
     const o=g.get(k);
     o.cantidad+=toNumber(r.cantidad);
     if(!o.descripcion && r.descripcion) o.descripcion=r.descripcion;
@@ -2610,37 +2667,60 @@ function renderFacturasDetalle(filas){
   });
   const lista=[...g.values()];
 
-  /* Reparto del pendiente: el Reporte de Dispensación no trae el número de factura,
-     por eso el pendiente de un código en un punto se distribuye entre las facturas
-     de ese mismo código y punto en proporción a la cantidad facturada. Así la suma
-     de la columna coincide con el pendiente real del reporte. */
+  /* Cruce del pendiente: BODEGA DETALLE del reporte (equivalente al punto de venta
+     de la factura) + CÓDIGO DE HOMOLOGACIÓN del código facturado. El reporte no trae
+     el número de factura, por eso el pendiente de esa bodega + homólogo se distribuye
+     entre las facturas del grupo en proporción a lo facturado, y nunca se asigna a una
+     fila más de lo que esa fila facturó (el % Subsanar no puede pasar de 100%). */
+  const cacheBodega=new Map();
   const grupos=new Map();
+  const puntosSinBodega=new Map(); // punto de venta sin bodega equivalente -> códigos
   lista.forEach(o=>{
-    const k=o.codigo+'||'+normValue(o.punto);
+    o.bodegaReporte=resolverBodegaReporte(o.punto, pend.bodegas, cacheBodega);
+    o.pendiente=0;
+    if(!o.bodegaReporte){
+      if(!puntosSinBodega.has(o.punto)) puntosSinBodega.set(o.punto, new Map());
+      const m=puntosSinBodega.get(o.punto);
+      if(!m.has(o.codigo)) m.set(o.codigo, {codigo:o.codigo, homologo:o.homologo, descripcion:o.descripcion||'', cantidad:0, facturas:new Set()});
+      const e=m.get(o.codigo);
+      e.cantidad+=toNumber(o.cantidad);
+      e.facturas.add(o.factura);
+      if(!e.descripcion && o.descripcion) e.descripcion=o.descripcion;
+      return;
+    }
+    const k=o.bodegaReporte+'||'+o.homologo;
     if(!grupos.has(k)) grupos.set(k, []);
     grupos.get(k).push(o);
   });
-  let sinCruce=0;
+
+  let topeAplicado=0;
   grupos.forEach((items, k)=>{
-    const cod=k.split('||')[0];
-    let total=pend.porCodigoPunto.get(k);
-    if(total===undefined){
-      // El punto de venta de la factura no coincide con ninguna bodega del reporte:
-      // se usa el pendiente total del código para no perder la información.
-      total=pend.porCodigo.get(cod);
-      if(total!==undefined) sinCruce++;
-    }
-    total=toNumber(total);
+    const total=toNumber(pend.porBodegaHom.get(k));
     const suma=items.reduce((a,o)=>a+toNumber(o.cantidad),0);
-    if(!total){ items.forEach(o=>{ o.pendiente=0; }); return; }
-    if(!suma){ items.forEach((o,i)=>{ o.pendiente = i===0 ? total : 0; }); return; }
-    let repartido=0;
+    if(!total || !suma) return;
+    // El pendiente repartido nunca supera lo facturado del grupo.
+    const repartir=Math.min(total, suma);
+    if(repartir<total) topeAplicado++;
+    let acum=0;
     items.forEach((o,i)=>{
-      if(i===items.length-1){ o.pendiente=Math.max(0, total-repartido); return; }
-      const parte=Math.round(total*(toNumber(o.cantidad)/suma));
-      o.pendiente=parte; repartido+=parte;
+      let parte = (i===items.length-1) ? Math.max(0, repartir-acum) : Math.round(repartir*(toNumber(o.cantidad)/suma));
+      parte=Math.min(parte, toNumber(o.cantidad));
+      o.pendiente=parte; acum+=parte;
     });
   });
+
+  // Códigos cuyo punto de venta no tiene bodega equivalente en el reporte.
+  const sinBodegaLista=[];
+  puntosSinBodega.forEach((m, punto)=>{
+    m.forEach(e=>sinBodegaLista.push({
+      punto, codigo:e.codigo, homologo:e.homologo===e.codigo?'':e.homologo,
+      descripcion:e.descripcion, cantidad:e.cantidad, facturas:e.facturas.size
+    }));
+  });
+  sinBodegaLista.sort((a,b)=> (b.cantidad-a.cantidad) || a.punto.localeCompare(b.punto,'es') || a.codigo.localeCompare(b.codigo,'es'));
+  _facturasSinBodegaCache=sinBodegaLista;
+  const btnSB=document.getElementById('btnDescargarPuntosSinBodega');
+  if(btnSB) btnSB.style.display = sinBodegaLista.length ? '' : 'none';
 
   lista.forEach(o=>{ o.pctSubsanar = o.cantidad>0 ? (o.pendiente/o.cantidad)*100 : 0; });
   lista.sort((a,b)=>
@@ -2654,7 +2734,7 @@ function renderFacturasDetalle(filas){
   if(diagEl){
     let t='';
     if(!pend.hayReporte) t='<b>Sin Reporte de Dispensación calculado.</b> La <b>Cantidad Pendiente</b> aparece en 0 hasta que se calculen los indicadores con el reporte cargado.';
-    else if(sinCruce>0) t='<b>Nota:</b> en '+fmtInt(sinCruce)+' códigos el punto de venta de la factura no coincide con ninguna bodega del Reporte de Dispensación; para ellos se muestra el pendiente total del código.';
+    else if(sinBodegaLista.length>0) t='<b>Nota:</b> '+fmtInt(sinBodegaLista.length)+' códigos quedan en 0 porque su <b>punto de venta</b> no corresponde a ninguna <b>Bodega Detalle</b> del Reporte de Dispensación. Descarga el listado con el botón <b>"Descargar códigos sin bodega equivalente"</b>.';
     diagEl.innerHTML=t;
     diagEl.style.display = t ? '' : 'none';
   }
@@ -2664,6 +2744,7 @@ function renderFacturasDetalle(filas){
   let h=visibles.map(o=>
     '<tr><td class="txt">'+escHtml(o.factura)+'</td>'+
     '<td class="txt">'+escHtml(o.codigo)+'</td>'+
+    '<td class="txt">'+escHtml(o.homologo && o.homologo!==o.codigo ? o.homologo : '—')+'</td>'+
     '<td>'+fmtInt(o.cantidad)+'</td>'+
     '<td class="txt">'+escHtml(o.punto)+'</td>'+
     '<td><b>'+fmtInt(o.pendiente)+'</b></td>'+
@@ -2671,11 +2752,11 @@ function renderFacturasDetalle(filas){
   ).join('');
   const sumCant=lista.reduce((a,o)=>a+o.cantidad,0);
   const sumPend=lista.reduce((a,o)=>a+o.pendiente,0);
-  h+='<tr class="total-row"><td class="txt">TOTAL ('+fmtInt(lista.length)+' filas)</td><td>—</td>'+
+  h+='<tr class="total-row"><td class="txt">TOTAL ('+fmtInt(lista.length)+' filas)</td><td>—</td><td>—</td>'+
      '<td>'+fmtInt(sumCant)+'</td><td>—</td><td>'+fmtInt(sumPend)+'</td>'+
      '<td>'+fmtPctSubsanar(sumPend, sumCant)+'</td></tr>';
   if(lista.length>MAX_FILAS){
-    h+='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">Se muestran las primeras '+fmtInt(MAX_FILAS)+' filas de '+fmtInt(lista.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
+    h+='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">Se muestran las primeras '+fmtInt(MAX_FILAS)+' filas de '+fmtInt(lista.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
   }
   tb.innerHTML=h;
 }
@@ -2694,9 +2775,11 @@ function renderFacturasDetalle(filas){
     const detalle=_facturasDetalleCache.map(o=>({
       'Factura': o.factura,
       'Código': o.codigo,
+      'Código de Homologación': (o.homologo && o.homologo!==o.codigo) ? o.homologo : '',
       'Descripción': o.descripcion||'',
       'Cantidad': o.cantidad,
       'Punto de Venta': o.punto,
+      'Bodega Detalle del Reporte': o.bodegaReporte||'',
       'Cantidad Pendiente': o.pendiente,
       '% Subsanar': Number((o.cantidad>0 ? (o.pendiente/o.cantidad)*100 : 0).toFixed(1))
     }));
@@ -2706,6 +2789,29 @@ function renderFacturasDetalle(filas){
     const sufijo=(punto || 'Todos').replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]+/g,'').trim().replace(/\s+/g,'_');
     XLSX.writeFile(wb, 'Detalle_por_Factura_'+sufijo+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
     showToast('Excel exportado: '+fmtInt(detalle.length)+' filas de detalle por factura.');
+  });
+})();
+
+/* ---- Excel de códigos cuyo punto de venta no tiene bodega equivalente en el reporte ---- */
+(function(){
+  const btn=document.getElementById('btnDescargarPuntosSinBodega');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    if(!_facturasSinBodegaCache.length){ showToast('No hay códigos sin bodega equivalente para exportar.', true); return; }
+    const detalle=_facturasSinBodegaCache.map(o=>({
+      'Punto de Venta (factura)': o.punto,
+      'Código': o.codigo,
+      'Código de Homologación': o.homologo||'',
+      'Descripción': o.descripcion||'',
+      'Cantidad Facturada': o.cantidad,
+      'Facturas': o.facturas
+    }));
+    const bodegas=[...getPendientesReporte().bodegas].sort().map(b=>({'Bodega Detalle en el Reporte': b}));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Sin bodega equivalente');
+    if(bodegas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bodegas), 'Bodegas del reporte');
+    XLSX.writeFile(wb, 'Codigos_sin_bodega_equivalente_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(detalle.length)+' códigos sin bodega equivalente.');
   });
 })();
 
