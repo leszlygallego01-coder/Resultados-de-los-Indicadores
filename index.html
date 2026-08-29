@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829e">
+<link rel="stylesheet" href="styles.css?v=20260829f">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -575,6 +575,28 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             </table>
           </div>
         </div>
+
+        <!-- ---- Detalle línea a línea de las facturas con su cantidad pendiente ---- -->
+        <div class="seguimiento-section">
+          <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:220px;">
+              <h3>📄 Detalle por factura y código</h3>
+              <p class="seg-desc">Cada fila es un <b>código dentro de una factura</b>. La <b>Cantidad Pendiente</b> se toma del <b>Reporte de Dispensación</b> (líneas con Diferencia negativa) para ese mismo código en el punto de venta, y el <b>% Subsanar</b> es la proporción de lo facturado que aún está pendiente. Esta tabla respeta los <b>filtros generales</b> de la pantalla (fechas, EPS, bodega/punto) además del filtro de punto de venta de arriba.</p>
+            </div>
+            <button class="btn btn-export" id="btnDescargarFacturasDetalle" style="margin-left:auto;align-self:center;">⬇ Descargar detalle por factura (Excel)</button>
+          </div>
+          <div class="helpbox" id="facturasDetalleDiag" style="display:none;"></div>
+          <div class="table-wrap" style="max-height:560px;">
+            <table class="data" id="tblFacturasDetalle">
+              <thead>
+                <tr>
+                  <th>Factura</th><th>Código</th><th>Cantidad</th><th>Punto de Venta</th><th>Cantidad Pendiente</th><th>% Subsanar</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- ---- SUBVISTA: COMPARATIVO INVENTARIO SISTEMA VS. FÍSICO ---- -->
@@ -915,6 +937,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829e"></script>
+<script src="script.js?v=20260829f"></script>
 </body>
 </html>
