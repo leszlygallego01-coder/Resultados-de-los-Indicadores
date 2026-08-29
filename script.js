@@ -1439,6 +1439,8 @@ async function calcularIndicadores(){
         factura: String(r.factura||'').trim(),
         codigo,
         descripcion: String(r.descripcion||'').trim() || (codigoToDescripcionDci.get(codigo) || ''),
+        // Descripción DCI tomada de la tabla Homólogo (según el código facturado).
+        descripcionDci: codigoToDescripcionDci.get(codigo) || '',
         cantidad: toNumber(r.cantidad),
         puntoVenta: String(r.puntoVenta||'').trim() || 'SIN PUNTO DE VENTA',
         homologo: hom,
@@ -2372,11 +2374,13 @@ async function ensureFacturasData(){
     const recH=await idbGet('homologo');
     const homSet=new Set();
     const homMap=new Map();
+    const dciMap=new Map();
     ((recH && recH.rows) ? recH.rows : []).forEach(r=>{
       const c=normValue(r.codigo);
       if(!c) return;
       homSet.add(c);
       if(!homMap.has(c)) homMap.set(c, normValue(r.homologo));
+      if(!dciMap.has(c)) dciMap.set(c, String(r.descripcionDci||'').trim());
     });
     _facturasStandalone=filas.map(r=>{
       const codigo=normValue(r.codigo);
@@ -2385,6 +2389,8 @@ async function ensureFacturasData(){
         factura: String(r.factura||'').trim(),
         codigo,
         descripcion: String(r.descripcion||'').trim(),
+        // Descripción DCI de la tabla Homólogo.
+        descripcionDci: dciMap.get(codigo) || '',
         cantidad: toNumber(r.cantidad),
         puntoVenta: String(r.puntoVenta||'').trim() || 'SIN PUNTO DE VENTA',
         // Código de homologación del artículo facturado: es la llave con la que se
@@ -2537,12 +2543,17 @@ let _facturasDetalleCache=[];
 // Códigos cuyo punto de venta no corresponde a ninguna bodega detalle del reporte.
 let _facturasSinBodegaCache=[];
 
-// Porcentaje por subsanar: pendiente sobre lo facturado. Si la cantidad facturada
-// es 0 o no viene informada, se muestra 0% (no hay base para calcular).
+// Porcentaje por subsanar = Cantidad facturada / Cantidad pendiente. Si supera el
+// 100% se muestra 100%. Si no hay pendiente no hay nada por subsanar: 0%.
+function pctSubsanarVal(pendiente, cantidad){
+  const p=toNumber(pendiente);
+  if(p<=0) return 0;
+  return Math.min(100, (toNumber(cantidad)/p)*100);
+}
 function fmtPctSubsanar(pendiente, cantidad){
-  const c=toNumber(cantidad);
-  if(!c) return '0%';
-  return ((toNumber(pendiente)/c)*100).toFixed(1)+'%';
+  const p=toNumber(pendiente);
+  if(p<=0) return '0%';
+  return pctSubsanarVal(pendiente, cantidad).toFixed(1)+'%';
 }
 
 /* Unidades pendientes del Reporte de Dispensación agrupadas por BODEGA DETALLE +
@@ -2623,7 +2634,7 @@ function renderFacturasDetalle(filas){
   if(!tb) return;
   const diagEl=document.getElementById('facturasDetalleDiag');
   const vaciar=(msg)=>{
-    tb.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">'+escHtml(msg)+'</td></tr>';
+    tb.innerHTML='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">'+escHtml(msg)+'</td></tr>';
     _facturasDetalleCache=[];
     _facturasSinBodegaCache=[];
     const b=document.getElementById('btnDescargarPuntosSinBodega');
@@ -2659,10 +2670,11 @@ function renderFacturasDetalle(filas){
     const codigo=normValue(r.codigo);
     const punto=r.puntoVenta || 'SIN PUNTO DE VENTA';
     const k=factura+'||'+codigo+'||'+punto;
-    if(!g.has(k)) g.set(k, {factura, codigo, homologo:normValue(r.homologo)||codigo, descripcion:r.descripcion||'', punto, cantidad:0, fecha:r.fechaFactura||null});
+    if(!g.has(k)) g.set(k, {factura, codigo, homologo:normValue(r.homologo)||codigo, descripcion:r.descripcion||'', descripcionDci:String(r.descripcionDci||'').trim(), punto, cantidad:0, fecha:r.fechaFactura||null});
     const o=g.get(k);
     o.cantidad+=toNumber(r.cantidad);
     if(!o.descripcion && r.descripcion) o.descripcion=r.descripcion;
+    if(!o.descripcionDci && r.descripcionDci) o.descripcionDci=String(r.descripcionDci).trim();
     if(!o.fecha && r.fechaFactura) o.fecha=r.fechaFactura;
   });
   const lista=[...g.values()];
@@ -2670,8 +2682,9 @@ function renderFacturasDetalle(filas){
   /* Cruce del pendiente: BODEGA DETALLE del reporte (equivalente al punto de venta
      de la factura) + CÓDIGO DE HOMOLOGACIÓN del código facturado. El reporte no trae
      el número de factura, por eso el pendiente de esa bodega + homólogo se distribuye
-     entre las facturas del grupo en proporción a lo facturado, y nunca se asigna a una
-     fila más de lo que esa fila facturó (el % Subsanar no puede pasar de 100%). */
+     entre las facturas del grupo en proporción a lo facturado. Se reparte el pendiente
+     completo (puede superar lo facturado de una fila); el tope del 100% se aplica al
+     mostrar el % Subsanar. */
   const cacheBodega=new Map();
   const grupos=new Map();
   const puntosSinBodega=new Map(); // punto de venta sin bodega equivalente -> códigos
@@ -2681,11 +2694,12 @@ function renderFacturasDetalle(filas){
     if(!o.bodegaReporte){
       if(!puntosSinBodega.has(o.punto)) puntosSinBodega.set(o.punto, new Map());
       const m=puntosSinBodega.get(o.punto);
-      if(!m.has(o.codigo)) m.set(o.codigo, {codigo:o.codigo, homologo:o.homologo, descripcion:o.descripcion||'', cantidad:0, facturas:new Set()});
+      if(!m.has(o.codigo)) m.set(o.codigo, {codigo:o.codigo, homologo:o.homologo, descripcion:o.descripcion||'', descripcionDci:o.descripcionDci||'', cantidad:0, facturas:new Set()});
       const e=m.get(o.codigo);
       e.cantidad+=toNumber(o.cantidad);
       e.facturas.add(o.factura);
       if(!e.descripcion && o.descripcion) e.descripcion=o.descripcion;
+      if(!e.descripcionDci && o.descripcionDci) e.descripcionDci=o.descripcionDci;
       return;
     }
     const k=o.bodegaReporte+'||'+o.homologo;
@@ -2693,18 +2707,13 @@ function renderFacturasDetalle(filas){
     grupos.get(k).push(o);
   });
 
-  let topeAplicado=0;
   grupos.forEach((items, k)=>{
     const total=toNumber(pend.porBodegaHom.get(k));
     const suma=items.reduce((a,o)=>a+toNumber(o.cantidad),0);
     if(!total || !suma) return;
-    // El pendiente repartido nunca supera lo facturado del grupo.
-    const repartir=Math.min(total, suma);
-    if(repartir<total) topeAplicado++;
     let acum=0;
     items.forEach((o,i)=>{
-      let parte = (i===items.length-1) ? Math.max(0, repartir-acum) : Math.round(repartir*(toNumber(o.cantidad)/suma));
-      parte=Math.min(parte, toNumber(o.cantidad));
+      const parte = (i===items.length-1) ? Math.max(0, total-acum) : Math.round(total*(toNumber(o.cantidad)/suma));
       o.pendiente=parte; acum+=parte;
     });
   });
@@ -2714,7 +2723,7 @@ function renderFacturasDetalle(filas){
   puntosSinBodega.forEach((m, punto)=>{
     m.forEach(e=>sinBodegaLista.push({
       punto, codigo:e.codigo, homologo:e.homologo===e.codigo?'':e.homologo,
-      descripcion:e.descripcion, cantidad:e.cantidad, facturas:e.facturas.size
+      descripcion:e.descripcion, descripcionDci:e.descripcionDci||'', cantidad:e.cantidad, facturas:e.facturas.size
     }));
   });
   sinBodegaLista.sort((a,b)=> (b.cantidad-a.cantidad) || a.punto.localeCompare(b.punto,'es') || a.codigo.localeCompare(b.codigo,'es'));
@@ -2722,7 +2731,7 @@ function renderFacturasDetalle(filas){
   const btnSB=document.getElementById('btnDescargarPuntosSinBodega');
   if(btnSB) btnSB.style.display = sinBodegaLista.length ? '' : 'none';
 
-  lista.forEach(o=>{ o.pctSubsanar = o.cantidad>0 ? (o.pendiente/o.cantidad)*100 : 0; });
+  lista.forEach(o=>{ o.pctSubsanar = pctSubsanarVal(o.pendiente, o.cantidad); });
   lista.sort((a,b)=>
     (b.pendiente-a.pendiente) ||
     a.punto.localeCompare(b.punto,'es') ||
@@ -2745,6 +2754,7 @@ function renderFacturasDetalle(filas){
     '<tr><td class="txt">'+escHtml(o.factura)+'</td>'+
     '<td class="txt">'+escHtml(o.codigo)+'</td>'+
     '<td class="txt">'+escHtml(o.homologo && o.homologo!==o.codigo ? o.homologo : '—')+'</td>'+
+    '<td class="txt">'+escHtml(o.descripcionDci || '—')+'</td>'+
     '<td>'+fmtInt(o.cantidad)+'</td>'+
     '<td class="txt">'+escHtml(o.punto)+'</td>'+
     '<td><b>'+fmtInt(o.pendiente)+'</b></td>'+
@@ -2752,11 +2762,11 @@ function renderFacturasDetalle(filas){
   ).join('');
   const sumCant=lista.reduce((a,o)=>a+o.cantidad,0);
   const sumPend=lista.reduce((a,o)=>a+o.pendiente,0);
-  h+='<tr class="total-row"><td class="txt">TOTAL ('+fmtInt(lista.length)+' filas)</td><td>—</td><td>—</td>'+
+  h+='<tr class="total-row"><td class="txt">TOTAL ('+fmtInt(lista.length)+' filas)</td><td>—</td><td>—</td><td>—</td>'+
      '<td>'+fmtInt(sumCant)+'</td><td>—</td><td>'+fmtInt(sumPend)+'</td>'+
      '<td>'+fmtPctSubsanar(sumPend, sumCant)+'</td></tr>';
   if(lista.length>MAX_FILAS){
-    h+='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">Se muestran las primeras '+fmtInt(MAX_FILAS)+' filas de '+fmtInt(lista.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
+    h+='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">Se muestran las primeras '+fmtInt(MAX_FILAS)+' filas de '+fmtInt(lista.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
   }
   tb.innerHTML=h;
 }
@@ -2776,12 +2786,13 @@ function renderFacturasDetalle(filas){
       'Factura': o.factura,
       'Código': o.codigo,
       'Código de Homologación': (o.homologo && o.homologo!==o.codigo) ? o.homologo : '',
+      'Descripción DCI': o.descripcionDci||'',
       'Descripción': o.descripcion||'',
       'Cantidad': o.cantidad,
       'Punto de Venta': o.punto,
       'Bodega Detalle del Reporte': o.bodegaReporte||'',
       'Cantidad Pendiente': o.pendiente,
-      '% Subsanar': Number((o.cantidad>0 ? (o.pendiente/o.cantidad)*100 : 0).toFixed(1))
+      '% Subsanar': Number(pctSubsanarVal(o.pendiente, o.cantidad).toFixed(1))
     }));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle por factura');
