@@ -737,6 +737,154 @@ async function loadDriveOnlyFromLocal() {
     } catch(e) { /* ignore */ }
   }
 }
+/* =========================================================================
+   Paquete cifrado publicado por el Panel de Cargue (modo solo lectura)
+   Aqui NO se cargan archivos fuente: unicamente se abre el paquete
+   .medisfarma con la contrasena que entrega el administrador y se muestran
+   los indicadores ya calculados sobre esos datos.
+   ========================================================================= */
+const PAQUETE_APP_ID = 'medisfarma-paquete';
+const PAQUETE_META_KEY = 'medisfarma_paquete_meta'; // recuerda el ultimo paquete abierto
+
+// Las fechas viajan marcadas dentro del paquete; se devuelven como objetos Date.
+function backupDecodeRows(rows){
+  return (rows||[]).map(r=>{
+    if(!r || typeof r!=='object') return r;
+    const o={};
+    Object.keys(r).forEach(k=>{
+      const v=r[k];
+      if(v && typeof v==='object' && typeof v.__date==='string'){
+        const d=new Date(v.__date); o[k]=isNaN(d)?null:d;
+      }else{ o[k]=v; }
+    });
+    return o;
+  });
+}
+function base64ABytes(b64){
+  const bin=atob(String(b64||''));
+  const out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out;
+}
+async function paqueteDerivarClave(password, salt, iteraciones){
+  const base=await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name:'PBKDF2', salt, iterations: iteraciones||150000, hash:'SHA-256' },
+    base, { name:'AES-GCM', length:256 }, false, ['decrypt']
+  );
+}
+async function paqueteDescomprimir(bytes){
+  if(typeof DecompressionStream==='undefined') throw new Error('Este navegador no puede abrir el paquete comprimido. Usa Chrome o Edge actualizado.');
+  const ds=new DecompressionStream('gzip');
+  const w=ds.writable.getWriter();
+  w.write(bytes); w.close();
+  const buf=await new Response(ds.readable).arrayBuffer();
+  return new TextDecoder().decode(buf);
+}
+
+// Guarda cada tabla del paquete en este navegador para que siga disponible
+// al recargar la pagina (sin escribir nada en la nube).
+async function paqueteGuardarLocal(datasets){
+  for(let i=0;i<datasets.length;i++){
+    const d=datasets[i];
+    const rec={ key:d.key, rows: backupDecodeRows(d.rows), fileName: d.fileName||'', batches: d.batches||null, updatedAt: d.updatedAt||'' };
+    memoryStore.set(rec.key, rec);
+    try{ await localPutRecord(rec); }catch(e){ /* si no hay espacio, queda en memoria */ }
+    state.loaded[rec.key]={ rowCount: rec.rows.length, fileName: rec.fileName, updatedAt: rec.updatedAt, batches: rec.batches };
+  }
+}
+// Al abrir la pagina, recupera el paquete guardado antes en este navegador.
+async function paqueteCargarGuardado(){
+  let meta=null;
+  try{ meta=JSON.parse(localStorage.getItem(PAQUETE_META_KEY)||'null'); }catch(e){ meta=null; }
+  if(!meta || !Array.isArray(meta.keys)) return false;
+  let encontradas=0;
+  for(let i=0;i<meta.keys.length;i++){
+    const key=meta.keys[i];
+    try{
+      const rec=await localGetRecord(key);
+      if(rec && rec.rows && rec.rows.length){
+        memoryStore.set(key, rec);
+        state.loaded[key]={ rowCount: rec.rows.length, fileName: rec.fileName||'', updatedAt: rec.updatedAt||'', batches: rec.batches||null };
+        encontradas++;
+      }
+    }catch(e){ /* ignorar */ }
+  }
+  return encontradas>0;
+}
+
+async function abrirPaqueteVisor(file){
+  if(!file) return;
+  try{
+    if(!(window.crypto && crypto.subtle)){
+      showToast('Este navegador no permite abrir paquetes cifrados. Usa Chrome o Edge actualizado.',true); return;
+    }
+    const texto=await file.text();
+    let sobre;
+    try{ sobre=JSON.parse(texto); }catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
+    if(!sobre || sobre.app!==PAQUETE_APP_ID || !sobre.datos){
+      showToast('Este archivo no es un paquete del Panel de Cargue.',true); return;
+    }
+    const pass=prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
+    if(pass===null) return;
+    showToast('Abriendo el paquete\u2026');
+    await new Promise(r=>setTimeout(r,30));
+    const clave=await paqueteDerivarClave(pass, base64ABytes(sobre.salt), sobre.iteraciones);
+    let plano;
+    try{
+      const abierto=await crypto.subtle.decrypt({name:'AES-GCM', iv: base64ABytes(sobre.iv)}, clave, base64ABytes(sobre.datos));
+      const bytes=new Uint8Array(abierto);
+      plano = sobre.comprimido ? await paqueteDescomprimir(bytes) : new TextDecoder().decode(bytes);
+    }catch(e){
+      showToast('Contrasena incorrecta o paquete danado.',true); return;
+    }
+    const backup=JSON.parse(plano);
+    if(!backup || !Array.isArray(backup.datasets) || !backup.datasets.length){
+      showToast('El paquete no contiene datos.',true); return;
+    }
+    // El visor es solo de consulta: se deja de escuchar la nube para que no
+    // sobreescriba lo que trae el paquete.
+    try{ stopFirestoreListener(); }catch(e){}
+    await paqueteGuardarLocal(backup.datasets);
+    try{
+      localStorage.setItem(PAQUETE_META_KEY, JSON.stringify({
+        generadoEn: backup.generadoEn||'', abiertoEn: new Date().toISOString(),
+        fuentes: backup.datasets.length, totalFilas: backup.totalFilas||0,
+        keys: backup.datasets.map(d=>d.key)
+      }));
+    }catch(e){ /* ignorar */ }
+    if(backup.driveFiles){
+      try{
+        if(backup.driveFiles.inventario) localStorage.setItem('inventario_drive_files', JSON.stringify(backup.driveFiles.inventario));
+        if(backup.driveFiles.reporte) localStorage.setItem('reporte_drive_files', JSON.stringify(backup.driveFiles.reporte));
+        restoreDriveFileLists();
+      }catch(e){ /* ignorar */ }
+    }
+    updateTopStatus();
+    showToast('Paquete cargado: '+backup.datasets.length+' fuente(s) \u00b7 '+fmtInt(backup.totalFilas||0)+' filas. Calculando indicadores\u2026');
+    try{
+      if(typeof ensureFacturasData==='function') await ensureFacturasData();
+      await calcularIndicadores();
+      if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
+    }catch(e){ console.warn(e); showToast('El paquete se cargo, pero no se pudieron calcular los indicadores: '+e.message,true); }
+  }catch(err){
+    console.error(err);
+    showToast('No se pudo abrir el paquete: '+err.message,true);
+  }
+}
+
+// Los dos botones (barra de filtros y pantalla vacia) usan el mismo selector oculto.
+(function conectarBotonesPaquete(){
+  const input=document.getElementById('inputPaquete');
+  if(!input) return;
+  const abrir=()=>{ input.value=''; input.click(); };
+  const b1=document.getElementById('btnCargarPaquete');
+  const b2=document.getElementById('btnCargarPaqueteVacio');
+  if(b1) b1.addEventListener('click', abrir);
+  if(b2) b2.addEventListener('click', abrir);
+  input.addEventListener('change', e=>{ const f=e.target.files && e.target.files[0]; if(f) abrirPaqueteVisor(f); });
+})();
+
 function descargarArchivo(nombre, blob){
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
@@ -6648,8 +6796,11 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
   restoreDriveFileLists();
   await refreshStatusFromDB();
   await loadDriveOnlyFromLocal();
+  // Si este navegador ya abrio un paquete del panel, se recupera tal cual.
+  const hayPaquete = await paqueteCargarGuardado();
+  if(hayPaquete){ try{ stopFirestoreListener(); }catch(e){} }
   updateTopStatus();
-  startFirestoreListener();
+  if(!hayPaquete) startFirestoreListener();
   showEmptyResults();
   const hayDatos = Object.keys(state.loaded).length>0;
   if(hayDatos){
