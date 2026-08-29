@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829c">
+<link rel="stylesheet" href="styles.css?v=20260829d">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -96,6 +96,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="field"><label>&nbsp;</label><button class="btn btn-ghost" id="btnLimpiarFiltro" style="padding:8px 14px;">Limpiar</button></div>
       <div class="field" style="margin-left:auto;"><label>&nbsp;</label><button class="btn btn-export" id="btnExportar">⬇ Exportar a Excel</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-ghost" id="btnCargarPaquete" title="Abrir el paquete cifrado (.medisfarma) que publica el responsable del Panel de Cargue">🔒 Cargar paquete del panel</button></div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-export" id="btnTraerDrive" title="Lee el paquete de resultados directamente de la carpeta de Google Drive">☁️ Traer resultados de la carpeta</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-abc" id="btnExportarABC" title="Ranking de bodegas por nivel de dispensación (mayor a menor), clasificadas A / B / C">📊 Descargar Análisis ABC</button></div>
     </div>
 
@@ -121,7 +122,9 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <h3>Todavía no hay indicadores calculados</h3>
       <p>Aún no hay información guardada en la nube. Pídele al responsable del <b>Panel de Cargue</b> que suba las fuentes y calcule los indicadores; al recargar esta página verás los resultados.</p>
       <p>También puedes abrir el <b>paquete cifrado</b> (archivo <b>.medisfarma</b>) que él publica: solo necesitas el archivo y la contraseña que te entregue.</p>
-      <p><button class="btn btn-export" id="btnCargarPaqueteVacio">🔒 Cargar paquete del panel</button></p>
+      <p>O trae el paquete directamente de la <b>carpeta de resultados en Google Drive</b>: pulsa el botón de la nube, inicia sesión con tu cuenta de Google y escribe la contraseña. La información solo aparece después de cargarlo.</p>
+      <p><button class="btn btn-export" id="btnCargarPaqueteVacio">🔒 Cargar paquete del panel</button>
+         <button class="btn btn-export" id="btnTraerDriveVacio">☁️ Traer resultados de la carpeta</button></p>
     </div>
 
     <!-- Selector de archivo oculto: se abre desde los botones "Cargar paquete del panel" -->
@@ -912,6 +915,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829c"></script>
+<script src="script.js?v=20260829d"></script>
 </body>
 </html>
