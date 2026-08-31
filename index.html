@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829j">
+<link rel="stylesheet" href="styles.css?v=20260829k">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -792,9 +792,9 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         </div>
       </div>
 
-      <!-- ---- SUBVISTA: BASE CUENTAS (responsables por EPS, zona y bodega) ---- -->
+      <!-- ---- SUBVISTA: BASE CUENTAS (una cuenta por EPS consolidada) ---- -->
       <div class="subview" id="sub-cuentas">
-        <div class="helpbox">Asigna cada dispensación al <b>Líder</b> que responde por esa EPS, para ver el cumplimiento por persona (los gestores de cuenta no se muestran: sus líneas quedan en el líder de la EPS). La EPS se compara por la <b>EPS consolidada</b> (así los regímenes y tutelas de una misma EPS quedan en la cuenta correcta); si el líder tiene una <b>zona</b> o una <b>bodega</b> asignada, solo se le suman las líneas de ese alcance, y si su zona es <b>GENERAL</b> atiende toda la EPS. Se cuentan <b>solo dispensas con Estado Activo</b> y se respetan los filtros de bodega y zona de la barra superior. Cuando dos líderes comparten la misma cuenta, la línea suma para ambos y en la fila <b>TOTAL</b> se cuenta una sola vez.</div>
+        <div class="helpbox">Agrupa cada dispensación en la <b>cuenta de su EPS</b> y muestra el cumplimiento de su líder. Hay <b>una sola fila por EPS</b>: la EPS se compara por la <b>EPS consolidada</b>, así los regímenes y tutelas de una misma EPS quedan en la misma cuenta y ninguna línea se cuenta dos veces. Se cuentan <b>solo dispensas con Estado Activo</b> y se respetan los filtros de bodega y zona de la barra superior.</div>
         <div class="helpbox" id="cuentasDiag" style="display:none;"></div>
         <div class="stat-row" id="statsCuentas"></div>
 
@@ -802,7 +802,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
             <div style="flex:1;min-width:240px;">
               <h3>👥 Base de cuentas por líder</h3>
-              <p class="seg-desc">Líneas a cargo, entregadas, pendientes y % de cumplimiento de cada líder, con la EPS, la zona y la bodega que atiende.</p>
+              <p class="seg-desc">Líneas a cargo, entregadas, pendientes y % de cumplimiento de cada líder, con la EPS que atiende.</p>
             </div>
             <div class="field" style="min-width:210px;">
               <label>Líder</label>
@@ -818,7 +818,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <table class="data" id="tblCuentasResp">
               <thead>
                 <tr>
-                  <th>Líder</th><th>EPS a cargo</th><th>Zona</th><th>Bodega</th>
+                  <th>Líder</th><th>EPS a cargo</th>
                   <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
                   <th>% Cumplimiento</th><th>Und. pendientes</th><th>Bodegas</th>
                 </tr>
@@ -853,13 +853,13 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         </div>
 
         <div class="seguimiento-section">
-          <h3>🔎 Detalle por EPS, zona y bodega</h3>
-          <p class="seg-desc">Desglose de las líneas de cada líder por EPS consolidada, zona y bodega, ordenado por pendientes de mayor a menor. En pantalla se muestran hasta 600 filas; el Excel trae el detalle completo.</p>
+          <h3>🔎 Detalle por EPS</h3>
+          <p class="seg-desc">Desglose de las líneas de cada cuenta por la EPS tal como llega en el reporte (regímenes y tutelas), ordenado por pendientes de mayor a menor. En pantalla se muestran hasta 600 filas; el Excel trae el detalle completo.</p>
           <div class="table-wrap" style="max-height:560px;">
             <table class="data" id="tblCuentasDetalle">
               <thead>
                 <tr>
-                  <th>Líder</th><th>EPS Consolidada</th><th>Zona</th><th>Bodega</th>
+                  <th>Líder</th><th>EPS</th>
                   <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
                   <th>% Cumplimiento</th><th>Und. pendientes</th>
                 </tr>
@@ -940,6 +940,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829j"></script>
+<script src="script.js?v=20260829k"></script>
 </body>
 </html>
