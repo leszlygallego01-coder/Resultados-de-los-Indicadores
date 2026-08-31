@@ -21,7 +21,9 @@ const EPS_GRUPO_MAP_RAW = {
   'NUEVA EMPRESA PROMOTORA DE SALUD S.A.-CONTRIBUTIVO':'NUEVA EPS','NUEVA EMPRESA PROMOTORA DE SALUD S.A.-TUTELAS':'NUEVA EPS','NUEVA EMPRESA PROMOTORA DE SALUD S.A.-TUTELAS SUB':'NUEVA EPS','NUEVA EMPRESA PROMOTORA DE SALUD S.A.-SUBSIDIADO':'NUEVA EPS',
   'SERVICIO OCCIDENTAL DE SALUD S.O.S. S.A':'S.O.S','SERVICIO OCCIDENTAL DE SALUD S.O.S. S.A-CONTRIBUTIVO':'S.O.S','SERVICIO OCCIDENTAL DE SALUD S.O.S. S.A-SUBSIDIADO':'S.O.S',
   'POSITIVA COMPAÑÍA DE SEGUROS S.A.':'POSITIVA',
-  'UNION TEMPORAL SALUD INTEGRAL MAISFEN':'UNION TEMPORAL SALUD INTEGRAL MAISFEN'
+  'UNION TEMPORAL SALUD INTEGRAL MAISFEN':'MAISFEN',
+  'EMSSANAR SUBSIDIADO':'EMSSANAR','EMSSANAR CONTRIBUTIVO':'EMSSANAR',
+  'CAJA DE COMPENSACION FAMILIAR COMFENALCO VALLE':'COMFENALCO'
 };
 const EPS_GRUPO_MAP = new Map(Object.entries(EPS_GRUPO_MAP_RAW).map(([k,v])=>[normValue(k), v]));
 function epsAGrupo(eps){
@@ -31,6 +33,10 @@ function epsAGrupo(eps){
   // Respaldo para las variantes de S.O.S. (con o sin sufijo de régimen, puntos o espacios
   // distintos): todas se consolidan en una sola EPS "S.O.S".
   if(nv.includes('SERVICIO OCCIDENTAL DE SALUD') || /(^|[\s-])S\s?\.?\s?O\s?\.?\s?S(\b|\.)/.test(nv)) return 'S.O.S';
+  // Nombres muy largos del archivo fuente: se muestran con su sigla corta.
+  if(nv.includes('COMFENAL')) return 'COMFENALCO';
+  if(nv.includes('EMSSANAR')) return 'EMSSANAR';
+  if(nv.includes('MAISFEN')) return 'MAISFEN';
   return String(eps||'').trim() || 'N/D'; // si no está en la tabla, queda como su propia sigla (no se pierde)
 }
 
@@ -5719,7 +5725,7 @@ const RESPONSABLES_CUENTA = [
   {nombre:'Angela Paredes',     cargo:'Gestor cuenta',   eps:['CRUZ VERDE'],               zonas:[],                 bodega:''},
   {nombre:'Paola Ascuntar',     cargo:'Líder',           eps:['FAMISANAR'],                zonas:[],                 bodega:''},
   {nombre:'Karol Martinez',     cargo:'Gestor cuenta',   eps:['FAMISANAR'],                zonas:[],                 bodega:''},
-  {nombre:'Juan Carlos Mendez', cargo:'Líder',           eps:['FIDEICOMISOS','UNION TEMPORAL SALUD INTEGRAL MAISFEN'], zonas:[], bodega:''},
+  {nombre:'Juan Carlos Mendez', cargo:'Líder',           eps:['FIDEICOMISOS','MAISFEN'],   zonas:[],                 bodega:''},
   {nombre:'Daniela Carvajal',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
   {nombre:'Sara Cruz',          cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
   {nombre:'Yenifer Pulgarin',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
@@ -5738,7 +5744,7 @@ const LIDERES_CUENTA = RESPONSABLES_CUENTA.filter(r=>r.cargo==='Líder');
 // Nombre bonito para mostrar la EPS a cargo (la clave técnica es la EPS consolidada).
 const CUENTA_EPS_LABEL = {
   'FIDEICOMISOS':'FOMAG (Fideicomisos La Previsora)',
-  'UNION TEMPORAL SALUD INTEGRAL MAISFEN':'MAISFEN',
+  'MAISFEN':'MAISFEN',
   'FAMILIAR':'EPS FAMILIAR DE COLOMBIA',
   'S.O.S':'S.O.S (Servicio Occidental de Salud)'
 };
@@ -5789,6 +5795,31 @@ function cuentaAlcanceTxt(resp){
 function cuentaZonaTxt(resp){
   return (resp.zonas && resp.zonas.length) ? resp.zonas.map(z=>'ZONA '+z).join(' + ') : 'GENERAL (todas)';
 }
+// Etiqueta pública de cada líder: en los tableros NO se muestra el nombre de la
+// persona, sino "Líder <EPS consolidada>". Si dos líderes atienden la misma EPS,
+// se añade su alcance (bodega o zona) para poder diferenciar las filas.
+const _CUENTA_LIDER_LABEL = (function(){
+  const base=new Map(), conteo=new Map();
+  LIDERES_CUENTA.forEach(resp=>{
+    const b='Líder '+cuentaAlcanceTxt(resp);
+    base.set(resp.nombre, b);
+    conteo.set(b, (conteo.get(b)||0)+1);
+  });
+  const out=new Map(), usados=new Map();
+  LIDERES_CUENTA.forEach(resp=>{
+    const b=base.get(resp.nombre);
+    let etq=b;
+    if((conteo.get(b)||0)>1){
+      if(resp.bodega) etq=b+' (Bodega '+resp.bodega+')';
+      else if(resp.zonas && resp.zonas.length) etq=b+' ('+resp.zonas.map(z=>'Zona '+z).join(' / ')+')';
+    }
+    const n=(usados.get(etq)||0)+1;
+    usados.set(etq, n);
+    out.set(resp.nombre, n>1 ? etq+' '+n : etq);
+  });
+  return out;
+})();
+function cuentaLiderLabel(nombre){ return _CUENTA_LIDER_LABEL.get(nombre) || nombre; }
 
 // Caches del último cálculo, para que los filtros y la descarga usen lo ya calculado.
 let _cuentasMatriz=[], _cuentasDetalle=[], _cuentasEvol=[], _cuentasCortesAct=[], _cuentasGlobal=null;
@@ -5920,7 +5951,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
       avisos.push('<b>'+fmtInt(sinResp)+'</b> líneas activas no tienen líder asignado en la matriz'+
         (_cuentasGlobal.epsSinResp.length ? ' (EPS: '+escHtml(_cuentasGlobal.epsSinResp.join(', '))+')' : '')+'.');
     }
-    const vacios=_cuentasMatriz.filter(t=>t.lineas===0).map(t=>t.nombre);
+    const vacios=_cuentasMatriz.filter(t=>t.lineas===0).map(t=>cuentaLiderLabel(t.nombre));
     if(vacios.length) avisos.push('Sin líneas dentro del filtro actual: '+escHtml(vacios.join(', '))+'.');
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
@@ -5930,9 +5961,10 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   const selR=document.getElementById('fCuentaResponsable');
   if(selR){
     const prev=selR.value;
-    const nombres=LIDERES_CUENTA.map(r=>r.nombre).sort((a,b)=>a.localeCompare(b,'es'));
+    const nombres=LIDERES_CUENTA.map(r=>r.nombre)
+      .sort((a,b)=>cuentaLiderLabel(a).localeCompare(cuentaLiderLabel(b),'es'));
     selR.innerHTML='<option value="">Todos los líderes</option>'+
-      nombres.map(n=>'<option value="'+escHtml(n)+'">'+escHtml(n)+'</option>').join('');
+      nombres.map(n=>'<option value="'+escHtml(n)+'">'+escHtml(cuentaLiderLabel(n))+'</option>').join('');
     if(prev && nombres.includes(prev)) selR.value=prev;
   }
   const selE=document.getElementById('fCuentaEps');
@@ -6000,7 +6032,7 @@ function pintarBaseCuentas(){
       '<div class="sub">'+fmtInt(sumUP)+' unidades por entregar</div></div>'+
       '<div class="stat"><div class="label">% Cumplimiento</div><div class="value '+effClass(sumL?sumE/sumL:null)+'">'+fmtPct(sumL?sumE/sumL:null)+'</div>'+
       '<div class="sub">líneas entregadas sobre líneas a cargo</div></div>'+
-      '<div class="stat"><div class="label">Líder con más pendientes</div><div class="value" style="font-size:18px;">'+escHtml(critico && critico.pen ? critico.nombre : '—')+'</div>'+
+      '<div class="stat"><div class="label">Líder con más pendientes</div><div class="value" style="font-size:18px;">'+escHtml(critico && critico.pen ? cuentaLiderLabel(critico.nombre) : '—')+'</div>'+
       '<div class="sub">'+fmtInt(critico?critico.pen:0)+' líneas pendientes</div></div>'+
       '<div class="stat"><div class="label">Líneas sin líder</div><div class="value '+(G.sinResp?'pct-bad':'')+'">'+fmtInt(G.sinResp)+'</div>'+
       '<div class="sub">EPS sin líder asignado en la matriz</div></div>';
@@ -6008,9 +6040,9 @@ function pintarBaseCuentas(){
 
   // ---- Matriz de líderes ----
   const orden=matriz.slice().sort((a,b)=>
-    a.epsTxt.localeCompare(b.epsTxt,'es') || a.nombre.localeCompare(b.nombre,'es'));
+    a.epsTxt.localeCompare(b.epsTxt,'es') || cuentaLiderLabel(a.nombre).localeCompare(cuentaLiderLabel(b.nombre),'es'));
   let h=orden.map(t=>
-    '<tr><td class="txt"><b>'+escHtml(t.nombre)+'</b></td>'+
+    '<tr><td class="txt"><b>'+escHtml(cuentaLiderLabel(t.nombre))+'</b></td>'+
     '<td class="txt">'+escHtml(t.epsTxt)+'</td>'+
     '<td class="txt">'+escHtml(t.zonaTxt)+'</td>'+
     '<td class="txt">'+escHtml(t.bodegaTxt)+'</td>'+
@@ -6035,7 +6067,7 @@ function pintarBaseCuentas(){
   if(tbDet){
     const det=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f));
     let hd=det.slice(0, 600).map(d=>
-      '<tr><td class="txt">'+escHtml(d.nombre)+'</td>'+
+      '<tr><td class="txt">'+escHtml(cuentaLiderLabel(d.nombre))+'</td>'+
       '<td class="txt">'+escHtml(cuentaEpsLabel(d.eps))+'</td>'+
       '<td class="txt">'+escHtml(d.zona)+'</td><td class="txt">'+escHtml(d.bodega)+'</td>'+
       '<td>'+fmtInt(d.dispensas)+'</td><td>'+fmtInt(d.lineas)+'</td>'+
@@ -6056,7 +6088,7 @@ function pintarBaseCuentas(){
       : '<td>'+fmtInt(c.ent)+'</td><td class="'+(c.pen?'pct-bad':'')+'">'+fmtInt(c.pen)+'</td>'+
         '<td class="'+effClass(c.cumpl)+'">'+fmtPct(c.cumpl)+'</td>';
     let hc=evol.map(e=>
-      '<tr><td class="txt"><b>'+escHtml(e.nombre)+'</b></td>'+
+      '<tr><td class="txt"><b>'+escHtml(cuentaLiderLabel(e.nombre))+'</b></td>'+
       celdas(e.cortes[0])+celdas(e.cortes[1])+celdas(e.cortes[2])+
       '<td>'+(e.cortes[2] && e.cortes[0] ? fmtInt((e.cortes[0].pen||0)-(e.cortes[2].pen||0)) : '—')+'</td></tr>'
     ).join('');
@@ -6077,14 +6109,14 @@ function pintarBaseCuentas(){
     const matriz=_cuentasMatriz.filter(t=>_cuentasFilaVisible(t, f));
     const nombresVis=new Set(matriz.map(t=>t.nombre));
     const hojaMatriz=matriz.map(t=>({
-      'Lider':t.nombre, 'EPS a cargo':t.epsTxt, 'Zona':t.zonaTxt,
+      'Lider':cuentaLiderLabel(t.nombre), 'EPS a cargo':t.epsTxt, 'Zona':t.zonaTxt,
       'Bodega':t.bodegaTxt==='—'?'':t.bodegaTxt,
       'Dispensas':t.dispensas, 'Lineas':t.lineas, 'Entregadas':t.ent, 'Pendientes':t.pen,
       '% Cumplimiento':t.cumpl===null?'':+(t.cumpl*100).toFixed(1),
       'Unidades pendientes':t.undPend, 'Unidades dispensadas':t.und, 'Bodegas':t.bodegas
     }));
     const hojaDet=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f)).map(d=>({
-      'Lider':d.nombre, 'EPS Consolidada':cuentaEpsLabel(d.eps),
+      'Lider':cuentaLiderLabel(d.nombre), 'EPS Consolidada':cuentaEpsLabel(d.eps),
       'Zona':d.zona, 'Bodega':d.bodega,
       'Dispensas':d.dispensas, 'Lineas':d.lineas, 'Entregadas':d.ent, 'Pendientes':d.pen,
       '% Cumplimiento':d.cumpl===null?'':+(d.cumpl*100).toFixed(1),
@@ -6093,7 +6125,7 @@ function pintarBaseCuentas(){
     const val=(c,campo)=> c===null ? '' : c[campo];
     const pct=(c)=> (c===null || c.cumpl===null) ? '' : +(c.cumpl*100).toFixed(1);
     const hojaEvol=_cuentasEvol.filter(e=>nombresVis.has(e.nombre)).map(e=>({
-      'Lider':e.nombre,
+      'Lider':cuentaLiderLabel(e.nombre),
       'Entregadas Corte 1':val(e.cortes[0],'ent'), 'Pendientes Corte 1':val(e.cortes[0],'pen'), '% Cumpl. Corte 1':pct(e.cortes[0]),
       'Entregadas Corte 2':val(e.cortes[1],'ent'), 'Pendientes Corte 2':val(e.cortes[1],'pen'), '% Cumpl. Corte 2':pct(e.cortes[1]),
       'Entregadas Corte 3':val(e.cortes[2],'ent'), 'Pendientes Corte 3':val(e.cortes[2],'pen'), '% Cumpl. Corte 3':pct(e.cortes[2]),
