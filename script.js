@@ -5702,45 +5702,39 @@ function cohortesTopFiltrado(coh, bod){
 })();
 
 /* =========================================================================
-   13c. BASE CUENTAS — Líderes por EPS, zona y bodega
-   Cada dispensación se asigna al Líder que responde por esa EPS (los gestores
-   de cuenta quedan fuera del tablero). Reglas de asignación:
+   13c. BASE CUENTAS — Un líder por EPS consolidada
+   Cada dispensación se asigna a la cuenta de su EPS consolidada y cada cuenta
+   tiene UN solo líder, así que ninguna EPS ni ninguna línea se repite entre
+   filas. Reglas de asignación:
    · La EPS se compara SIEMPRE por la EPS consolidada (la sigla “madre”), así
      los regímenes (contributivo / subsidiado / tutelas) quedan en la misma cuenta.
-   · Si el líder tiene ZONA definida, solo se le asignan las líneas de esa
-     zona; si su zona es GENERAL (vacía) atiende todas las zonas de su EPS.
-   · Si el líder tiene BODEGA definida, solo se le asignan las líneas de
-     esa bodega.
-   · Cuando varios líderes pueden atender la misma línea, gana el más
-     específico (bodega > zona > EPS completa). Si dos líderes comparten
-     exactamente el mismo alcance,
-     la línea cuenta para AMBOS y en el TOTAL se cuenta una sola vez.
+   · Ya no se separa por zona ni por bodega: el tablero muestra la cuenta
+     completa de cada EPS (el desglose por zona y bodega sigue en la tabla de
+     detalle).
+   · Las EPS sin líder definido quedan reportadas como “líneas sin líder”.
    ========================================================================= */
 const RESPONSABLES_CUENTA = [
-  {nombre:'Sebastian Morales',  cargo:'Líder',           eps:['ASMET SALUD','CRUZ VERDE'], zonas:[],                 bodega:''},
-  {nombre:'Astrid Salinas',     cargo:'Líder',           eps:['ASMET SALUD'],              zonas:['CAUCA'],          bodega:''},
-  {nombre:'Kelly Cardenas',     cargo:'Líder',           eps:['ASMET SALUD'],              zonas:['VALLE','TOLIMA'], bodega:''},
-  {nombre:'Neysa Correa',       cargo:'Líder',           eps:['COOSALUD'],                 zonas:[],                 bodega:''},
-  {nombre:'Valentina Franco',   cargo:'Gestor cuenta',   eps:['COOSALUD'],                 zonas:[],                 bodega:''},
-  {nombre:'Angela Paredes',     cargo:'Gestor cuenta',   eps:['CRUZ VERDE'],               zonas:[],                 bodega:''},
-  {nombre:'Paola Ascuntar',     cargo:'Líder',           eps:['FAMISANAR'],                zonas:[],                 bodega:''},
-  {nombre:'Karol Martinez',     cargo:'Gestor cuenta',   eps:['FAMISANAR'],                zonas:[],                 bodega:''},
-  {nombre:'Juan Carlos Mendez', cargo:'Líder',           eps:['FIDEICOMISOS','MAISFEN'],   zonas:[],                 bodega:''},
-  {nombre:'Daniela Carvajal',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Sara Cruz',          cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Yenifer Pulgarin',   cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Edwin Salcedo',      cargo:'Gestor cuenta',   eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Lida Victoria',      cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Julian Ramirez',     cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:''},
-  {nombre:'Noemy Durasovic',    cargo:'Líder',           eps:['NUEVA EPS'],                zonas:[],                 bodega:'M243'},
-  {nombre:'Nataly Hernandez',   cargo:'Gestor cuenta',   eps:['SANITAS'],                  zonas:[],                 bodega:''},
-  {nombre:'Laura Gonzalez',     cargo:'Líder',           eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
-  {nombre:'Marinela Amaya',     cargo:'Gestor cuenta',   eps:['SANITAS','FAMILIAR'],       zonas:[],                 bodega:''},
-  {nombre:'Valentina Vargas',   cargo:'Gestor cuenta',   eps:['S.O.S'],                    zonas:[],                 bodega:''}
+  {nombre:'Sebastian Morales',  cargo:'Líder',         eps:['ASMET SALUD','CRUZ VERDE']},
+  {nombre:'Astrid Salinas',     cargo:'Líder',         eps:['ASMET SALUD']},
+  {nombre:'Kelly Cardenas',     cargo:'Líder',         eps:['ASMET SALUD']},
+  {nombre:'Neysa Correa',       cargo:'Líder',         eps:['COOSALUD']},
+  {nombre:'Valentina Franco',   cargo:'Gestor cuenta', eps:['COOSALUD']},
+  {nombre:'Angela Paredes',     cargo:'Gestor cuenta', eps:['CRUZ VERDE']},
+  {nombre:'Paola Ascuntar',     cargo:'Líder',         eps:['FAMISANAR']},
+  {nombre:'Karol Martinez',     cargo:'Gestor cuenta', eps:['FAMISANAR']},
+  {nombre:'Juan Carlos Mendez', cargo:'Líder',         eps:['FIDEICOMISOS','MAISFEN']},
+  {nombre:'Daniela Carvajal',   cargo:'Gestor cuenta', eps:['NUEVA EPS']},
+  {nombre:'Sara Cruz',          cargo:'Gestor cuenta', eps:['NUEVA EPS']},
+  {nombre:'Yenifer Pulgarin',   cargo:'Gestor cuenta', eps:['NUEVA EPS']},
+  {nombre:'Edwin Salcedo',      cargo:'Gestor cuenta', eps:['NUEVA EPS']},
+  {nombre:'Lida Victoria',      cargo:'Líder',         eps:['NUEVA EPS']},
+  {nombre:'Julian Ramirez',     cargo:'Líder',         eps:['NUEVA EPS']},
+  {nombre:'Noemy Durasovic',    cargo:'Líder',         eps:['NUEVA EPS']},
+  {nombre:'Nataly Hernandez',   cargo:'Gestor cuenta', eps:['SANITAS']},
+  {nombre:'Laura Gonzalez',     cargo:'Líder',         eps:['SANITAS','FAMILIAR']},
+  {nombre:'Marinela Amaya',     cargo:'Gestor cuenta', eps:['SANITAS','FAMILIAR']},
+  {nombre:'Valentina Vargas',   cargo:'Gestor cuenta', eps:['S.O.S']}
 ];
-// La pestaña muestra Únicamente a los LÍDERES: cada uno responde por su EPS consolidada.
-// Los Gestores de cuenta quedan fuera del tablero (sus líneas se acumulan en el Líder de la EPS).
-const LIDERES_CUENTA = RESPONSABLES_CUENTA.filter(r=>r.cargo==='Líder');
 // Nombre bonito para mostrar la EPS a cargo (la clave técnica es la EPS consolidada).
 const CUENTA_EPS_LABEL = {
   'FIDEICOMISOS':'FOMAG (Fideicomisos La Previsora)',
@@ -5749,77 +5743,30 @@ const CUENTA_EPS_LABEL = {
   'S.O.S':'S.O.S (Servicio Occidental de Salud)'
 };
 function cuentaEpsLabel(k){ return CUENTA_EPS_LABEL[k] || k; }
-// Índice EPS consolidada -> líderes que la atienden (para asignar rápido).
+// El tablero trabaja por CUENTA = EPS consolidada, con un único líder por EPS.
+// De la matriz interna solo se toman las EPS que tienen Líder (los gestores de
+// cuenta no generan filas: sus líneas quedan en la cuenta de la EPS).
+const CUENTAS_EPS = [...new Set(RESPONSABLES_CUENTA.filter(r=>r.cargo==='Líder').flatMap(r=>r.eps))]
+  .sort((a,b)=>cuentaEpsLabel(a).localeCompare(cuentaEpsLabel(b),'es'));
+// Una fila por EPS: la clave interna ya es la etiqueta pública (no hay nombres de personas).
+const LIDERES_CUENTA = CUENTAS_EPS.map(e=>({nombre:'Líder '+cuentaEpsLabel(e), cargo:'Líder', eps:[e]}));
+// Índice EPS consolidada -> líder de esa cuenta (uno solo, sin repetir).
 const _CUENTAS_POR_EPS = (function(){
   const m=new Map();
-  LIDERES_CUENTA.forEach(resp=>{
-    resp.eps.forEach(e=>{
-      const k=normValue(e);
-      if(!m.has(k)) m.set(k, []);
-      m.get(k).push(resp);
-    });
-  });
+  LIDERES_CUENTA.forEach(resp=>{ m.set(normValue(resp.eps[0]), resp); });
   return m;
 })();
-// Entre más específico el alcance, mayor prioridad al asignar la línea.
-function cuentaEspecificidad(resp){
-  return 1 + (resp.zonas && resp.zonas.length ? 2:0) + (resp.bodega ? 4:0);
-}
-function cuentaZonaCoincide(resp, zonaFila){
-  if(!resp.zonas || !resp.zonas.length) return true;      // zona GENERAL: no restringe
-  const z=normValue(zonaFila);
-  return resp.zonas.some(t=>z.includes(normValue(t)));
-}
-function cuentaBodegaCoincide(resp, r){
-  if(!resp.bodega) return true;                            // sin bodega definida: no restringe
-  return normValue(r.bodegaDetalle).includes(normValue(resp.bodega));
-}
-// Líderes que se hacen cargo de una línea (puede ser más de uno si comparten alcance).
+// Líder que se hace cargo de la línea: el de su EPS consolidada (0 o 1).
 function cuentaResponsablesDeLinea(r){
   const eps = r.epsGrupo || epsAGrupo(r.eps);
-  const cand = _CUENTAS_POR_EPS.get(normValue(eps));
-  if(!cand || !cand.length) return [];
-  let mejor=0, out=[];
-  cand.forEach(resp=>{
-    if(!cuentaZonaCoincide(resp, r.zona)) return;
-    if(!cuentaBodegaCoincide(resp, r)) return;
-    const sc=cuentaEspecificidad(resp);
-    if(sc>mejor){ mejor=sc; out=[resp]; }
-    else if(sc===mejor) out.push(resp);
-  });
-  return out;
+  const resp = _CUENTAS_POR_EPS.get(normValue(eps));
+  return resp ? [resp] : [];
 }
 function cuentaAlcanceTxt(resp){
   return resp.eps.map(cuentaEpsLabel).join(' + ');
 }
-function cuentaZonaTxt(resp){
-  return (resp.zonas && resp.zonas.length) ? resp.zonas.map(z=>'ZONA '+z).join(' + ') : 'GENERAL (todas)';
-}
-// Etiqueta pública de cada líder: en los tableros NO se muestra el nombre de la
-// persona, sino "Líder <EPS consolidada>". Si dos líderes atienden la misma EPS,
-// se añade su alcance (bodega o zona) para poder diferenciar las filas.
-const _CUENTA_LIDER_LABEL = (function(){
-  const base=new Map(), conteo=new Map();
-  LIDERES_CUENTA.forEach(resp=>{
-    const b='Líder '+cuentaAlcanceTxt(resp);
-    base.set(resp.nombre, b);
-    conteo.set(b, (conteo.get(b)||0)+1);
-  });
-  const out=new Map(), usados=new Map();
-  LIDERES_CUENTA.forEach(resp=>{
-    const b=base.get(resp.nombre);
-    let etq=b;
-    if((conteo.get(b)||0)>1){
-      if(resp.bodega) etq=b+' (Bodega '+resp.bodega+')';
-      else if(resp.zonas && resp.zonas.length) etq=b+' ('+resp.zonas.map(z=>'Zona '+z).join(' / ')+')';
-    }
-    const n=(usados.get(etq)||0)+1;
-    usados.set(etq, n);
-    out.set(resp.nombre, n>1 ? etq+' '+n : etq);
-  });
-  return out;
-})();
-function cuentaLiderLabel(nombre){ return _CUENTA_LIDER_LABEL.get(nombre) || nombre; }
+// Etiqueta pública de cada cuenta: "Líder <EPS consolidada>", sin nombres de personas.
+function cuentaLiderLabel(nombre){ return nombre; }
 
 // Caches del último cálculo, para que los filtros y la descarga usen lo ya calculado.
 let _cuentasMatriz=[], _cuentasDetalle=[], _cuentasEvol=[], _cuentasCortesAct=[], _cuentasGlobal=null;
@@ -5874,9 +5821,11 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
       if(r.documento) g.docs.add(r.bodegaDetalle+'|'+r.documento);
       g.bodegas.add(r.bodegaDetalle||'SIN BODEGA');
       g.epsSet.add(r.epsGrupo||'N/D');
-      const eps=r.epsGrupo||'N/D', zn=r.zona||'N/D', bod=r.bodegaDetalle||'SIN BODEGA';
-      const k=resp.nombre+'|'+eps+'|'+zn+'|'+bod;
-      if(!det.has(k)) det.set(k, {nombre:resp.nombre, cargo:resp.cargo, eps, zona:zn, bodega:bod,
+      // El detalle abre la cuenta por la EPS tal como llega en el reporte
+      // (regimenes, tutelas, etc.) sin separar por zona ni bodega.
+      const epsRaw=r.eps||'N/D';
+      const k=resp.nombre+'|'+epsRaw;
+      if(!det.has(k)) det.set(k, {nombre:resp.nombre, cargo:resp.cargo, eps:epsRaw, epsGrupo:r.epsGrupo||'N/D',
         lineas:0, ent:0, pen:0, und:0, undPend:0, docs:new Set()});
       const d=det.get(k);
       d.lineas++;
@@ -5890,8 +5839,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     const g=acc.get(resp.nombre);
     return {
       nombre:resp.nombre, cargo:resp.cargo,
-      epsTxt:cuentaAlcanceTxt(resp), zonaTxt:cuentaZonaTxt(resp),
-      bodegaTxt:resp.bodega ? resp.bodega : '—',
+      epsTxt:cuentaAlcanceTxt(resp),
       epsKeys:resp.eps.slice(),
       dispensas:g.docs.size, lineas:g.lineas, ent:g.ent, pen:g.pen,
       cumpl: g.lineas ? g.ent/g.lineas : null,
@@ -5900,7 +5848,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   });
 
   _cuentasDetalle=[...det.values()].map(d=>({
-    nombre:d.nombre, cargo:d.cargo, eps:d.eps, zona:d.zona, bodega:d.bodega,
+    nombre:d.nombre, cargo:d.cargo, eps:d.eps, epsKeys:[d.epsGrupo],
     dispensas:d.docs.size, lineas:d.lineas, ent:d.ent, pen:d.pen,
     cumpl: d.lineas ? d.ent/d.lineas : null, und:d.und, undPend:d.undPend
   })).sort((a,b)=> b.pen-a.pen || b.lineas-a.lineas || a.nombre.localeCompare(b.nombre,'es'));
@@ -6004,8 +5952,8 @@ function pintarBaseCuentas(){
   const f=_cuentasFiltrosActuales();
 
   if(!_cuentasMatriz.length){
-    tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
-    if(tbDet) tbDet.innerHTML='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    tb.innerHTML='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    if(tbDet) tbDet.innerHTML='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(tbCor) tbCor.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
@@ -6044,8 +5992,6 @@ function pintarBaseCuentas(){
   let h=orden.map(t=>
     '<tr><td class="txt"><b>'+escHtml(cuentaLiderLabel(t.nombre))+'</b></td>'+
     '<td class="txt">'+escHtml(t.epsTxt)+'</td>'+
-    '<td class="txt">'+escHtml(t.zonaTxt)+'</td>'+
-    '<td class="txt">'+escHtml(t.bodegaTxt)+'</td>'+
     '<td>'+fmtInt(t.dispensas)+'</td>'+
     '<td><b>'+fmtInt(t.lineas)+'</b></td>'+
     '<td>'+fmtInt(t.ent)+'</td>'+
@@ -6054,29 +6000,28 @@ function pintarBaseCuentas(){
     '<td>'+fmtInt(t.undPend)+'</td>'+
     '<td>'+fmtInt(t.bodegas)+'</td></tr>'
   ).join('');
-  if(!orden.length) h='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">Ningún líder cumple los filtros elegidos.</td></tr>';
+  if(!orden.length) h='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">Ningún líder cumple los filtros elegidos.</td></tr>';
   else h+='<tr class="total-row"><td class="txt">TOTAL (líneas sin duplicar entre líderes)</td>'+
-    '<td>—</td><td>—</td><td>—</td>'+
+    '<td>—</td>'+
     '<td>'+fmtInt(G.dispensas)+'</td><td>'+fmtInt(G.lineasAsignadas)+'</td>'+
     '<td>'+fmtInt(G.ent)+'</td><td>'+fmtInt(G.pen)+'</td>'+
     '<td>'+fmtPct(G.lineasAsignadas?G.ent/G.lineasAsignadas:null)+'</td>'+
     '<td>'+fmtInt(G.undPend)+'</td><td>—</td></tr>';
   tb.innerHTML=h;
 
-  // ---- Detalle por líder, EPS, zona y bodega ----
+  // ---- Detalle por líder y EPS ----
   if(tbDet){
     const det=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f));
     let hd=det.slice(0, 600).map(d=>
       '<tr><td class="txt">'+escHtml(cuentaLiderLabel(d.nombre))+'</td>'+
-      '<td class="txt">'+escHtml(cuentaEpsLabel(d.eps))+'</td>'+
-      '<td class="txt">'+escHtml(d.zona)+'</td><td class="txt">'+escHtml(d.bodega)+'</td>'+
+      '<td class="txt">'+escHtml(d.eps)+'</td>'+
       '<td>'+fmtInt(d.dispensas)+'</td><td>'+fmtInt(d.lineas)+'</td>'+
       '<td>'+fmtInt(d.ent)+'</td><td class="'+(d.pen?'pct-bad':'')+'">'+fmtInt(d.pen)+'</td>'+
       '<td class="'+effClass(d.cumpl)+'">'+fmtPct(d.cumpl)+'</td>'+
       '<td>'+fmtInt(d.undPend)+'</td></tr>'
     ).join('');
-    if(!det.length) hd='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">No hay detalle para los filtros elegidos.</td></tr>';
-    else if(det.length>600) hd+='<tr class="total-row"><td class="txt" colspan="10">Se muestran las primeras 600 filas de '+fmtInt(det.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
+    if(!det.length) hd='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay detalle para los filtros elegidos.</td></tr>';
+    else if(det.length>600) hd+='<tr class="total-row"><td class="txt" colspan="8">Se muestran las primeras 600 filas de '+fmtInt(det.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
     tbDet.innerHTML=hd;
   }
 
@@ -6109,15 +6054,13 @@ function pintarBaseCuentas(){
     const matriz=_cuentasMatriz.filter(t=>_cuentasFilaVisible(t, f));
     const nombresVis=new Set(matriz.map(t=>t.nombre));
     const hojaMatriz=matriz.map(t=>({
-      'Lider':cuentaLiderLabel(t.nombre), 'EPS a cargo':t.epsTxt, 'Zona':t.zonaTxt,
-      'Bodega':t.bodegaTxt==='—'?'':t.bodegaTxt,
+      'Lider':cuentaLiderLabel(t.nombre), 'EPS a cargo':t.epsTxt,
       'Dispensas':t.dispensas, 'Lineas':t.lineas, 'Entregadas':t.ent, 'Pendientes':t.pen,
       '% Cumplimiento':t.cumpl===null?'':+(t.cumpl*100).toFixed(1),
       'Unidades pendientes':t.undPend, 'Unidades dispensadas':t.und, 'Bodegas':t.bodegas
     }));
     const hojaDet=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f)).map(d=>({
-      'Lider':cuentaLiderLabel(d.nombre), 'EPS Consolidada':cuentaEpsLabel(d.eps),
-      'Zona':d.zona, 'Bodega':d.bodega,
+      'Lider':cuentaLiderLabel(d.nombre), 'EPS':d.eps,
       'Dispensas':d.dispensas, 'Lineas':d.lineas, 'Entregadas':d.ent, 'Pendientes':d.pen,
       '% Cumplimiento':d.cumpl===null?'':+(d.cumpl*100).toFixed(1),
       'Unidades pendientes':d.undPend
@@ -6135,10 +6078,10 @@ function pintarBaseCuentas(){
     const fecha=new Date().toISOString().slice(0,10);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaMatriz), 'BASE CUENTAS');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet), 'DETALLE POR BODEGA');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet), 'DETALLE POR EPS');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaEvol), 'EVOLUCION POR CORTES');
     XLSX.writeFile(wb, 'Base_Cuentas_Responsables_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(hojaMatriz.length)+' responsables y '+fmtInt(hojaDet.length)+' filas de detalle.');
+    showToast('Excel exportado: '+fmtInt(hojaMatriz.length)+' cuentas y '+fmtInt(hojaDet.length)+' filas de detalle.');
   });
 })();
 
