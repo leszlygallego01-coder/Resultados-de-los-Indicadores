@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829k">
+<link rel="stylesheet" href="styles.css?v=20260829l">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -135,7 +135,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <button class="active" data-sub="dispensa">Indicador de dispensa</button>
         <button data-sub="linea">Indicador por línea (subsanar)</button>
         <button data-sub="soporte">Indicador soporte evento</button>
-        <button data-sub="inactivas">Indicador por Dispensas Inactivas</button>
+        <button data-sub="inactivas">Información de Dispensas Inactivas</button>
         <button data-sub="traslados">Indicador de Traslados Realizados</button>
         <button data-sub="facturas">Información por factura</button>
         <button data-sub="invfisico">Comparativo Inventario Sistema vs. Físico</button>
@@ -457,8 +457,13 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <div class="stat-row" id="statsInactivas"></div>
 
         <div class="seguimiento-section">
-          <h3>👤 Dispensas inactivas por Usuario Creación</h3>
-          <p class="seg-desc">Cruce de <b>Usuario Creación</b> y <b>Estado</b> (solo INACTIVO): cada fila es un usuario con su total de dispensas inactivas. Usa el selector para ver un usuario en particular. Ordenado de mayor a menor cantidad.</p>
+          <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:220px;">
+              <h3>👤 Dispensas inactivas por Usuario Creación</h3>
+              <p class="seg-desc">Cruce de <b>Usuario Creación</b> y <b>Estado</b> (solo INACTIVO): cada fila es un usuario con su total de dispensas inactivas. Usa el selector para ver un usuario en particular. Ordenado de mayor a menor cantidad.</p>
+            </div>
+            <button class="btn btn-export" id="btnDescargarInactivasSinUsuario" style="margin-left:auto;align-self:center;background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar dispensas SIN USUARIO (Excel)</button>
+          </div>
           <div class="field" style="max-width:340px;margin-bottom:10px;">
             <label>Usuario Creación</label>
             <select id="fInactivasUsuario"><option value="">Todos los usuarios</option></select>
@@ -852,22 +857,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           </div>
         </div>
 
-        <div class="seguimiento-section">
-          <h3>🔎 Detalle por EPS</h3>
-          <p class="seg-desc">Desglose de las líneas de cada cuenta por la EPS tal como llega en el reporte (regímenes y tutelas), ordenado por pendientes de mayor a menor. En pantalla se muestran hasta 600 filas; el Excel trae el detalle completo.</p>
-          <div class="table-wrap" style="max-height:560px;">
-            <table class="data" id="tblCuentasDetalle">
-              <thead>
-                <tr>
-                  <th>Líder</th><th>EPS</th>
-                  <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
-                  <th>% Cumplimiento</th><th>Und. pendientes</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
       </div>
 
     </div>
@@ -940,6 +929,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829k"></script>
+<script src="script.js?v=20260829l"></script>
 </body>
 </html>
