@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260829m">
+<link rel="stylesheet" href="styles.css?v=20260829n">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -141,6 +141,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <button data-sub="invfisico">Comparativo Inventario Sistema vs. Físico</button>
         <button data-sub="cohortes">Indicador e Informe de Cohortes</button>
         <button data-sub="cuentas">Base cuentas</button>
+        <button data-sub="supervisores">Base Supervisores</button>
       </div>
 
       <!-- ---- SUBVISTA: DISPENSA ---- -->
@@ -798,6 +799,64 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       </div>
 
       <!-- ---- SUBVISTA: BASE CUENTAS (una cuenta por EPS consolidada) ---- -->
+      <!-- ---- SUBVISTA: BASE SUPERVISORES ---- -->
+      <div class="subview" id="sub-supervisores">
+        <div class="helpbox">Hay <b>un supervisor por zona</b> (11 zonas). Para cada <b>homólogo</b> se estima el <b>consumo promedio mensual</b> con un modelo Holt-Winters sobre la historia de cantidades autorizadas y se compara con la <b>existencia</b> y las <b>unidades pendientes</b>, para saber cuánto se necesita. Con ese resultado se propone un <b>plan de traslados entre bodegas de la misma zona</b>: las que tienen excedente le pasan unidades a las que quedan cortas. Se respetan los filtros de bodega y zona de la barra superior.</div>
+        <div class="helpbox" id="supDiag" style="display:none;"></div>
+        <div class="stat-row" id="statsSup"></div>
+
+        <div class="seguimiento-section">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
+            <div style="flex:1;min-width:240px;">
+              <h3>📦 Requerimiento por homólogo</h3>
+              <p class="seg-desc">Consumo mensual estimado, existencia actual, pendientes por entregar y el total que hace falta tener disponible. El <b>balance</b> negativo indica unidades faltantes.</p>
+            </div>
+            <div class="field" style="min-width:210px;">
+              <label>Supervisor</label>
+              <select id="fSupSupervisor"><option value="">Todos los supervisores</option></select>
+            </div>
+            <div class="field" style="min-width:190px;">
+              <label>Zona</label>
+              <select id="fSupZona"><option value="">Todas las zonas</option></select>
+            </div>
+            <div class="field" style="min-width:190px;">
+              <label>Homólogo</label>
+              <input type="text" id="fSupHomologo" placeholder="Buscar homólogo...">
+            </div>
+            <label class="chk" style="align-self:center;"><input type="checkbox" id="fSupSoloFaltante"> Solo con faltante</label>
+            <button class="btn btn-export" id="btnExportSup">⬇ Exportar base de supervisores (Excel)</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data" id="tblSupReq">
+              <thead>
+                <tr>
+                  <th>Supervisor</th><th>Zona</th><th>Homólogo</th>
+                  <th>Consumo prom. mes</th><th>Existencia</th><th>Pendientes</th>
+                  <th>Total requerido</th><th>Balance</th><th>% Cobertura</th><th>Bodegas</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="seguimiento-section">
+          <h3>🔁 Plan de redistribución entre bodegas de la zona</h3>
+          <p class="seg-desc">Movimientos sugeridos: cada fila indica cuántas unidades conviene trasladar de una bodega con excedente a otra de la <b>misma zona</b> que está corta, para cubrir el requerimiento sin comprar.</p>
+          <div class="table-wrap">
+            <table class="data" id="tblSupPlan">
+              <thead>
+                <tr>
+                  <th>Zona</th><th>Homólogo</th><th>Bodega origen</th><th>Bodega destino</th>
+                  <th>Unidades a trasladar</th><th>Faltante del destino</th><th>Excedente del origen</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <div class="subview" id="sub-cuentas">
         <div class="helpbox">Agrupa cada dispensación en la <b>cuenta de su EPS</b> y muestra el cumplimiento de su líder. Hay <b>una sola fila por EPS</b>: la EPS se compara por la <b>EPS consolidada</b>, así los regímenes y tutelas de una misma EPS quedan en la misma cuenta y ninguna línea se cuenta dos veces. Se cuentan <b>solo dispensas con Estado Activo</b> y se respetan los filtros de bodega y zona de la barra superior.</div>
         <div class="helpbox" id="cuentasDiag" style="display:none;"></div>
@@ -929,6 +988,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260829m"></script>
+<script src="script.js?v=20260829n"></script>
 </body>
 </html>
