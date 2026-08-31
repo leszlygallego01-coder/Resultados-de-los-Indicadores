@@ -4641,6 +4641,57 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
   showToast('Excel de dispensas inactivas exportado: '+fmtInt(detalle.length)+' dispensas.');
 });
 
+// ---- Dispensas inactivas creadas SIN USUARIO: descarga en Excel ----
+// Toma las dispensas inactivas del filtro actual y deja solo aquellas cuyo
+// Usuario Creación viene vacío (se muestra como 'SIN USUARIO').
+(function(){
+  const btn=document.getElementById('btnDescargarInactivasSinUsuario');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
+    const disp = _inactivasDispCache || [];
+    const sinUsuario = disp.filter(d=>String(d.usuario||'SIN USUARIO').trim().toUpperCase()==='SIN USUARIO');
+    if(!sinUsuario.length){ showToast('No hay dispensas inactivas sin usuario de creación para el filtro actual.', true); return; }
+
+    // Resumen por bodega para ubicar rápido dónde se concentran
+    const porBodega=new Map();
+    sinUsuario.forEach(d=>{
+      const k=d.bodega||'N/D';
+      if(!porBodega.has(k)) porBodega.set(k, {zona:d.zona||'N/D', bodega:k, cant:0, lineas:0});
+      const g=porBodega.get(k); g.cant++; g.lineas+=Number(d.lineas)||0;
+    });
+    const total=sinUsuario.length;
+    const resumen=[...porBodega.values()].sort((a,b)=>b.cant-a.cant).map(b=>({
+      'Zona': b.zona,
+      'Bodega Detalle': b.bodega,
+      'Dispensas sin usuario': b.cant,
+      'Líneas': b.lineas,
+      '% del total': total ? b.cant/total : 0
+    }));
+    resumen.push({'Zona':'TOTAL','Bodega Detalle':'','Dispensas sin usuario':total,'Líneas':sinUsuario.reduce((a,d)=>a+(Number(d.lineas)||0),0),'% del total': total?1:0});
+
+    // Detalle: una fila por dispensa
+    const detalle=sinUsuario.slice().sort((a,b)=>
+      String(a.bodega||'').localeCompare(String(b.bodega||''),'es') ||
+      String(a.documento||'').localeCompare(String(b.documento||''),'es')
+    ).map(d=>({
+      'Zona': d.zona||'N/D',
+      'Bodega Detalle': d.bodega||'N/D',
+      'Documento': d.documento||'',
+      'Usuario Creación': 'SIN USUARIO',
+      'Fecha de Dispensación': d.fecha ? dateToISO(d.fecha) : '',
+      'Líneas': d.lineas
+    }));
+
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Resumen por Bodega');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Sin Usuario');
+    const fecha=new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, 'Dispensas_Inactivas_Sin_Usuario_'+fecha+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(detalle.length)+' dispensas inactivas sin usuario de creación.');
+  });
+})();
+
 /* Descarga el conteo de traslados RECIBIDOS por bodega destino, agrupado por Zona.
    Respeta los filtros de la sección: zona (o todas) y bodega destino específica.
    Se cuentan traslados ÚNICOS: un mismo número de traslado con varias líneas = 1. */
@@ -5945,7 +5996,6 @@ function _cuentasFilaVisible(t, f){
 
 function pintarBaseCuentas(){
   const tb=document.querySelector('#tblCuentasResp tbody');
-  const tbDet=document.querySelector('#tblCuentasDetalle tbody');
   const tbCor=document.querySelector('#tblCuentasCortes tbody');
   if(!tb) return;
   const statsEl=document.getElementById('statsCuentas');
@@ -5953,7 +6003,6 @@ function pintarBaseCuentas(){
 
   if(!_cuentasMatriz.length){
     tb.innerHTML='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
-    if(tbDet) tbDet.innerHTML='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(tbCor) tbCor.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
@@ -6010,20 +6059,7 @@ function pintarBaseCuentas(){
   tb.innerHTML=h;
 
   // ---- Detalle por líder y EPS ----
-  if(tbDet){
-    const det=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f));
-    let hd=det.slice(0, 600).map(d=>
-      '<tr><td class="txt">'+escHtml(cuentaLiderLabel(d.nombre))+'</td>'+
-      '<td class="txt">'+escHtml(d.eps)+'</td>'+
-      '<td>'+fmtInt(d.dispensas)+'</td><td>'+fmtInt(d.lineas)+'</td>'+
-      '<td>'+fmtInt(d.ent)+'</td><td class="'+(d.pen?'pct-bad':'')+'">'+fmtInt(d.pen)+'</td>'+
-      '<td class="'+effClass(d.cumpl)+'">'+fmtPct(d.cumpl)+'</td>'+
-      '<td>'+fmtInt(d.undPend)+'</td></tr>'
-    ).join('');
-    if(!det.length) hd='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay detalle para los filtros elegidos.</td></tr>';
-    else if(det.length>600) hd+='<tr class="total-row"><td class="txt" colspan="8">Se muestran las primeras 600 filas de '+fmtInt(det.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
-    tbDet.innerHTML=hd;
-  }
+  // (La tabla en pantalla se retiró; el desglose por EPS sigue disponible en el Excel.)
 
   // ---- Evolución por cortes ----
   if(tbCor){
