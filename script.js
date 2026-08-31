@@ -6174,15 +6174,31 @@ const ZONAS_SUPERVISOR = [
 ];
 // Matriz Supervisor - Zona (sin nombres de personas: la etiqueta publica es el cargo).
 const SUPERVISORES_ZONA = ZONAS_SUPERVISOR.map(z=>({nombre:'Supervisor '+z, zona:z}));
+/* Normalizador de zonas: el archivo escribe la zona con el prefijo "ZONA "
+   (ZONA VALLE, ZONA BOYACA, ZONA CAUCA NORTE...), a veces con tildes, guiones
+   o espacios dobles. Se limpia todo eso para poder cruzarla con la matriz.  */
+function _supNormZona(v){
+  let s=normValue(v);
+  if(!s) return '';
+  s=s.replace(/[-_\/]+/g,' ').replace(/\s+/g,' ').trim();
+  s=s.replace(/^ZONAS?\s+/,'').trim();          // quita el prefijo "ZONA "
+  s=s.replace(/^(REGIONAL|REG\.?)\s+/,'').trim(); // y variantes tipo "REGIONAL X"
+  return s;
+}
 // Indice zona normalizada -> zona oficial, para tolerar tildes y variantes del archivo.
 const _SUP_ZONA_CANON = (function(){
   const m=new Map();
-  ZONAS_SUPERVISOR.forEach(z=>m.set(normValue(z), z));
+  ZONAS_SUPERVISOR.forEach(z=>{
+    m.set(_supNormZona(z), z);
+    m.set(normValue(z), z);
+    m.set(normValue('ZONA '+z), z);
+  });
   return m;
 })();
 // Zona oficial de una linea (o cadena vacia si su zona no esta en la matriz).
 function supZonaDeLinea(r){
-  return _SUP_ZONA_CANON.get(normValue(r && r.zona)) || '';
+  const raw=r && r.zona;
+  return _SUP_ZONA_CANON.get(_supNormZona(raw)) || _SUP_ZONA_CANON.get(normValue(raw)) || '';
 }
 function supervisorDeZona(zona){ return zona ? ('Supervisor '+zona) : ''; }
 
