@@ -2029,6 +2029,8 @@ function renderAllTablesFromCache(){
   if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
   // Base cuentas: la matriz usa el estado actual y la evolución por cortes el historial.
   if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
+  // Base supervisores: requerimiento por homologo y plan de traslados dentro de la zona.
+  if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(rowsVigentes, bodegaSearch, zona);
   // El detalle por factura usa la cantidad pendiente del reporte, así que se
   // repinta cada vez que cambian los filtros generales.
   if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
@@ -6153,6 +6155,441 @@ function pintarBaseCuentas(){
 })();
 
 /* =========================================================================
+   13c. Base Supervisores: requerimiento por homologo y plan de redistribucion
+   -------------------------------------------------------------------------
+   Un supervisor por ZONA (11 zonas). Para cada homologo se estima el consumo
+   promedio mensual con Holt-Winters (serie mensual de Cantidad Autorizada) y se
+   compara contra la existencia y las unidades pendientes, para saber cuanto se
+   necesita. Con ese resultado se arma un plan de traslados entre bodegas de la
+   MISMA zona: las bodegas con excedente le pasan unidades a las que quedan cortas.
+   ========================================================================= */
+
+// Zonas oficiales de la operacion: cada una tiene un unico supervisor.
+const ZONAS_SUPERVISOR = [
+  'BOYACA','CAQUETA','CAUCA CENTRO','CAUCA NORTE','CAUCA SUR','COSTA NORTE',
+  'CUNDINAMARCA','EJE CAFETERO','NARIÑO','TOLIMA','VALLE'
+];
+// Matriz Supervisor - Zona (sin nombres de personas: la etiqueta publica es el cargo).
+const SUPERVISORES_ZONA = ZONAS_SUPERVISOR.map(z=>({nombre:'Supervisor '+z, zona:z}));
+// Indice zona normalizada -> zona oficial, para tolerar tildes y variantes del archivo.
+const _SUP_ZONA_CANON = (function(){
+  const m=new Map();
+  ZONAS_SUPERVISOR.forEach(z=>m.set(normValue(z), z));
+  return m;
+})();
+// Zona oficial de una linea (o cadena vacia si su zona no esta en la matriz).
+function supZonaDeLinea(r){
+  return _SUP_ZONA_CANON.get(normValue(r && r.zona)) || '';
+}
+function supervisorDeZona(zona){ return zona ? ('Supervisor '+zona) : ''; }
+
+/* ---- Pronostico del consumo mensual ---------------------------------------
+   Holt-Winters aditivo (nivel + tendencia + estacionalidad) sobre la serie
+   mensual de Cantidad Autorizada. Cuando la serie es corta todavia no hay
+   estacionalidad medible, asi que el metodo se degrada solo:
+     · 24 meses o mas  -> Holt-Winters con ciclo de 12 meses
+     · 8 meses o mas   -> Holt-Winters con ciclo de 4 meses (trimestral)
+     · 3 meses o mas   -> Holt (nivel + tendencia, sin estacionalidad)
+     · menos de 3      -> promedio simple
+   Siempre devuelve un valor >= 0 (no existe consumo negativo).            */
+function _hwSuavizadoAditivo(serie, m, alpha, beta, gamma){
+  const n=serie.length;
+  const ciclos=Math.floor(n/m);
+  const prom=[];
+  for(let c=0;c<ciclos;c++){
+    let s=0; for(let i=0;i<m;i++) s+=serie[c*m+i];
+    prom.push(s/m);
+  }
+  let nivel=prom[0];
+  let tend=(prom[1]-prom[0])/m;
+  const est=[];
+  for(let i=0;i<m;i++){
+    let s=0; for(let c=0;c<ciclos;c++) s+=serie[c*m+i]-prom[c];
+    est.push(s/ciclos);
+  }
+  for(let t=0;t<n;t++){
+    const idx=t%m;
+    const nivelAnt=nivel;
+    nivel = alpha*(serie[t]-est[idx]) + (1-alpha)*(nivelAnt+tend);
+    tend  = beta*(nivel-nivelAnt) + (1-beta)*tend;
+    est[idx] = gamma*(serie[t]-nivel) + (1-gamma)*est[idx];
+  }
+  return Math.max(0, nivel + tend + est[n%m]);
+}
+function _holtLineal(serie, alpha, beta){
+  let nivel=serie[0];
+  let tend=serie[1]-serie[0];
+  for(let t=1;t<serie.length;t++){
+    const nivelAnt=nivel;
+    nivel = alpha*serie[t] + (1-alpha)*(nivelAnt+tend);
+    tend  = beta*(nivel-nivelAnt) + (1-beta)*tend;
+  }
+  return Math.max(0, nivel + tend);
+}
+function pronosticoConsumoMensual(serie){
+  const s=(serie||[]).map(v=>Number(v)||0);
+  const n=s.length;
+  if(!n) return {valor:0, metodo:'Sin datos'};
+  if(n<3){
+    return {valor:Math.max(0, s.reduce((a,b)=>a+b,0)/n), metodo:'Promedio ('+n+' mes'+(n>1?'es':'')+')'};
+  }
+  if(n>=24) return {valor:_hwSuavizadoAditivo(s,12,0.4,0.1,0.3), metodo:'Holt-Winters (ciclo 12 meses)'};
+  if(n>=8)  return {valor:_hwSuavizadoAditivo(s,4,0.4,0.1,0.3),  metodo:'Holt-Winters (ciclo 4 meses)'};
+  return {valor:_holtLineal(s,0.5,0.3), metodo:'Holt (nivel + tendencia)'};
+}
+
+// Caches del ultimo calculo, para que filtros y descarga reusen lo ya procesado.
+let _supBodegas=[], _supHomologos=[], _supPlan=[], _supGlobal=null;
+const SUP_MAX_FILAS=250;   // tope de filas en pantalla (el Excel siempre sale completo)
+
+function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
+  const tb=document.querySelector('#tblSupReq tbody');
+  if(!tb) return;
+  const diagEl=document.getElementById('supDiag');
+  const base=(rowsVigentes && rowsVigentes.length) ? rowsVigentes : [];
+
+  if(!base.length){
+    _supBodegas=[]; _supHomologos=[]; _supPlan=[]; _supGlobal=null;
+    const st=document.getElementById('statsSup'); if(st) st.innerHTML='';
+    if(diagEl){ diagEl.style.display=''; diagEl.innerHTML='<b>Sin datos.</b> Carga las tablas y pulsa <b>Calcular indicadores</b> para ver la base de supervisores.'; }
+    pintarBaseSupervisores();
+    return;
+  }
+
+  // Mismo alcance que el resto del visor: solo dispensas activas y respetando
+  // los filtros de bodega y zona de la barra superior.
+  const rows=soloActivas(base).filter(r=>{
+    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    return true;
+  });
+
+  /* ---- Acumulado por homologo + bodega -----------------------------------
+     meses: serie mensual de Cantidad Autorizada (el consumo que se debio cubrir).
+     existencia: se lee una sola vez por homologo+bodega (viene repetida en cada
+     linea, sumarla en todas las lineas inflaria el inventario).             */
+  const agg=new Map();
+  const mesesGlobal=new Set();
+  let sinZona=0;
+  const zonasFuera=new Set();
+  rows.forEach(r=>{
+    const hom=r.homologo;
+    if(!hom) return;                       // codigo sin homologar: no entra al requerimiento
+    const zn=supZonaDeLinea(r);
+    if(!zn){ sinZona++; if(r.zona) zonasFuera.add(r.zona); return; }
+    const bod=r.bodegaDetalle || 'SIN BODEGA';
+    const k=hom+'|'+normValue(bod);
+    let g=agg.get(k);
+    if(!g){
+      g={hom, bodega:bod, zona:zn, existencia:null, pend:0, lineas:0, lineasPend:0, meses:new Map()};
+      agg.set(k,g);
+    }
+    if(g.existencia===null) g.existencia=Number(r.existenciaPunto)||0;
+    const mes=mesDeDispensacion(r);
+    if(mes){
+      g.meses.set(mes, (g.meses.get(mes)||0) + (Number(r.cantidadAutorizada)||0));
+      mesesGlobal.add(mes);
+    }
+    g.lineas++;
+    if(r.lineaPendiente==='SI'){ g.lineasPend++; g.pend += Math.abs(Number(r.diferencia)||0); }
+  });
+
+  // Rango completo de meses del periodo: los meses sin dispensacion cuentan como 0
+  // para que el pronostico no confunda un mes sin consumo con un mes inexistente.
+  const mesesOrden=[...mesesGlobal].sort();
+  const serieDe=(mapMeses)=>{
+    if(!mesesOrden.length) return [];
+    const propios=[...mapMeses.keys()].sort();
+    if(!propios.length) return [];
+    const desde=mesesOrden.indexOf(propios[0]);
+    const hasta=mesesOrden.length-1;
+    const out=[];
+    for(let i=Math.max(0,desde); i<=hasta; i++) out.push(mapMeses.get(mesesOrden[i])||0);
+    return out;
+  };
+
+  // ---- Nivel bodega: consumo pronosticado, existencia, pendiente, requerido ----
+  _supBodegas=[...agg.values()].map(g=>{
+    const serie=serieDe(g.meses);
+    const pr=pronosticoConsumoMensual(serie);
+    const consumo=Math.round(pr.valor);
+    const existencia=g.existencia||0;
+    const requerido=consumo + g.pend;
+    const balance=existencia - requerido;      // + excedente / - faltante
+    return {
+      supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
+      meses:serie.length, metodo:pr.metodo, consumo, existencia, pend:g.pend,
+      requerido, balance, lineas:g.lineas, lineasPend:g.lineasPend
+    };
+  });
+
+  // ---- Nivel zona: una fila por supervisor + homologo (Tabla 1) ----
+  const porZonaHom=new Map();
+  _supBodegas.forEach(b=>{
+    const k=b.zona+'|'+b.hom;
+    let z=porZonaHom.get(k);
+    if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, consumo:0, existencia:0, pend:0, requerido:0,
+               bodegas:0, bodegasDeficit:0, bodegasExced:0, faltante:0, excedente:0, meses:0, metodo:b.metodo};
+            porZonaHom.set(k,z); }
+    z.consumo+=b.consumo; z.existencia+=b.existencia; z.pend+=b.pend; z.requerido+=b.requerido;
+    z.bodegas++;
+    if(b.balance<0){ z.bodegasDeficit++; z.faltante += -b.balance; }
+    else if(b.balance>0){ z.bodegasExced++; z.excedente += b.balance; }
+    z.meses=Math.max(z.meses, b.meses);
+  });
+  _supHomologos=[...porZonaHom.values()].map(z=>{
+    z.balance = z.existencia - z.requerido;
+    z.cobertura = z.requerido>0 ? z.existencia/z.requerido : null;
+    // Cuanto se puede tapar moviendo inventario dentro de la zona y cuanto habria que comprar.
+    z.cubreConTraslado = Math.min(z.faltante, z.excedente);
+    z.porComprar = Math.max(0, z.faltante - z.excedente);
+    return z;
+  });
+
+  /* ---- Tabla 2: plan de redistribucion dentro de la misma zona -------------
+     Por cada zona y homologo, las bodegas con excedente (Existencia - Total
+     requerido > 0) le entregan unidades a las bodegas con faltante, de mayor a
+     menor, hasta agotar el excedente. Nunca se cruza informacion entre zonas.  */
+  const porZonaHomBodegas=new Map();
+  _supBodegas.forEach(b=>{
+    const k=b.zona+'|'+b.hom;
+    if(!porZonaHomBodegas.has(k)) porZonaHomBodegas.set(k, []);
+    porZonaHomBodegas.get(k).push(b);
+  });
+  _supPlan=[];
+  porZonaHomBodegas.forEach(lista=>{
+    const origen=lista.filter(b=>b.balance>0).map(b=>({bodega:b.bodega, disp:b.balance}))
+      .sort((a,b)=>b.disp-a.disp);
+    const destino=lista.filter(b=>b.balance<0).map(b=>({bodega:b.bodega, falta:-b.balance, req:b.requerido, exi:b.existencia}))
+      .sort((a,b)=>b.falta-a.falta);
+    if(!origen.length || !destino.length) return;
+    const ref=lista[0];
+    let i=0;
+    destino.forEach(d=>{
+      let falta=d.falta;
+      while(falta>0 && i<origen.length){
+        const o=origen[i];
+        if(o.disp<=0){ i++; continue; }
+        const mov=Math.min(o.disp, falta);
+        if(mov>0){
+          _supPlan.push({
+            supervisor:ref.supervisor, zona:ref.zona, hom:ref.hom,
+            origen:o.bodega, destino:d.bodega, unidades:mov,
+            faltaDestino:d.falta, requeridoDestino:d.req, existenciaDestino:d.exi,
+            sobranteOrigen:o.disp-mov
+          });
+          o.disp-=mov; falta-=mov;
+        }
+        if(o.disp<=0) i++;
+      }
+    });
+  });
+  _supPlan.sort((a,b)=> a.zona.localeCompare(b.zona,'es') || b.unidades-a.unidades || a.hom.localeCompare(b.hom,'es'));
+
+  _supGlobal={
+    lineas:rows.length, sinZona, zonasFuera:[...zonasFuera].sort((a,b)=>a.localeCompare(b,'es')),
+    meses:mesesOrden.length, desde:mesesOrden[0]||'', hasta:mesesOrden[mesesOrden.length-1]||''
+  };
+
+  if(diagEl){
+    const avisos=[];
+    if(sinZona>0){
+      avisos.push('<b>'+fmtInt(sinZona)+'</b> líneas activas no quedaron en ninguna de las 11 zonas de la matriz'+
+        (_supGlobal.zonasFuera.length ? ' (zona en el archivo: '+escHtml(_supGlobal.zonasFuera.join(', '))+')' : '')+'.');
+    }
+    if(mesesOrden.length<3){
+      avisos.push('Solo hay <b>'+fmtInt(mesesOrden.length)+'</b> mes(es) de historia: el consumo se estima con promedio simple. Con 8 meses o más el pronóstico ya usa Holt-Winters.');
+    }
+    if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
+    else { diagEl.style.display='none'; diagEl.innerHTML=''; }
+  }
+
+  // Selectores de la pestana.
+  const selS=document.getElementById('fSupSupervisor');
+  if(selS){
+    const prev=selS.value;
+    selS.innerHTML='<option value="">Todos los supervisores</option>'+
+      SUPERVISORES_ZONA.map(s=>'<option value="'+escHtml(s.nombre)+'">'+escHtml(s.nombre)+'</option>').join('');
+    if(prev) selS.value=prev;
+  }
+  const selZ=document.getElementById('fSupZona');
+  if(selZ){
+    const prev=selZ.value;
+    selZ.innerHTML='<option value="">Todas las zonas</option>'+
+      ZONAS_SUPERVISOR.map(z=>'<option value="'+escHtml(z)+'">'+escHtml(z)+'</option>').join('');
+    if(prev) selZ.value=prev;
+  }
+
+  pintarBaseSupervisores();
+}
+
+// Filtros de la pestana: supervisor, zona y busqueda por homologo.
+function _supFiltrosActuales(){
+  return {
+    sup:(document.getElementById('fSupSupervisor')||{}).value || '',
+    zona:(document.getElementById('fSupZona')||{}).value || '',
+    hom:normValue((document.getElementById('fSupHomologo')||{}).value || ''),
+    soloFalta:!!(document.getElementById('fSupSoloFaltante')||{}).checked
+  };
+}
+function _supVisible(t, f){
+  if(f.sup && t.supervisor!==f.sup) return false;
+  if(f.zona && t.zona!==f.zona) return false;
+  if(f.hom && !normValue(t.hom).includes(f.hom)) return false;
+  return true;
+}
+
+function pintarBaseSupervisores(){
+  const tb=document.querySelector('#tblSupReq tbody');
+  const tbPlan=document.querySelector('#tblSupPlan tbody');
+  if(!tb) return;
+  const statsEl=document.getElementById('statsSup');
+  const f=_supFiltrosActuales();
+
+  if(!_supHomologos.length){
+    tb.innerHTML='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    if(tbPlan) tbPlan.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    if(statsEl) statsEl.innerHTML='';
+    return;
+  }
+
+  let filas=_supHomologos.filter(t=>_supVisible(t, f));
+  if(f.soloFalta) filas=filas.filter(t=>t.faltante>0);
+  const plan=_supPlan.filter(p=>_supVisible(p, f));
+
+  // ---- KPIs ----
+  const zonas=new Set(filas.map(t=>t.zona));
+  const conFalta=filas.filter(t=>t.faltante>0);
+  const totFalta=conFalta.reduce((a,b)=>a+b.faltante,0);
+  const totTraslado=plan.reduce((a,b)=>a+b.unidades,0);
+  const totComprar=filas.reduce((a,b)=>a+b.porComprar,0);
+  const totReq=filas.reduce((a,b)=>a+b.requerido,0);
+  const totExi=filas.reduce((a,b)=>a+b.existencia,0);
+  if(statsEl){
+    const G=_supGlobal||{meses:0,desde:'',hasta:''};
+    const per=G.desde ? (G.desde+' a '+G.hasta) : 'sin periodo';
+    statsEl.innerHTML =
+      '<div class="stat"><div class="label">Zonas en la selección</div><div class="value">'+fmtInt(zonas.size)+'</div>'+
+      '<div class="sub">de '+fmtInt(ZONAS_SUPERVISOR.length)+' zonas con supervisor</div></div>'+
+      '<div class="stat"><div class="label">Homólogos evaluados</div><div class="value">'+fmtInt(filas.length)+'</div>'+
+      '<div class="sub">'+fmtInt(G.meses)+' meses de historia · '+escHtml(per)+'</div></div>'+
+      '<div class="stat"><div class="label">Total requerido</div><div class="value">'+fmtInt(totReq)+'</div>'+
+      '<div class="sub">'+fmtInt(totExi)+' unidades en existencia</div></div>'+
+      '<div class="stat"><div class="label">Unidades faltantes</div><div class="value '+(totFalta?'pct-bad':'')+'">'+fmtInt(totFalta)+'</div>'+
+      '<div class="sub">'+fmtInt(conFalta.length)+' homólogos por debajo de lo requerido</div></div>'+
+      '<div class="stat"><div class="label">Se cubre con traslados</div><div class="value">'+fmtInt(totTraslado)+'</div>'+
+      '<div class="sub">'+fmtInt(plan.length)+' movimientos dentro de la misma zona</div></div>'+
+      '<div class="stat"><div class="label">Habría que comprar</div><div class="value '+(totComprar?'pct-mid':'')+'">'+fmtInt(totComprar)+'</div>'+
+      '<div class="sub">unidades que la zona no alcanza a cubrir</div></div>';
+  }
+
+  // ---- Tabla 1: requerimiento por homologo ----
+  const orden=filas.slice().sort((a,b)=>
+    b.faltante-a.faltante || b.requerido-a.requerido ||
+    a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es'));
+  const vista=orden.slice(0, SUP_MAX_FILAS);
+  let h=vista.map(t=>
+    '<tr><td class="txt"><b>'+escHtml(t.supervisor)+'</b></td>'+
+    '<td class="txt">'+escHtml(t.zona)+'</td>'+
+    '<td class="txt">'+escHtml(t.hom)+'</td>'+
+    '<td>'+fmtInt(t.consumo)+'</td>'+
+    '<td>'+fmtInt(t.existencia)+'</td>'+
+    '<td class="'+(t.pend?'pct-bad':'')+'">'+fmtInt(t.pend)+'</td>'+
+    '<td><b>'+fmtInt(t.requerido)+'</b></td>'+
+    '<td class="'+(t.balance<0?'pct-bad':'pct-good')+'">'+fmtInt(t.balance)+'</td>'+
+    '<td class="'+effClass(t.cobertura)+'">'+fmtPct(t.cobertura)+'</td>'+
+    '<td>'+fmtInt(t.bodegas)+(t.bodegasDeficit?' <span class="pct-bad">('+fmtInt(t.bodegasDeficit)+' cortas)</span>':'')+'</td></tr>'
+  ).join('');
+  if(!vista.length) h='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
+  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="10">Se muestran los '+fmtInt(vista.length)+
+    ' homólogos con mayor faltante de '+fmtInt(orden.length)+'. El Excel trae la lista completa.</td></tr>';
+  tb.innerHTML=h;
+
+  // ---- Tabla 2: plan de redistribucion ----
+  if(tbPlan){
+    const vistaPlan=plan.slice(0, SUP_MAX_FILAS);
+    let hp=vistaPlan.map(p=>
+      '<tr><td class="txt">'+escHtml(p.zona)+'</td>'+
+      '<td class="txt">'+escHtml(p.hom)+'</td>'+
+      '<td class="txt">'+escHtml(p.origen)+'</td>'+
+      '<td class="txt">'+escHtml(p.destino)+'</td>'+
+      '<td><b>'+fmtInt(p.unidades)+'</b></td>'+
+      '<td>'+fmtInt(p.faltaDestino)+'</td>'+
+      '<td>'+fmtInt(p.sobranteOrigen)+'</td></tr>'
+    ).join('');
+    if(!vistaPlan.length) hp='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados posibles: dentro de la zona no hay bodegas con excedente para las que están cortas.</td></tr>';
+    else if(plan.length>vistaPlan.length) hp+='<tr class="total-row"><td class="txt" colspan="7">Se muestran '+fmtInt(vistaPlan.length)+
+      ' de '+fmtInt(plan.length)+' movimientos. El Excel trae el plan completo.</td></tr>';
+    tbPlan.innerHTML=hp;
+  }
+}
+
+(function initBaseSupervisores(){
+  ['fSupSupervisor','fSupZona','fSupSoloFaltante'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.addEventListener('change', pintarBaseSupervisores);
+  });
+  const inp=document.getElementById('fSupHomologo');
+  if(inp) inp.addEventListener('input', pintarBaseSupervisores);
+  // Al elegir supervisor se sincroniza la zona (hay un supervisor por zona) y viceversa.
+  const selS=document.getElementById('fSupSupervisor');
+  const selZ=document.getElementById('fSupZona');
+  if(selS && selZ){
+    selS.addEventListener('change', ()=>{
+      const s=SUPERVISORES_ZONA.find(x=>x.nombre===selS.value);
+      selZ.value = s ? s.zona : '';
+      pintarBaseSupervisores();
+    });
+    selZ.addEventListener('change', ()=>{
+      selS.value = selZ.value ? supervisorDeZona(selZ.value) : '';
+      pintarBaseSupervisores();
+    });
+  }
+  const btn=document.getElementById('btnExportSup');
+  if(btn) btn.addEventListener('click', ()=>{
+    if(!_supHomologos.length){ showToast('Primero calcula los indicadores.', true); return; }
+    const f=_supFiltrosActuales();
+    let filas=_supHomologos.filter(t=>_supVisible(t, f));
+    if(f.soloFalta) filas=filas.filter(t=>t.faltante>0);
+    if(!filas.length){ showToast('No hay homólogos para los filtros elegidos.', true); return; }
+    const plan=_supPlan.filter(p=>_supVisible(p, f));
+    const detalle=_supBodegas.filter(b=>_supVisible(b, f));
+
+    const hoja1=filas.slice().sort((a,b)=> b.faltante-a.faltante || b.requerido-a.requerido).map(t=>({
+      'Supervisor':t.supervisor, 'Zona':t.zona, 'Homologo':t.hom,
+      'Consumo promedio mensual (Holt-Winters)':t.consumo,
+      'Existencia':t.existencia, 'Unidades pendientes':t.pend,
+      'Total requerido':t.requerido, 'Balance (existencia - requerido)':t.balance,
+      '% Cobertura':t.cobertura===null?'':+(t.cobertura*100).toFixed(1),
+      'Bodegas':t.bodegas, 'Bodegas cortas':t.bodegasDeficit,
+      'Unidades faltantes':t.faltante, 'Se cubre con traslado':t.cubreConTraslado,
+      'Por comprar':t.porComprar, 'Meses de historia':t.meses
+    }));
+    const hoja2=plan.map(p=>({
+      'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':p.hom,
+      'Bodega origen (excedente)':p.origen, 'Bodega destino (faltante)':p.destino,
+      'Unidades a trasladar':p.unidades,
+      'Faltante del destino':p.faltaDestino, 'Total requerido destino':p.requeridoDestino,
+      'Existencia destino':p.existenciaDestino, 'Excedente que queda en origen':p.sobranteOrigen
+    }));
+    const hoja3=detalle.slice().sort((a,b)=>
+      a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es') || a.bodega.localeCompare(b.bodega,'es')).map(b=>({
+      'Supervisor':b.supervisor, 'Zona':b.zona, 'Homologo':b.hom, 'Bodega':b.bodega,
+      'Consumo promedio mensual':b.consumo, 'Metodo de pronostico':b.metodo, 'Meses de historia':b.meses,
+      'Existencia':b.existencia, 'Unidades pendientes':b.pend, 'Total requerido':b.requerido,
+      'Balance':b.balance, 'Lineas':b.lineas, 'Lineas pendientes':b.lineasPend
+    }));
+    const fecha=new Date().toISOString().slice(0,10);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja1), 'REQUERIMIENTO POR HOMOLOGO');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja2), 'PLAN DE REDISTRIBUCION');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja3), 'DETALLE POR BODEGA');
+    XLSX.writeFile(wb, 'Base_Supervisores_'+fecha+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(hoja1.length)+' homólogos y '+fmtInt(hoja2.length)+' traslados sugeridos.');
+  });
+})();
+
+/* =========================================================================
    14. Navegación entre los tableros de resultados
    ========================================================================= */
 document.querySelectorAll('.result-tabs button').forEach(b=>{
@@ -6168,6 +6605,7 @@ document.querySelectorAll('.result-tabs button').forEach(b=>{
     if(b.dataset.sub==='traslados' && typeof renderIndicadorTraslados==='function') renderIndicadorTraslados();
     if(b.dataset.sub==='invfisico' && typeof refrescarInvFisico==='function') refrescarInvFisico(true);
     if(b.dataset.sub==='cuentas' && typeof pintarBaseCuentas==='function') pintarBaseCuentas();
+    if(b.dataset.sub==='supervisores' && typeof pintarBaseSupervisores==='function') pintarBaseSupervisores();
   });
 });
 
