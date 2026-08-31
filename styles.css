@@ -642,6 +642,20 @@ footer.foot{margin-top:50px;padding-top:16px;border-top:1px solid var(--line);fo
   #sub-cuentas table.data thead th{font-size:9.5px;padding:6px 6px;}
 }
 
+/* ---------------- base supervisores ---------------- */
+.chk{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:#C7D2DD;cursor:pointer;white-space:nowrap;}
+.chk input{width:15px;height:15px;accent-color:#3AA0FF;cursor:pointer;}
+#sub-supervisores table.data{font-size:11.5px;}
+#sub-supervisores table.data thead th{font-size:10px;}
+#sub-supervisores table.data tbody td.txt{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#sub-supervisores table.data tbody tr.total-row td:first-child{max-width:none;white-space:normal;}
+
+@media (max-width:1280px){
+  #sub-supervisores table.data{font-size:11px;}
+  #sub-supervisores table.data tbody td{padding:4px 6px;}
+  #sub-supervisores table.data thead th{font-size:9.5px;padding:6px 6px;}
+}
+
 /* ---------------- responsive ---------------- */
 @media (max-width:1000px){
   .app{padding:0 16px 60px;}
