@@ -2029,8 +2029,11 @@ function renderAllTablesFromCache(){
   if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
   // Base cuentas: la matriz usa el estado actual y la evolución por cortes el historial.
   if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
-  // Base supervisores: requerimiento por homologo y plan de traslados dentro de la zona.
-  if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(rowsVigentes, bodegaSearch, zona);
+  // Base supervisores: necesita el historial completo (todos los meses) para el
+  // pronostico Holt-Winters, asi que se toman las filas vigentes SIN filtro de mes.
+  const _pAll=state.processed||null;
+  const rowsVigentesFull = _pAll ? _pAll.rows.filter(r=>r.versionVigente!==false) : rowsVigentes;
+  if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(rowsVigentesFull, bodegaSearch, zona);
   // El detalle por factura usa la cantidad pendiente del reporte, así que se
   // repinta cada vez que cambian los filtros generales.
   if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
@@ -6183,14 +6186,47 @@ function supZonaDeLinea(r){
 }
 function supervisorDeZona(zona){ return zona ? ('Supervisor '+zona) : ''; }
 
+/* ---- Historia acumulativa: el mes en curso llega incompleto -----------------
+   El visor se alimenta con cargues ACUMULATIVOS: cada reporte nuevo agrega dias
+   al mes que todavia esta corriendo. Si ese mes entra crudo a la serie, el
+   pronostico lee una caida que no existe y subestima el consumo. Regla:
+     · mes con 60% o mas del calendario cargado -> se proyecta a mes completo
+       (se divide por la fraccion de dias observada) y se usa en la serie;
+     · mes con menos del 60% cargado            -> se saca de la serie y solo
+       se informa, para no pronosticar sobre 3 o 4 dias de datos.
+   Un mes se considera cerrado cuando ya trae dispensaciones del ultimo dia.  */
+const SUP_FRACCION_MES_MINIMA=0.6;   // minimo del mes cargado para poder proyectarlo
+const SUP_PHI=0.85;                  // amortiguacion de la tendencia (damped trend)
+// Dias del calendario de un mes 'AAAA-MM'.
+function _diasDelMes(key){
+  const m=/^(\d{4})-(\d{2})$/.exec(String(key||''));
+  if(!m) return 30;
+  return new Date(Date.UTC(+m[1], +m[2], 0)).getUTCDate();
+}
+// Estado de cierre de un mes segun el ultimo dia con dispensacion cargada.
+function _cierreDelMes(key, diaMax){
+  const dias=_diasDelMes(key);
+  const dia=Math.max(0, Math.min(dias, Number(diaMax)||0));
+  const frac=dias>0 ? dia/dias : 0;
+  return {
+    dias, dia, frac,
+    cerrado: dia>=dias-1,                    // ya llego el final del mes
+    proyectable: frac>=SUP_FRACCION_MES_MINIMA,
+    factor: frac>0 ? 1/frac : 0
+  };
+}
+
 /* ---- Pronostico del consumo mensual ---------------------------------------
-   Holt-Winters aditivo (nivel + tendencia + estacionalidad) sobre la serie
-   mensual de Cantidad Autorizada. Cuando la serie es corta todavia no hay
-   estacionalidad medible, asi que el metodo se degrada solo:
-     · 24 meses o mas  -> Holt-Winters con ciclo de 12 meses
-     · 8 meses o mas   -> Holt-Winters con ciclo de 4 meses (trimestral)
-     · 3 meses o mas   -> Holt (nivel + tendencia, sin estacionalidad)
+   Holt-Winters aditivo con tendencia amortiguada (nivel + tendencia + esta-
+   cionalidad) sobre la serie mensual de Cantidad Autorizada, ya normalizada a
+   meses completos. Como la historia crece mes a mes, el metodo se elige por la
+   cantidad de CICLOS COMPLETOS disponibles y nunca inventa estacionalidad:
+     · 24 meses o mas  -> Holt-Winters con ciclo de 12 meses (2 años completos)
+     · 8 meses o mas   -> Holt-Winters con ciclo de 4 meses (2 trimestres)
+     · 3 meses o mas   -> Holt amortiguado (nivel + tendencia, sin estacionalidad)
      · menos de 3      -> promedio simple
+   La tendencia se amortigua para que una historia corta y creciente no proyecte
+   consumos explosivos, y el resultado se acota al maximo mes observado + 50%.
    Siempre devuelve un valor >= 0 (no existe consumo negativo).            */
 function _hwSuavizadoAditivo(serie, m, alpha, beta, gamma){
   const n=serie.length;
@@ -6210,32 +6246,38 @@ function _hwSuavizadoAditivo(serie, m, alpha, beta, gamma){
   for(let t=0;t<n;t++){
     const idx=t%m;
     const nivelAnt=nivel;
-    nivel = alpha*(serie[t]-est[idx]) + (1-alpha)*(nivelAnt+tend);
-    tend  = beta*(nivel-nivelAnt) + (1-beta)*tend;
+    nivel = alpha*(serie[t]-est[idx]) + (1-alpha)*(nivelAnt+SUP_PHI*tend);
+    tend  = beta*(nivel-nivelAnt) + (1-beta)*SUP_PHI*tend;
     est[idx] = gamma*(serie[t]-nivel) + (1-gamma)*est[idx];
   }
-  return Math.max(0, nivel + tend + est[n%m]);
+  return Math.max(0, nivel + SUP_PHI*tend + est[n%m]);
 }
 function _holtLineal(serie, alpha, beta){
   let nivel=serie[0];
   let tend=serie[1]-serie[0];
   for(let t=1;t<serie.length;t++){
     const nivelAnt=nivel;
-    nivel = alpha*serie[t] + (1-alpha)*(nivelAnt+tend);
-    tend  = beta*(nivel-nivelAnt) + (1-beta)*tend;
+    nivel = alpha*serie[t] + (1-alpha)*(nivelAnt+SUP_PHI*tend);
+    tend  = beta*(nivel-nivelAnt) + (1-beta)*SUP_PHI*tend;
   }
-  return Math.max(0, nivel + tend);
+  return Math.max(0, nivel + SUP_PHI*tend);
+}
+// Tope de seguridad: con historia corta el suavizado puede dispararse.
+function _acotarPronostico(valor, s){
+  const max=s.reduce((a,b)=>Math.max(a,b), 0);
+  if(max<=0) return 0;
+  return Math.max(0, Math.min(valor, max*1.5));
 }
 function pronosticoConsumoMensual(serie){
   const s=(serie||[]).map(v=>Number(v)||0);
   const n=s.length;
   if(!n) return {valor:0, metodo:'Sin datos'};
   if(n<3){
-    return {valor:Math.max(0, s.reduce((a,b)=>a+b,0)/n), metodo:'Promedio ('+n+' mes'+(n>1?'es':'')+')'};
+    return {valor:Math.max(0, s.reduce((a,b)=>a+b,0)/n), metodo:'Promedio ('+n+' mes'+(n>1?'es':'')+' completo'+(n>1?'s':'')+')'};
   }
-  if(n>=24) return {valor:_hwSuavizadoAditivo(s,12,0.4,0.1,0.3), metodo:'Holt-Winters (ciclo 12 meses)'};
-  if(n>=8)  return {valor:_hwSuavizadoAditivo(s,4,0.4,0.1,0.3),  metodo:'Holt-Winters (ciclo 4 meses)'};
-  return {valor:_holtLineal(s,0.5,0.3), metodo:'Holt (nivel + tendencia)'};
+  if(n>=24) return {valor:_acotarPronostico(_hwSuavizadoAditivo(s,12,0.4,0.1,0.3), s), metodo:'Holt-Winters (ciclo 12 meses)'};
+  if(n>=8)  return {valor:_acotarPronostico(_hwSuavizadoAditivo(s,4,0.4,0.1,0.3), s),  metodo:'Holt-Winters (ciclo 4 meses)'};
+  return {valor:_acotarPronostico(_holtLineal(s,0.5,0.3), s), metodo:'Holt amortiguado (nivel + tendencia)'};
 }
 
 // Caches del ultimo calculo, para que filtros y descarga reusen lo ya procesado.
@@ -6270,6 +6312,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
      linea, sumarla en todas las lineas inflaria el inventario).             */
   const agg=new Map();
   const mesesGlobal=new Set();
+  const diaMaxMes=new Map();   // ultimo dia con dispensacion cargada en cada mes
   let sinZona=0;
   const zonasFuera=new Set();
   rows.forEach(r=>{
@@ -6289,22 +6332,62 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     if(mes){
       g.meses.set(mes, (g.meses.get(mes)||0) + (Number(r.cantidadAutorizada)||0));
       mesesGlobal.add(mes);
+      // Se guarda el dia mas avanzado del mes para saber si ya esta cerrado.
+      const dt=toDateSafe(r.fecha);
+      if(dt && !isNaN(dt)){
+        const d=dt.getUTCDate();
+        if(d>(diaMaxMes.get(mes)||0)) diaMaxMes.set(mes, d);
+      }
     }
     g.lineas++;
     if(r.lineaPendiente==='SI'){ g.lineasPend++; g.pend += Math.abs(Number(r.diferencia)||0); }
   });
 
-  // Rango completo de meses del periodo: los meses sin dispensacion cuentan como 0
-  // para que el pronostico no confunda un mes sin consumo con un mes inexistente.
-  const mesesOrden=[...mesesGlobal].sort();
+  /* ---- Normalizacion de la historia acumulativa ---------------------------
+     Se recorren los meses en orden y se clasifica cada uno segun cuanto del
+     calendario alcanzo a cargarse. El ultimo mes casi siempre viene incompleto
+     porque el reporte es acumulativo: se proyecta a mes completo si ya tiene al
+     menos el 60% de los dias, y se descarta de la serie si trae menos. Los meses
+     intermedios se toman como cerrados (su informacion ya llego completa).   */
+  const mesesTodos=[...mesesGlobal].sort();
+  const mesesInfo=mesesTodos.map((k,i)=>{
+    const c=_cierreDelMes(k, diaMaxMes.get(k)||0);
+    const esUltimo=(i===mesesTodos.length-1);
+    // Solo el mes mas reciente puede estar abierto; los anteriores ya cerraron.
+    const abierto = esUltimo && !c.cerrado;
+    return {
+      mes:k, dias:c.dias, dia:c.dia, frac:c.frac, abierto,
+      factor: abierto ? c.factor : 1,
+      usable: abierto ? c.proyectable : true
+    };
+  });
+  // Meses que efectivamente alimentan el pronostico (con su factor de ajuste).
+  // Si el unico mes cargado esta abierto no se puede descartar: se proyecta igual,
+  // porque de lo contrario la tabla quedaria en cero por falta de historia.
+  let mesesUsados=mesesInfo.filter(m=>m.usable);
+  if(!mesesUsados.length && mesesInfo.length){
+    mesesUsados=mesesInfo.map(m=>Object.assign({}, m, {usable:true}));
+  }
+  const mesesOrden=mesesUsados.map(m=>m.mes);
+  const factorMes=new Map(mesesUsados.map(m=>[m.mes, m.factor]));
+  const mesParcial=mesesInfo.find(m=>m.abierto) || null;
+  // Un mes solo se declara "excluido" si de verdad no entro a la serie final.
+  const mesExcluido=mesesTodos.find(k=>!factorMes.has(k)) || '';
+  const parcialEnSerie = !!(mesParcial && factorMes.has(mesParcial.mes));
+
+  /* Serie mensual de un homologo+bodega: se completa con ceros en los meses sin
+     dispensacion y se lleva a "mes equivalente completo" el mes en curso.    */
   const serieDe=(mapMeses)=>{
     if(!mesesOrden.length) return [];
-    const propios=[...mapMeses.keys()].sort();
+    const propios=mesesOrden.filter(k=>mapMeses.has(k));
     if(!propios.length) return [];
     const desde=mesesOrden.indexOf(propios[0]);
-    const hasta=mesesOrden.length-1;
     const out=[];
-    for(let i=Math.max(0,desde); i<=hasta; i++) out.push(mapMeses.get(mesesOrden[i])||0);
+    for(let i=Math.max(0,desde); i<mesesOrden.length; i++){
+      const k=mesesOrden[i];
+      const v=mapMeses.get(k)||0;
+      out.push(Math.round(v*(factorMes.get(k)||1)));
+    }
     return out;
   };
 
@@ -6388,7 +6471,11 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
 
   _supGlobal={
     lineas:rows.length, sinZona, zonasFuera:[...zonasFuera].sort((a,b)=>a.localeCompare(b,'es')),
-    meses:mesesOrden.length, desde:mesesOrden[0]||'', hasta:mesesOrden[mesesOrden.length-1]||''
+    meses:mesesOrden.length, desde:mesesOrden[0]||'', hasta:mesesOrden[mesesOrden.length-1]||'',
+    mesesCargados:mesesTodos.length,
+    parcial: mesParcial ? {mes:mesParcial.mes, dia:mesParcial.dia, dias:mesParcial.dias,
+                           pct:Math.round(mesParcial.frac*100), usado:parcialEnSerie} : null,
+    excluido: mesExcluido || ''
   };
 
   if(diagEl){
@@ -6397,8 +6484,23 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       avisos.push('<b>'+fmtInt(sinZona)+'</b> líneas activas no quedaron en ninguna de las 11 zonas de la matriz'+
         (_supGlobal.zonasFuera.length ? ' (zona en el archivo: '+escHtml(_supGlobal.zonasFuera.join(', '))+')' : '')+'.');
     }
+    // La historia es acumulativa: se explica que paso con el mes que sigue abierto.
+    if(mesParcial){
+      const et=mesLabel(mesParcial.mes)+' va al día '+fmtInt(mesParcial.dia)+' de '+fmtInt(mesParcial.dias)+
+               ' ('+fmtInt(_supGlobal.parcial.pct)+'% del mes)';
+      if(parcialEnSerie){
+        avisos.push(et+': se proyecta a mes completo para no subestimar el consumo.');
+      } else {
+        avisos.push(et+': queda <b>fuera del pronóstico</b> hasta que acumule más días. '+
+          'El consumo se estima con los '+fmtInt(mesesOrden.length)+' mes(es) ya cerrados.');
+      }
+    }
     if(mesesOrden.length<3){
-      avisos.push('Solo hay <b>'+fmtInt(mesesOrden.length)+'</b> mes(es) de historia: el consumo se estima con promedio simple. Con 8 meses o más el pronóstico ya usa Holt-Winters.');
+      avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> mes(es) completo(s) el consumo se estima con promedio simple. '+
+        'A partir de 3 meses se usa tendencia y desde 8 meses se activa Holt-Winters; la historia crece con cada cargue.');
+    } else if(mesesOrden.length<8){
+      avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> meses el pronóstico usa nivel y tendencia amortiguada. '+
+        'Desde 8 meses se activa Holt-Winters con estacionalidad.');
     }
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
@@ -6467,12 +6569,17 @@ function pintarBaseSupervisores(){
   const totExi=filas.reduce((a,b)=>a+b.existencia,0);
   if(statsEl){
     const G=_supGlobal||{meses:0,desde:'',hasta:''};
-    const per=G.desde ? (G.desde+' a '+G.hasta) : 'sin periodo';
+    const per=G.desde ? (mesLabel(G.desde)+' a '+mesLabel(G.hasta)) : 'sin periodo';
+    // La historia es acumulativa: se aclara cuantos meses completos alimentan el pronostico.
+    const notaMes = G.parcial
+      ? (G.parcial.usado ? ' · '+mesLabel(G.parcial.mes)+' proyectado al '+fmtInt(G.parcial.pct)+'%'
+                         : ' · '+mesLabel(G.parcial.mes)+' aún incompleto (excluido)')
+      : '';
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Zonas en la selección</div><div class="value">'+fmtInt(zonas.size)+'</div>'+
       '<div class="sub">de '+fmtInt(ZONAS_SUPERVISOR.length)+' zonas con supervisor</div></div>'+
       '<div class="stat"><div class="label">Homólogos evaluados</div><div class="value">'+fmtInt(filas.length)+'</div>'+
-      '<div class="sub">'+fmtInt(G.meses)+' meses de historia · '+escHtml(per)+'</div></div>'+
+      '<div class="sub">'+fmtInt(G.meses)+' meses en el pronóstico · '+escHtml(per)+escHtml(notaMes)+'</div></div>'+
       '<div class="stat"><div class="label">Total requerido</div><div class="value">'+fmtInt(totReq)+'</div>'+
       '<div class="sub">'+fmtInt(totExi)+' unidades en existencia</div></div>'+
       '<div class="stat"><div class="label">Unidades faltantes</div><div class="value '+(totFalta?'pct-bad':'')+'">'+fmtInt(totFalta)+'</div>'+
