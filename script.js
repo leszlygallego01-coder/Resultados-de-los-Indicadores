@@ -6322,6 +6322,37 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     return true;
   });
 
+  /* ---- Cruces auxiliares para la Tabla 1 ---------------------------------
+     homologo -> Descripcion DCI y codigo -> homologo se arman con el propio
+     reporte enriquecido (cada linea ya trae ambos datos). El codigo sirve para
+     llevar las cantidades de Traslados y de Facturas al homologo correcto.  */
+  const homDci=new Map();
+  const codHom=new Map();
+  base.forEach(r=>{
+    if(!r.homologo) return;
+    if(!homDci.get(r.homologo) && r.descripcionDci) homDci.set(r.homologo, r.descripcionDci);
+    if(r.codigoArticulo && !codHom.has(r.codigoArticulo)) codHom.set(r.codigoArticulo, r.homologo);
+  });
+
+  /* Unidades recibidas por traslado (tabla Traslados, por bodega DESTINO) y
+     unidades compradas (tabla Facturas, por punto de venta), sumadas por
+     homologo + bodega para mostrarlas al lado de la existencia.             */
+  const proc=(typeof state!=='undefined' && state && state.processed) ? state.processed : {};
+  const trasMap=new Map();
+  (proc.traslados||[]).forEach(t=>{
+    const hom=codHom.get(normValue(t.codigo));
+    if(!hom || !t.bodegaDestino) return;
+    const k=hom+'|'+normValue(t.bodegaDestino);
+    trasMap.set(k, (trasMap.get(k)||0) + (Number(t.cantidad)||0));
+  });
+  const compMap=new Map();
+  (proc.facturas||[]).forEach(fa=>{
+    const hom=fa.homologo || codHom.get(normValue(fa.codigo));
+    if(!hom || !fa.puntoVenta) return;
+    const k=hom+'|'+normValue(fa.puntoVenta);
+    compMap.set(k, (compMap.get(k)||0) + (Number(fa.cantidad)||0));
+  });
+
   /* ---- Acumulado por homologo + bodega -----------------------------------
      meses: serie mensual de Cantidad Autorizada (el consumo que se debio cubrir).
      existencia: se lee una sola vez por homologo+bodega (viene repetida en cada
@@ -6408,6 +6439,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   };
 
   // ---- Nivel bodega: consumo pronosticado, existencia, pendiente, requerido ----
+  // Esta es la base de la Tabla 1: una fila por homologo y bodega detalle.
   _supBodegas=[...agg.values()].map(g=>{
     const serie=serieDe(g.meses);
     const pr=pronosticoConsumoMensual(serie);
@@ -6415,10 +6447,16 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const existencia=g.existencia||0;
     const requerido=consumo + g.pend;
     const balance=existencia - requerido;      // + excedente / - faltante
+    const k=g.hom+'|'+normValue(g.bodega);
     return {
       supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
+      descripcionDci: homDci.get(g.hom) || '',
       meses:serie.length, metodo:pr.metodo, consumo, existencia, pend:g.pend,
-      requerido, balance, lineas:g.lineas, lineasPend:g.lineasPend
+      traslados: trasMap.get(k) || 0,      // unidades recibidas por traslado
+      compras: compMap.get(k) || 0,        // unidades compradas (facturas)
+      requerido, balance, faltante: balance<0 ? -balance : 0,
+      cobertura: requerido>0 ? existencia/requerido : null,
+      lineas:g.lineas, lineasPend:g.lineasPend
     };
   });
 
@@ -6427,10 +6465,12 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   _supBodegas.forEach(b=>{
     const k=b.zona+'|'+b.hom;
     let z=porZonaHom.get(k);
-    if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, consumo:0, existencia:0, pend:0, requerido:0,
+    if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, descripcionDci:b.descripcionDci,
+               consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0,
                bodegas:0, bodegasDeficit:0, bodegasExced:0, faltante:0, excedente:0, meses:0, metodo:b.metodo};
             porZonaHom.set(k,z); }
     z.consumo+=b.consumo; z.existencia+=b.existencia; z.pend+=b.pend; z.requerido+=b.requerido;
+    z.traslados+=b.traslados; z.compras+=b.compras;
     z.bodegas++;
     if(b.balance<0){ z.bodegasDeficit++; z.faltante += -b.balance; }
     else if(b.balance>0){ z.bodegasExced++; z.excedente += b.balance; }
@@ -6518,6 +6558,9 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> meses el pronóstico usa nivel y tendencia amortiguada. '+
         'Desde 8 meses se activa Holt-Winters con estacionalidad.');
     }
+    // Las columnas Traslados y Compras dependen de tablas que se cargan aparte.
+    if(!(proc.traslados||[]).length) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados</b> queda en cero.');
+    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: la columna <b>Compras</b> queda en cero.');
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
   }
@@ -6564,15 +6607,18 @@ function pintarBaseSupervisores(){
   const statsEl=document.getElementById('statsSup');
   const f=_supFiltrosActuales();
 
-  if(!_supHomologos.length){
-    tb.innerHTML='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+  if(!_supBodegas.length){
+    tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(tbPlan) tbPlan.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
   }
 
-  let filas=_supHomologos.filter(t=>_supVisible(t, f));
+  // La Tabla 1 se muestra al detalle: una fila por homologo y bodega detalle.
+  let filas=_supBodegas.filter(t=>_supVisible(t, f));
   if(f.soloFalta) filas=filas.filter(t=>t.faltante>0);
+  let homs=_supHomologos.filter(t=>_supVisible(t, f));
+  if(f.soloFalta) homs=homs.filter(t=>t.faltante>0);
   const plan=_supPlan.filter(p=>_supVisible(p, f));
 
   // ---- KPIs ----
@@ -6580,7 +6626,7 @@ function pintarBaseSupervisores(){
   const conFalta=filas.filter(t=>t.faltante>0);
   const totFalta=conFalta.reduce((a,b)=>a+b.faltante,0);
   const totTraslado=plan.reduce((a,b)=>a+b.unidades,0);
-  const totComprar=filas.reduce((a,b)=>a+b.porComprar,0);
+  const totComprar=homs.reduce((a,b)=>a+b.porComprar,0);
   const totReq=filas.reduce((a,b)=>a+b.requerido,0);
   const totExi=filas.reduce((a,b)=>a+b.existencia,0);
   if(statsEl){
@@ -6594,12 +6640,12 @@ function pintarBaseSupervisores(){
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Zonas en la selección</div><div class="value">'+fmtInt(zonas.size)+'</div>'+
       '<div class="sub">de '+fmtInt(ZONAS_SUPERVISOR.length)+' zonas con supervisor</div></div>'+
-      '<div class="stat"><div class="label">Homólogos evaluados</div><div class="value">'+fmtInt(filas.length)+'</div>'+
+      '<div class="stat"><div class="label">Homólogos por bodega</div><div class="value">'+fmtInt(filas.length)+'</div>'+
       '<div class="sub">'+fmtInt(G.meses)+' meses en el pronóstico · '+escHtml(per)+escHtml(notaMes)+'</div></div>'+
       '<div class="stat"><div class="label">Total requerido</div><div class="value">'+fmtInt(totReq)+'</div>'+
       '<div class="sub">'+fmtInt(totExi)+' unidades en existencia</div></div>'+
       '<div class="stat"><div class="label">Unidades faltantes</div><div class="value '+(totFalta?'pct-bad':'')+'">'+fmtInt(totFalta)+'</div>'+
-      '<div class="sub">'+fmtInt(conFalta.length)+' homólogos por debajo de lo requerido</div></div>'+
+      '<div class="sub">'+fmtInt(conFalta.length)+' filas por debajo de lo requerido</div></div>'+
       '<div class="stat"><div class="label">Se cubre con traslados</div><div class="value">'+fmtInt(totTraslado)+'</div>'+
       '<div class="sub">'+fmtInt(plan.length)+' movimientos dentro de la misma zona</div></div>'+
       '<div class="stat"><div class="label">Habría que comprar</div><div class="value '+(totComprar?'pct-mid':'')+'">'+fmtInt(totComprar)+'</div>'+
@@ -6609,23 +6655,25 @@ function pintarBaseSupervisores(){
   // ---- Tabla 1: requerimiento por homologo ----
   const orden=filas.slice().sort((a,b)=>
     b.faltante-a.faltante || b.requerido-a.requerido ||
-    a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es'));
+    a.bodega.localeCompare(b.bodega,'es') || a.hom.localeCompare(b.hom,'es'));
   const vista=orden.slice(0, SUP_MAX_FILAS);
   let h=vista.map(t=>
     '<tr><td class="txt"><b>'+escHtml(t.supervisor)+'</b></td>'+
-    '<td class="txt">'+escHtml(t.zona)+'</td>'+
+    '<td class="txt">'+escHtml(t.bodega)+'</td>'+
     '<td class="txt">'+escHtml(t.hom)+'</td>'+
+    '<td class="txt">'+escHtml(t.descripcionDci||'—')+'</td>'+
     '<td>'+fmtInt(t.consumo)+'</td>'+
     '<td>'+fmtInt(t.existencia)+'</td>'+
+    '<td>'+fmtInt(t.traslados)+'</td>'+
+    '<td>'+fmtInt(t.compras)+'</td>'+
     '<td class="'+(t.pend?'pct-bad':'')+'">'+fmtInt(t.pend)+'</td>'+
     '<td><b>'+fmtInt(t.requerido)+'</b></td>'+
     '<td class="'+(t.balance<0?'pct-bad':'pct-good')+'">'+fmtInt(t.balance)+'</td>'+
-    '<td class="'+effClass(t.cobertura)+'">'+fmtPct(t.cobertura)+'</td>'+
-    '<td>'+fmtInt(t.bodegas)+(t.bodegasDeficit?' <span class="pct-bad">('+fmtInt(t.bodegasDeficit)+' cortas)</span>':'')+'</td></tr>'
+    '<td class="'+effClass(t.cobertura)+'">'+fmtPct(t.cobertura)+'</td></tr>'
   ).join('');
-  if(!vista.length) h='<tr><td colspan="10" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
-  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="10">Se muestran los '+fmtInt(vista.length)+
-    ' homólogos con mayor faltante de '+fmtInt(orden.length)+'. El Excel trae la lista completa.</td></tr>';
+  if(!vista.length) h='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
+  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="12">Se muestran las '+fmtInt(vista.length)+
+    ' filas con mayor faltante de '+fmtInt(orden.length)+'. El Excel trae la lista completa.</td></tr>';
   tb.innerHTML=h;
 
   // ---- Tabla 2: plan de redistribucion ----
@@ -6670,23 +6718,25 @@ function pintarBaseSupervisores(){
   }
   const btn=document.getElementById('btnExportSup');
   if(btn) btn.addEventListener('click', ()=>{
-    if(!_supHomologos.length){ showToast('Primero calcula los indicadores.', true); return; }
+    if(!_supBodegas.length){ showToast('Primero calcula los indicadores.', true); return; }
     const f=_supFiltrosActuales();
-    let filas=_supHomologos.filter(t=>_supVisible(t, f));
+    let filas=_supBodegas.filter(t=>_supVisible(t, f));
     if(f.soloFalta) filas=filas.filter(t=>t.faltante>0);
     if(!filas.length){ showToast('No hay homólogos para los filtros elegidos.', true); return; }
     const plan=_supPlan.filter(p=>_supVisible(p, f));
-    const detalle=_supBodegas.filter(b=>_supVisible(b, f));
+    let resumen=_supHomologos.filter(t=>_supVisible(t, f));
+    if(f.soloFalta) resumen=resumen.filter(t=>t.faltante>0);
 
+    // Hoja 1: la misma Tabla 1 de pantalla (homólogo por bodega detalle).
     const hoja1=filas.slice().sort((a,b)=> b.faltante-a.faltante || b.requerido-a.requerido).map(t=>({
-      'Supervisor':t.supervisor, 'Zona':t.zona, 'Homologo':t.hom,
+      'Supervisor':t.supervisor, 'Bodega Detalle':t.bodega, 'Homologo':t.hom,
+      'Descripcion DCI':t.descripcionDci,
       'Consumo promedio mensual (Holt-Winters)':t.consumo,
-      'Existencia':t.existencia, 'Unidades pendientes':t.pend,
+      'Existencia':t.existencia, 'Traslados recibidos':t.traslados, 'Compras (facturas)':t.compras,
+      'Unidades pendientes':t.pend,
       'Total requerido':t.requerido, 'Balance (existencia - requerido)':t.balance,
       '% Cobertura':t.cobertura===null?'':+(t.cobertura*100).toFixed(1),
-      'Bodegas':t.bodegas, 'Bodegas cortas':t.bodegasDeficit,
-      'Unidades faltantes':t.faltante, 'Se cubre con traslado':t.cubreConTraslado,
-      'Por comprar':t.porComprar, 'Meses de historia':t.meses
+      'Zona':t.zona, 'Metodo de pronostico':t.metodo, 'Meses de historia':t.meses
     }));
     const hoja2=plan.map(p=>({
       'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':p.hom,
@@ -6695,20 +6745,25 @@ function pintarBaseSupervisores(){
       'Faltante del destino':p.faltaDestino, 'Total requerido destino':p.requeridoDestino,
       'Existencia destino':p.existenciaDestino, 'Excedente que queda en origen':p.sobranteOrigen
     }));
-    const hoja3=detalle.slice().sort((a,b)=>
-      a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es') || a.bodega.localeCompare(b.bodega,'es')).map(b=>({
-      'Supervisor':b.supervisor, 'Zona':b.zona, 'Homologo':b.hom, 'Bodega':b.bodega,
-      'Consumo promedio mensual':b.consumo, 'Metodo de pronostico':b.metodo, 'Meses de historia':b.meses,
-      'Existencia':b.existencia, 'Unidades pendientes':b.pend, 'Total requerido':b.requerido,
-      'Balance':b.balance, 'Lineas':b.lineas, 'Lineas pendientes':b.lineasPend
+    // Hoja 3: resumen por zona y homólogo (consolidado de la zona).
+    const hoja3=resumen.slice().sort((a,b)=>
+      a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es')).map(z=>({
+      'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':z.hom, 'Descripcion DCI':z.descripcionDci,
+      'Consumo promedio mensual':z.consumo, 'Existencia':z.existencia,
+      'Traslados recibidos':z.traslados, 'Compras (facturas)':z.compras,
+      'Unidades pendientes':z.pend, 'Total requerido':z.requerido, 'Balance':z.balance,
+      '% Cobertura':z.cobertura===null?'':+(z.cobertura*100).toFixed(1),
+      'Bodegas':z.bodegas, 'Bodegas cortas':z.bodegasDeficit,
+      'Unidades faltantes':z.faltante, 'Se cubre con traslado':z.cubreConTraslado,
+      'Por comprar':z.porComprar, 'Meses de historia':z.meses
     }));
     const fecha=new Date().toISOString().slice(0,10);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja1), 'REQUERIMIENTO POR HOMOLOGO');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja2), 'PLAN DE REDISTRIBUCION');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja3), 'DETALLE POR BODEGA');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja3), 'RESUMEN POR ZONA');
     XLSX.writeFile(wb, 'Base_Supervisores_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(hoja1.length)+' homólogos y '+fmtInt(hoja2.length)+' traslados sugeridos.');
+    showToast('Excel exportado: '+fmtInt(hoja1.length)+' filas de requerimiento y '+fmtInt(hoja2.length)+' traslados sugeridos.');
   });
 })();
 
