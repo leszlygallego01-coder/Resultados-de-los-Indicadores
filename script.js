@@ -2070,6 +2070,9 @@ function lineaEsPendiente(r){
 // Guarda las dispensas inactivas ya agrupadas (Documento + Bodega) del último render,
 // para que el botón de descarga por bodega exporte exactamente lo que se ve en pantalla.
 let _inactivasDispCache = [];
+// Guarda también las LÍNEAS inactivas del último render (una fila por artículo), para poder
+// exportar el detalle con Código de artículo y Descripción por DCI.
+let _inactivasLineasCache = [];
 function renderIndicadorInactivas(rowsAll, bodegaSearch, zona){
   const ambito = rowsAll.filter(r=>{
     if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
@@ -2119,6 +2122,7 @@ function renderIndicadorInactivas(rowsAll, bodegaSearch, zona){
   });
   const disp=[...dispMap.values()];
   _inactivasDispCache = disp;
+  _inactivasLineasCache = rows;
   const total=disp.length;
   const totalDispensasGlobal=new Set(rowsAll.map(r=>r.dispensaYPunto)).size;
   const usuariosDistintos=new Set(disp.map(d=>d.usuario)).size;
@@ -4670,25 +4674,52 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     }));
     resumen.push({'Zona':'TOTAL','Bodega Detalle':'','Dispensas sin usuario':total,'Líneas':sinUsuario.reduce((a,d)=>a+(Number(d.lineas)||0),0),'% del total': total?1:0});
 
-    // Detalle: una fila por dispensa
-    const detalle=sinUsuario.slice().sort((a,b)=>
-      String(a.bodega||'').localeCompare(String(b.bodega||''),'es') ||
-      String(a.documento||'').localeCompare(String(b.documento||''),'es')
-    ).map(d=>({
-      'Zona': d.zona||'N/D',
-      'Bodega Detalle': d.bodega||'N/D',
-      'Documento': d.documento||'',
+    // Detalle: una fila por ARTÍCULO de cada dispensa sin usuario, con código y Descripción por DCI
+    const clavesSinUsuario=new Set(sinUsuario.map(d=>String(d.documento||'')+'|'+String(d.bodega||'')));
+    const lineas=(_inactivasLineasCache||[]).filter(r=>
+      !String(r.usuarioCreacion||'').trim() &&
+      clavesSinUsuario.has(String(r.documento||'')+'|'+String(r.bodegaDetalle||''))
+    );
+    const detalle=lineas.slice().sort((a,b)=>
+      String(a.bodegaDetalle||'').localeCompare(String(b.bodegaDetalle||''),'es') ||
+      String(a.documento||'').localeCompare(String(b.documento||''),'es') ||
+      String(a.codigoArticulo||'').localeCompare(String(b.codigoArticulo||''),'es')
+    ).map(r=>({
+      'Zona': r.zona||'N/D',
+      'Bodega Detalle': r.bodegaDetalle||'N/D',
+      'Documento': r.documento||'',
+      'Código de Artículo': r.codigoArticulo||'',
+      'Descripción por DCI': r.descripcionDci || r.descripcionReporte || '',
+      'Unidades': Number(r.unidades)||0,
+      'Cantidad Autorizada': Number(r.cantidadAutorizada)||0,
+      'Estado de la línea': lineaEsEntregada(r) ? 'ENTREGADA' : (lineaEsPendiente(r) ? 'PENDIENTE' : 'SIN CLASIFICAR'),
       'Usuario Creación': 'SIN USUARIO',
-      'Fecha de Dispensación': d.fecha ? dateToISO(d.fecha) : '',
-      'Líneas': d.lineas
+      'Fecha de Dispensación': r.fecha ? dateToISO(r.fecha) : ''
+    }));
+
+    // Consolidado por artículo: cuáles medicamentos concentran estas dispensas
+    const porArt=new Map();
+    lineas.forEach(r=>{
+      const k=String(r.codigoArticulo||'N/D');
+      if(!porArt.has(k)) porArt.set(k, {codigo:k, dci:(r.descripcionDci||r.descripcionReporte||''), lineas:0, und:0, docs:new Set()});
+      const g=porArt.get(k); g.lineas++; g.und+=Number(r.unidades)||0; g.docs.add(String(r.documento||''));
+      if(!g.dci && (r.descripcionDci||r.descripcionReporte)) g.dci=r.descripcionDci||r.descripcionReporte;
+    });
+    const resumenArt=[...porArt.values()].sort((a,b)=>b.lineas-a.lineas).map(g=>({
+      'Código de Artículo': g.codigo,
+      'Descripción por DCI': g.dci||'',
+      'Líneas': g.lineas,
+      'Documentos': g.docs.size,
+      'Unidades': g.und
     }));
 
     const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Resumen por Bodega');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Sin Usuario');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenArt), 'Resumen por Artículo');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Resumen por Bodega');
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Dispensas_Inactivas_Sin_Usuario_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(detalle.length)+' dispensas inactivas sin usuario de creación.');
+    showToast('Excel exportado: '+fmtInt(total)+' dispensas sin usuario ('+fmtInt(detalle.length)+' líneas con código y DCI).');
   });
 })();
 
