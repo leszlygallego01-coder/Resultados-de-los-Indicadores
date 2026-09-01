@@ -6822,6 +6822,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
           _supPlan.push({
             supervisor:ref.supervisor, zona:ref.zona, hom:ref.hom,
             homLabel:ref.homLabel, porCodigo:ref.porCodigo, codigo:ref.codigo,
+            descripcionDci:ref.descripcionDci||'',   // nombre del medicamento (DCI)
             origen:o.bodega, destino:d.bodega, unidades:mov,
             faltaDestino:d.falta, requeridoDestino:d.req, existenciaDestino:d.exi,
             existenciaOrigen:o.exi,          // existencia total de la bodega que entrega
@@ -6964,7 +6965,7 @@ function pintarBaseSupervisores(){
 
   if(!_supBodegas.length){
     tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
-    if(tbPlan) tbPlan.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    if(tbPlan) tbPlan.innerHTML='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
   }
@@ -7036,6 +7037,7 @@ function pintarBaseSupervisores(){
     let hp=vistaPlan.map(p=>
       '<tr><td class="txt">'+escHtml(p.zona)+'</td>'+
       '<td class="txt">'+_supEtiquetaHtml(p)+'</td>'+
+      '<td class="txt">'+escHtml(p.descripcionDci||'—')+'</td>'+
       '<td class="txt">'+escHtml(p.origen)+'</td>'+
       '<td>'+fmtInt(p.existenciaOrigen||0)+'</td>'+
       '<td class="txt">'+escHtml(p.destino)+'</td>'+
@@ -7043,8 +7045,8 @@ function pintarBaseSupervisores(){
       '<td>'+fmtInt(p.faltaDestino)+'</td>'+
       '<td>'+fmtInt(p.sobranteOrigen)+'</td></tr>'
     ).join('');
-    if(!vistaPlan.length) hp='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados posibles: dentro de la zona no hay bodegas con excedente para las que están cortas.</td></tr>';
-    else if(plan.length>vistaPlan.length) hp+='<tr class="total-row"><td class="txt" colspan="8">Se muestran '+fmtInt(vistaPlan.length)+
+    if(!vistaPlan.length) hp='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados posibles: dentro de la zona no hay bodegas con excedente para las que están cortas.</td></tr>';
+    else if(plan.length>vistaPlan.length) hp+='<tr class="total-row"><td class="txt" colspan="9">Se muestran '+fmtInt(vistaPlan.length)+
       ' de '+fmtInt(plan.length)+' movimientos. El Excel trae el plan completo.</td></tr>';
     tbPlan.innerHTML=hp;
   }
@@ -7103,6 +7105,7 @@ function pintarBaseSupervisores(){
       'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':_supEtiqueta(p),
       'Agrupado por':p.porCodigo?'Codigo de articulo (sin homologo)':'Homologo',
       'Codigo de articulo':p.codigo||'',
+      'Descripcion DCI':p.descripcionDci||'',
       'Bodega origen (excedente)':p.origen, 'Existencia bodega origen':p.existenciaOrigen||0,
       'Bodega destino (faltante)':p.destino,
       'Unidades a trasladar':p.unidades,
