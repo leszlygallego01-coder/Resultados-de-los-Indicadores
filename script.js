@@ -4636,6 +4636,116 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
  }
 });
 
+/* ---- Descargar "Cantidad Autorizada = 0" por Bodega Detalle ------------------
+   Cuenta cuántas LÍNEAS de cada Bodega Detalle vienen con Cantidad Autorizada en 0
+   (es decir, la línea existe en el reporte pero no tiene cantidad autorizada).
+   Respeta todos los filtros activos en pantalla (fecha, modalidad, EPS, EPS
+   consolidada, diagnóstico, bodega y zona), toma solo la última versión de cada
+   línea y excluye las dispensas INACTIVO, igual que el Análisis ABC.
+   El Excel trae dos hojas de resumen y una de detalle línea por línea.          */
+document.getElementById('btnExportarCantidadCero').addEventListener('click', ()=>{
+ try{
+  let baseRows = (filteredRowsCache && filteredRowsCache.length)
+    ? filteredRowsCache
+    : ((state && state.processed && state.processed.rows) ? state.processed.rows : []);
+  if(!baseRows.length){ showToast('Primero pulsa "Calcular indicadores" para tener datos.', true); return; }
+  if(typeof XLSX==='undefined'){ showToast('No se pudo cargar la librería de Excel. Revisa tu conexión a internet y recarga.', true); return; }
+  const bodegaSearch = getBodegaFiltro();
+  const zonaSel = document.getElementById('fZona');
+  const zona = zonaSel ? zonaSel.value : '';
+  const vigentes = soloActivas(baseRows.filter(r=>r.versionVigente!==false));
+  const grupos = groupByBodega(vigentes, bodegaSearch, zona);
+  if(!grupos.length){ showToast('No hay bodegas que cumplan los filtros actuales.', true); return; }
+
+  // Una línea cuenta como "en cero" cuando su Cantidad Autorizada normalizada es 0.
+  const esCero = r => toNumber(r.cantidadAutorizada)===0;
+
+  const filas = grupos.map(g=>{
+    const rs = g.rows;
+    const enCero = rs.filter(esCero);
+    return {
+      bodega: g.bodega,
+      zona: g.zona || '',
+      cero: enCero.length,
+      total: rs.length,
+      pct: rs.length ? (enCero.length/rs.length)*100 : 0,
+      docs: new Set(enCero.map(r=>claveDocBodega(r)).filter(Boolean)).size,
+      rows: enCero
+    };
+  });
+  // De mayor a menor cantidad de líneas en cero; desempate por % y luego alfabético.
+  filas.sort((a,b)=>{
+    if(b.cero !== a.cero) return b.cero - a.cero;
+    if(b.pct !== a.pct) return b.pct - a.pct;
+    return a.bodega.localeCompare(b.bodega,'es');
+  });
+
+  const totalCero = filas.reduce((s,f)=>s+f.cero, 0);
+  const totalLineas = filas.reduce((s,f)=>s+f.total, 0);
+  const bodegasAfectadas = filas.filter(f=>f.cero>0).length;
+
+  const datos = filas.map((f,i)=>({
+    'Ranking': i+1,
+    'Zona': f.zona,
+    'Bodega Detalle': f.bodega,
+    'Líneas con Cantidad Autorizada = 0': f.cero,
+    'Líneas Totales': f.total,
+    '% Líneas en 0': Math.round(f.pct*100)/100,
+    'Dispensas Afectadas': f.docs,
+    '% del Total de Líneas en 0': totalCero ? Math.round((f.cero/totalCero)*10000)/100 : 0
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos);
+  ws['!cols'] = [{wch:9},{wch:16},{wch:34},{wch:32},{wch:14},{wch:14},{wch:20},{wch:26}];
+  XLSX.utils.book_append_sheet(wb, ws, 'CANT AUTORIZADA 0');
+
+  // Detalle línea por línea de las que tienen Cantidad Autorizada = 0.
+  const detalle = [];
+  filas.forEach(f=>{
+    f.rows.forEach(r=>{
+      detalle.push({
+        'Zona': f.zona,
+        'Bodega Detalle': f.bodega,
+        'Documento': r.documento || '',
+        'Fecha Dispensación': periodicoFechaTxt(r.fecha),
+        'EPS': r.eps || '',
+        'Contrato': r.contrato || '',
+        'Código Artículo': r.codigoArticulo || '',
+        'Descripción': r.descripcionReporte || '',
+        'Descripción DCI': r.descripcionDci || '',
+        'Unidades': toNumber(r.unidades),
+        'Cantidad Autorizada': toNumber(r.cantidadAutorizada),
+        'Diferencia': toNumber(r.diferencia),
+        'Línea Pendiente': r.lineaPendiente || ''
+      });
+    });
+  });
+  if(detalle.length){
+    const wsD = XLSX.utils.json_to_sheet(detalle);
+    wsD['!cols'] = [{wch:16},{wch:34},{wch:16},{wch:16},{wch:24},{wch:12},{wch:16},{wch:40},{wch:40},{wch:12},{wch:20},{wch:12},{wch:16}];
+    XLSX.utils.book_append_sheet(wb, wsD, 'DETALLE LINEAS');
+  }
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+    'Criterio': 'Conteo de líneas cuya Cantidad Autorizada es igual a 0, agrupadas por Bodega Detalle',
+    'Orden': 'De mayor a menor cantidad de líneas en 0',
+    'Líneas con Cantidad Autorizada = 0': totalCero,
+    'Líneas totales evaluadas': totalLineas,
+    '% líneas en 0 sobre el total': totalLineas ? Math.round((totalCero/totalLineas)*10000)/100 : 0,
+    'Bodegas evaluadas': filas.length,
+    'Bodegas con al menos una línea en 0': bodegasAfectadas,
+    'Filtro de bodega': bodegaSearch || '(todas)',
+    'Zona': zona || '(todas)',
+    'Alcance': 'Solo dispensas activas (se excluye INACTIVO), última versión de cada línea, con los filtros de pantalla aplicados'
+  }]), 'CRITERIO');
+  XLSX.writeFile(wb, `Lineas_Cantidad_Autorizada_Cero_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('Descargado: '+fmtInt(totalCero)+' líneas con Cantidad Autorizada = 0 en '+fmtInt(bodegasAfectadas)+' bodegas (de '+fmtInt(filas.length)+' evaluadas).');
+ }catch(err){
+  console.error('Error al generar el reporte de Cantidad Autorizada = 0:', err);
+  showToast('Error al generar el reporte de Cantidad Autorizada = 0: '+(err && err.message ? err.message : err), true);
+ }
+});
+
 document.getElementById('btnDescargarParetoExistencias').addEventListener('click', ()=>{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
   // Incluye PARETO y NO PARETO, respetando todos los filtros activos en pantalla
