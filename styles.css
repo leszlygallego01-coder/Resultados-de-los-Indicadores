@@ -416,6 +416,10 @@ table.data thead th.sortable.sort-active{text-decoration:underline;text-underlin
 .pct-good{color:var(--green-deep);font-weight:600;}
 .pct-mid{color:var(--amber);font-weight:600;}
 .pct-bad{color:var(--red);font-weight:600;}
+/* Marca de fila agrupada por codigo de articulo (homologo vacio o en basura) */
+.sin-hom{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:8px;font-size:10px;
+  font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#8A6D1F;background:#FDF3D6;
+  border:1px solid #E8CE86;vertical-align:middle;}
 
 /* semaforo del % Cobertura (con fondo): mayor a 100% verde, 90-100% amarillo,
    menor a 90% rojo. Se usa en la tabla Requerimiento por homologo. */
