@@ -491,6 +491,9 @@ function stopFirestoreListener(){
    ========================================================================= */
 function stripAccents(s){return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
 function normHeader(s){return stripAccents(String(s||'')).toUpperCase().replace(/\s+/g,' ').trim();}
+/* Version "compacta" del encabezado: sin espacios ni signos, para comparar
+   "NO RECIBIDO", "No_Recibido" y "No. Recibido" como el mismo texto. */
+function compactHeader(s){return normHeader(s).replace(/[^A-Z0-9]/g,'');}
 function normValue(s){if(s===null||s===undefined)return '';return stripAccents(String(s)).toUpperCase().trim();}
 /* Clave "suelta" de un codigo de articulo: solo letras y numeros y sin ceros a la
    izquierda. Sirve para emparejar el mismo codigo escrito de formas distintas
@@ -502,21 +505,28 @@ function claveCodigo(c){
   return sinCeros || s;
 }
 /* Estado de recepcion de un traslado (columna "Recibido" de la tabla Traslados).
-   Devuelve true cuando la linea NO ha sido recibida, es decir sigue en camino.
-   Solo se considera RECIBIDO lo que viene marcado explicitamente como recibido
-   (Recibido / Si / Yes / True / 1 / X); cualquier otro valor (No, NO RECIBIDO,
-   Pendiente, En transito, 0, False o vacio) se cuenta como pendiente por llegar,
-   para no perder unidades por una escritura distinta del estado. */
-function esTrasladoNoRecibido(v){
+   Devuelve tres posibles valores:
+     'RECIBIDO'  la linea ya entro a la bodega destino (no esta en camino),
+     'PENDIENTE' sigue en camino (No Recibido, Sin recibir, Pendiente, En transito),
+     ''          no hay dato confiable (celda vacia o un numero suelto).
+   El tercer caso es importante: una linea sin estado no se puede sumar como si
+   estuviera en camino cuando el resto del archivo si trae el estado. */
+function estadoTraslado(v){
   const s=normValue(v).replace(/[^A-Z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
-  if(!s) return true;                                  // sin dato: se asume en camino
-  // "NO RECIBIDO", "SIN RECIBIR", "NO" y similares: sigue pendiente.
-  if(/^(NO|N|SIN|PENDIENTE|FALSE|FALSO|0)\b/.test(s)) return true;
+  if(!s) return '';                                    // celda vacia: sin dato
+  if(s==='1') return 'RECIBIDO';                       // banderas 1/0
+  if(s==='0') return 'PENDIENTE';
+  if(/^[0-9]+$/.test(s)) return '';                    // un numero suelto no es un estado
+  // "NO RECIBIDO", "SIN RECIBIR", "PENDIENTE" y similares: sigue en camino.
+  if(/(^|\s)(NO|SIN|PENDIENTE|FALSE|FALSO)(\s|$)/.test(s)) return 'PENDIENTE';
   const prim=s.split(' ')[0];
-  if(/^RECIBID/.test(prim)) return false;
-  if(['SI','S','Y','YES','TRUE','VERDADERO','1','X','OK','ENTREGADO','ENTREGADA','CONFIRMADO','CONFIRMADA','APROBADO','APROBADA','CERRADO','CERRADA'].indexOf(prim)>=0) return false;
-  return true;                                         // Pendiente, En transito, etc.
+  if(/^RECIBID/.test(prim)) return 'RECIBIDO';
+  if(['SI','S','Y','YES','TRUE','VERDADERO','X','OK','ENTREGADO','ENTREGADA','CONFIRMADO','CONFIRMADA','APROBADO','APROBADA','CERRADO','CERRADA'].indexOf(prim)>=0) return 'RECIBIDO';
+  return 'PENDIENTE';                                  // En transito, En ruta, etc.
 }
+/* Compatibilidad: true cuando la linea NO esta marcada como recibida. Si no hay
+   dato el criterio global se decide en el calculo (ver trasHayEstado). */
+function esTrasladoNoRecibido(v){ return estadoTraslado(v)!=='RECIBIDO'; }
 /* Códigos que NO corresponden a un medicamento (servicios, cobros, domicilios, etc.).
    Aunque la columna Diferencia sea negativa, estas líneas no se cuentan como pendientes
    ni como líneas por subsanar en ningún indicador. */
@@ -589,13 +599,28 @@ const FIELD_FALLBACK_KEYWORDS = {
   fechaDispensacion: ['FECHA DISPENS', 'FECHA DE DISPENS'],
   cantidadAutorizada: ['AUTORIZAD'],
   soportes: ['SOPORTE'],
-  documento: ['DOCUMENTO']
+  documento: ['DOCUMENTO'],
+  // Columna "Recibido" de Traslados (valores tipo Recibido / No Recibido)
+  recibido: ['RECIBIDO','ESTADO RECIB','NO RECIBIDO','RECIB']
 };
+/* Busca una columna por palabra clave, de lo mas preciso a lo mas laxo:
+   1) el encabezado es exactamente la palabra buscada,
+   2) el encabezado empieza por la palabra buscada,
+   3) el encabezado la contiene (ultimo recurso).
+   Asi "Recibido" gana sobre "Fecha de recibido" y no se toma una columna vecina. */
 function findHeaderByKeyword(headerIndex, keywords){
   for (const kw of keywords){
+    const objetivo=compactHeader(kw);
+    if(!objetivo) continue;
+    let porInicio=-1, porContenido=-1;
     for (const h of headerIndex.keys()){
-      if (h.includes(kw)) return headerIndex.get(h);
+      const ch=compactHeader(h);
+      if (ch===objetivo) return headerIndex.get(h);
+      if (porInicio<0 && ch.startsWith(objetivo)) porInicio=headerIndex.get(h);
+      if (porContenido<0 && ch.includes(objetivo)) porContenido=headerIndex.get(h);
     }
+    if (porInicio>=0) return porInicio;
+    if (porContenido>=0) return porContenido;
   }
   return -1;
 }
@@ -1580,6 +1605,8 @@ async function calcularIndicadores(){
         // Texto original de la columna "Recibido" y bandera derivada: si el valor
         // empieza por "N" (No Recibido / NO RECIBIDA) la línea sigue pendiente.
         recibido: String(r.recibido||'').trim(),
+        // Estado normalizado: 'RECIBIDO', 'PENDIENTE' o '' (sin dato).
+        estadoRecibido: estadoTraslado(r.recibido),
         noRecibido: esTrasladoNoRecibido(r.recibido),
         // Homologo del codigo trasladado (tabla Homologo): permite llevar las
         // unidades en camino al mismo homologo de la Tabla 1 de supervisores.
@@ -6524,8 +6551,19 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   const trasMap=new Map();
   let trasNoRecib=0, trasSinHom=0, trasSinBodega=0, trasUnidades=0;
   const trasBodegasSinCruce=new Set();
+  /* Si la tabla de Traslados TRAE la columna de estado (aunque sea en parte de las
+     lineas), las lineas sin estado NO se cuentan como pendientes: contarlas sumaria
+     unidades ya recibidas. Solo cuando ninguna linea trae estado se asume que todo
+     esta en camino, para no perder informacion en archivos antiguos.            */
+  const trasHayEstado=(proc.traslados||[]).some(t=>{
+    const e=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
+    return !!e;
+  });
   (proc.traslados||[]).forEach(t=>{
-    const pend=('noRecibido' in t) ? t.noRecibido : esTrasladoNoRecibido(t.recibido);
+    const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
+    // Recibido -> ya entro a la bodega. Sin dato -> solo cuenta si el archivo no
+    // trae estado en ninguna linea.
+    const pend = est==='PENDIENTE' ? true : (est==='RECIBIDO' ? false : !trasHayEstado);
     if(!pend) return;                    // ya recibido: no queda pendiente por llegar
     trasNoRecib++;
     // Homologo: primero el que ya trae la fila; si no, el cruce por codigo del reporte.
