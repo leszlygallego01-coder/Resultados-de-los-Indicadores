@@ -504,6 +504,34 @@ function claveCodigo(c){
   const sinCeros=s.replace(/^0+/,'');
   return sinCeros || s;
 }
+/* Un codigo de homologacion sirve para AGRUPAR solo si de verdad dice algo.
+   En los archivos aparecen valores basura tipo "0-0-NA", "0/0/0/N", "///N",
+   "//0/N" o simplemente ceros, barras, guiones, NA o N: si se usaran como llave,
+   medicamentos que no tienen nada que ver quedarian sumados en un mismo grupo.
+   Devuelve false para todos esos casos y true para un homologo real.          */
+function homologoValido(h){
+  const s=normValue(h);
+  if(!s) return false;
+  const limpio=s
+    .replace(/\b(NA|N|ND|NN|NULL|NINGUNO|SIN DATO|SIN HOMOLOGO|NO APLICA)\b/g,' ')
+    .replace(/[0\/\\\-_.,;:|#*\s]/g,'');
+  return limpio.length>0;
+}
+/* Llave y etiqueta con la que se agrupa una linea en la Base de Supervisores:
+   - si el codigo de homologacion sirve, se agrupa por homologo (comportamiento normal);
+   - si es basura (0-0-NA, ///N, solo ceros...), se agrupa por el CODIGO DE ARTICULO
+     del reporte, para no mezclar medicamentos distintos en una misma fila.
+   Devuelve null cuando no hay ni homologo ni codigo utilizable.               */
+function claveGrupoSup(homologo, codigoArticulo){
+  if(homologoValido(homologo)){
+    const h=normValue(homologo);
+    return {clave:h, etiqueta:h, porCodigo:false};
+  }
+  const cod=normValue(codigoArticulo);
+  if(!cod) return null;
+  return {clave:'COD:'+(claveCodigo(cod)||cod), etiqueta:cod, porCodigo:true};
+}
+
 /* Estado de recepcion de un traslado (columna "Recibido" de la tabla Traslados).
    Devuelve tres posibles valores:
      'RECIBIDO'  la linea ya entro a la bodega destino (no esta en camino),
@@ -6524,19 +6552,31 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
      homologo -> Descripcion DCI y codigo -> homologo se arman con el propio
      reporte enriquecido (cada linea ya trae ambos datos). El codigo sirve para
      llevar las cantidades de Traslados y de Facturas al homologo correcto.  */
-  const homDci=new Map();
-  const codHom=new Map();
+  const homDci=new Map();     // clave de grupo -> Descripcion DCI
+  const codHom=new Map();     // codigo de articulo -> clave de grupo
+  const grpInfo=new Map();    // clave de grupo -> etiqueta y si agrupa por codigo
   base.forEach(r=>{
-    if(!r.homologo) return;
-    if(!homDci.get(r.homologo) && r.descripcionDci) homDci.set(r.homologo, r.descripcionDci);
-    if(r.codigoArticulo && !codHom.has(r.codigoArticulo)) codHom.set(r.codigoArticulo, r.homologo);
+    const g=claveGrupoSup(r.homologo, r.codigoArticulo);
+    if(!g) return;
+    if(!grpInfo.has(g.clave)) grpInfo.set(g.clave, g);
+    /* Descripcion del grupo: la DCI de la tabla Homologo y, cuando el codigo no
+       esta homologado, la descripcion que trae el propio reporte.             */
+    const dci=r.descripcionDci || r.descripcionReporte || '';
+    if(!homDci.get(g.clave) && dci) homDci.set(g.clave, dci);
+    if(r.codigoArticulo && !codHom.has(r.codigoArticulo)) codHom.set(r.codigoArticulo, g.clave);
     /* Segunda llave del mismo codigo sin guiones ni ceros a la izquierda: la
        tabla Traslados y la de Facturas suelen escribirlo distinto. */
     const ck=claveCodigo(r.codigoArticulo);
-    if(ck && !codHom.has(ck)) codHom.set(ck, r.homologo);
+    if(ck && !codHom.has(ck)) codHom.set(ck, g.clave);
   });
-  // Homologo de un codigo venido de otra tabla (exacto y luego llave suelta).
-  const homDeCodigo=(cod)=>codHom.get(normValue(cod)) || codHom.get(claveCodigo(cod)) || '';
+  /* Grupo de un codigo venido de otra tabla (Traslados / Facturas): primero el
+     cruce por codigo del reporte (exacto y luego llave suelta) y, si el codigo
+     no aparece, el homologo de esa fila cuando es un homologo real.          */
+  const grupoDeFila=(cod, hom)=>{
+    const k=codHom.get(normValue(cod)) || codHom.get(claveCodigo(cod));
+    if(k) return k;
+    return homologoValido(hom) ? normValue(hom) : '';
+  };
 
   /* Unidades de traslado NO RECIBIDAS (tabla Traslados, columna "Recibido", por
      bodega DESTINO) y unidades compradas (tabla Facturas, por punto de venta).
@@ -6568,8 +6608,8 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
     if(est!=='PENDIENTE'){ if(!est) trasSinEstado++; return; }
     trasNoRecib++;
-    // Homologo: primero el que ya trae la fila; si no, el cruce por codigo del reporte.
-    const hom=t.homologo || homDeCodigo(t.codigo);
+    // Grupo: cruce por codigo del reporte y, si no aparece, el homologo de la fila.
+    const hom=grupoDeFila(t.codigo, t.homologo);
     const bod=bodegaDeNombre(t.bodegaDestino);
     if(!hom){ trasSinHom++; return; }
     if(!bod){ trasSinBodega++; if(t.bodegaDestino) trasBodegasSinCruce.add(String(t.bodegaDestino).trim()); return; }
@@ -6583,7 +6623,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   (proc.facturas||[]).forEach(fa=>{
     const bod=bodegaDeNombre(fa.puntoVenta);
     if(!bod) return;
-    const hom=fa.homologo || homDeCodigo(fa.codigo);
+    const hom=grupoDeFila(fa.codigo, fa.homologo);
     if(!hom) return;
     const k=hom+'|'+bod;
     compMap.set(k, (compMap.get(k)||0) + (Number(fa.cantidad)||0));
@@ -6599,15 +6639,20 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   let sinZona=0;
   const zonasFuera=new Set();
   rows.forEach(r=>{
-    const hom=r.homologo;
-    if(!hom) return;                       // codigo sin homologar: no entra al requerimiento
+    /* Grupo de la linea: el homologo cuando sirve y, si el homologo es basura
+       (0-0-NA, ///N, solo ceros...), el propio codigo de articulo. Asi dos
+       medicamentos distintos sin homologar no se suman en la misma fila.    */
+    const grp=claveGrupoSup(r.homologo, r.codigoArticulo);
+    if(!grp) return;                       // sin homologo ni codigo: no entra al requerimiento
+    const hom=grp.clave;
     const zn=supZonaDeLinea(r);
     if(!zn){ sinZona++; if(r.zona) zonasFuera.add(r.zona); return; }
     const bod=r.bodegaDetalle || 'SIN BODEGA';
     const k=hom+'|'+normValue(bod);
     let g=agg.get(k);
     if(!g){
-      g={hom, bodega:bod, zona:zn, existencia:null, pend:0, lineas:0, lineasPend:0, meses:new Map(),
+      g={hom, etiqueta:grp.etiqueta, porCodigo:grp.porCodigo, codigo:normValue(r.codigoArticulo),
+         bodega:bod, zona:zn, existencia:null, pend:0, lineas:0, lineasPend:0, meses:new Map(),
          pendMes:new Map(), pendLinMes:new Map()};
       agg.set(k,g);
     }
@@ -6703,6 +6748,9 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const balance=requerido - disponible;
     return {
       supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
+      /* Etiqueta que se muestra: el homologo, o el codigo de articulo cuando el
+         homologo venia en basura (porCodigo = true).                          */
+      homLabel:g.etiqueta, porCodigo:!!g.porCodigo, codigo:g.codigo,
       bodegaNorm:normValue(g.bodega),   // llave normalizada de la bodega
       descripcionDci: homDci.get(g.hom) || '',
       meses:serie.length, metodo:pr.metodo, consumo, existencia, pend,
@@ -6721,7 +6769,8 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   _supBodegas.forEach(b=>{
     const k=b.zona+'|'+b.hom;
     let z=porZonaHom.get(k);
-    if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, descripcionDci:b.descripcionDci,
+    if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, homLabel:b.homLabel,
+               porCodigo:b.porCodigo, codigo:b.codigo, descripcionDci:b.descripcionDci,
                consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0,
                disponible:0,
                bodegas:0, bodegasDeficit:0, bodegasExced:0, faltante:0, excedente:0, meses:0, metodo:b.metodo};
@@ -6772,6 +6821,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
         if(mov>0){
           _supPlan.push({
             supervisor:ref.supervisor, zona:ref.zona, hom:ref.hom,
+            homLabel:ref.homLabel, porCodigo:ref.porCodigo, codigo:ref.codigo,
             origen:o.bodega, destino:d.bodega, unidades:mov,
             faltaDestino:d.falta, requeridoDestino:d.req, existenciaDestino:d.exi,
             existenciaOrigen:o.exi,          // existencia total de la bodega que entrega
@@ -6783,7 +6833,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       }
     });
   });
-  _supPlan.sort((a,b)=> a.zona.localeCompare(b.zona,'es') || b.unidades-a.unidades || a.hom.localeCompare(b.hom,'es'));
+  _supPlan.sort((a,b)=> a.zona.localeCompare(b.zona,'es') || b.unidades-a.unidades || String(a.homLabel||a.hom).localeCompare(String(b.homLabel||b.hom),'es'));
 
   _supGlobal={
     lineas:rows.length, sinZona, zonasFuera:[...zonasFuera].sort((a,b)=>a.localeCompare(b,'es')),
@@ -6871,7 +6921,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   pintarBaseSupervisores();
 }
 
-// Filtros de la pestana: supervisor, zona y busqueda por homologo.
+// Filtros de la pestana: supervisor, zona y busqueda por homologo, DCI o codigo.
 function _supFiltrosActuales(){
   return {
     sup:(document.getElementById('fSupSupervisor')||{}).value || '',
@@ -6883,8 +6933,20 @@ function _supFiltrosActuales(){
 function _supVisible(t, f){
   if(f.sup && t.supervisor!==f.sup) return false;
   if(f.zona && t.zona!==f.zona) return false;
-  if(f.hom && !normValue(t.hom).includes(f.hom)) return false;
+  /* El buscador mira tres campos a la vez: codigo de homologacion (o el codigo
+     de articulo cuando la fila se agrupo por codigo), Descripcion DCI y codigo
+     de articulo. Asi se puede escribir el nombre del medicamento o el codigo. */
+  if(f.hom){
+    const texto=normValue([t.homLabel||t.hom, t.hom, t.descripcionDci, t.codigo].filter(Boolean).join(' '));
+    if(!texto.includes(f.hom)) return false;
+  }
   return true;
+}
+// Etiqueta visible del grupo: codigo de articulo marcado cuando no hay homologo.
+function _supEtiqueta(t){ return String(t.homLabel || t.hom || ''); }
+function _supEtiquetaHtml(t){
+  const txt=escHtml(_supEtiqueta(t));
+  return t.porCodigo ? txt+' <span class="sin-hom" title="Codigo sin homologar: la fila se agrupa por el codigo de articulo">sin homólogo</span>' : txt;
 }
 
 /* Semaforo del % Cobertura de la Tabla 1:
@@ -6948,12 +7010,12 @@ function pintarBaseSupervisores(){
   // ---- Tabla 1: requerimiento por homologo ----
   const orden=filas.slice().sort((a,b)=>
     b.faltante-a.faltante || b.requerido-a.requerido ||
-    a.bodega.localeCompare(b.bodega,'es') || a.hom.localeCompare(b.hom,'es'));
+    a.bodega.localeCompare(b.bodega,'es') || _supEtiqueta(a).localeCompare(_supEtiqueta(b),'es'));
   const vista=orden.slice(0, SUP_MAX_FILAS);
   let h=vista.map(t=>
     '<tr><td class="txt"><b>'+escHtml(t.supervisor)+'</b></td>'+
     '<td class="txt">'+escHtml(t.bodega)+'</td>'+
-    '<td class="txt">'+escHtml(t.hom)+'</td>'+
+    '<td class="txt">'+_supEtiquetaHtml(t)+'</td>'+
     '<td class="txt">'+escHtml(t.descripcionDci||'—')+'</td>'+
     '<td>'+fmtInt(t.consumo)+'</td>'+
     '<td>'+fmtInt(t.existencia)+'</td>'+
@@ -6973,7 +7035,7 @@ function pintarBaseSupervisores(){
     const vistaPlan=plan.slice(0, SUP_MAX_FILAS);
     let hp=vistaPlan.map(p=>
       '<tr><td class="txt">'+escHtml(p.zona)+'</td>'+
-      '<td class="txt">'+escHtml(p.hom)+'</td>'+
+      '<td class="txt">'+_supEtiquetaHtml(p)+'</td>'+
       '<td class="txt">'+escHtml(p.origen)+'</td>'+
       '<td>'+fmtInt(p.existenciaOrigen||0)+'</td>'+
       '<td class="txt">'+escHtml(p.destino)+'</td>'+
@@ -7022,7 +7084,9 @@ function pintarBaseSupervisores(){
 
     // Hoja 1: la misma Tabla 1 de pantalla (homólogo por bodega detalle).
     const hoja1=filas.slice().sort((a,b)=> b.faltante-a.faltante || b.requerido-a.requerido).map(t=>({
-      'Supervisor':t.supervisor, 'Bodega Detalle':t.bodega, 'Homologo':t.hom,
+      'Supervisor':t.supervisor, 'Bodega Detalle':t.bodega, 'Homologo':_supEtiqueta(t),
+      'Agrupado por':t.porCodigo?'Codigo de articulo (sin homologo)':'Homologo',
+      'Codigo de articulo':t.codigo||'',
       'Descripcion DCI':t.descripcionDci,
       'Consumo promedio mensual (SES)':t.consumo,
       'Existencia':t.existencia, 'Traslados no recibidos':t.traslados, 'Compras (facturas)':t.compras,
@@ -7036,7 +7100,9 @@ function pintarBaseSupervisores(){
       'MAPE %':t.mape===null||t.mape===undefined?'':+t.mape.toFixed(1)
     }));
     const hoja2=plan.map(p=>({
-      'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':p.hom,
+      'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':_supEtiqueta(p),
+      'Agrupado por':p.porCodigo?'Codigo de articulo (sin homologo)':'Homologo',
+      'Codigo de articulo':p.codigo||'',
       'Bodega origen (excedente)':p.origen, 'Existencia bodega origen':p.existenciaOrigen||0,
       'Bodega destino (faltante)':p.destino,
       'Unidades a trasladar':p.unidades,
@@ -7045,8 +7111,10 @@ function pintarBaseSupervisores(){
     }));
     // Hoja 3: resumen por zona y homólogo (consolidado de la zona).
     const hoja3=resumen.slice().sort((a,b)=>
-      a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es')).map(z=>({
-      'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':z.hom, 'Descripcion DCI':z.descripcionDci,
+      a.zona.localeCompare(b.zona,'es') || _supEtiqueta(a).localeCompare(_supEtiqueta(b),'es')).map(z=>({
+      'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':_supEtiqueta(z),
+      'Agrupado por':z.porCodigo?'Codigo de articulo (sin homologo)':'Homologo',
+      'Codigo de articulo':z.codigo||'', 'Descripcion DCI':z.descripcionDci,
       'Consumo promedio mensual':z.consumo, 'Existencia':z.existencia,
       'Traslados no recibidos':z.traslados, 'Compras (facturas)':z.compras,
       'Unidades pendientes (2 ultimos meses)':z.pend, 'Total requerido':z.requerido,
