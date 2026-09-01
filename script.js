@@ -791,6 +791,51 @@ async function paqueteDescomprimir(bytes){
   return new TextDecoder().decode(buf);
 }
 
+/* Paquete nuevo (formato binario): 8 bytes de marca + 4 bytes con el largo de
+   la ficha + ficha JSON corta + contenido cifrado en bytes puros. Antes todo
+   viajaba dentro de un JSON con textos base64 enormes y el navegador no podia
+   con ellos ("Invalid string length"). */
+const PAQUETE_MARCA = [0x4D,0x53,0x46,0x50,0x32,0x00,0x00,0x00]; // "MSFP2\0\0\0"
+function paqueteLeerCabeceraBinaria(buffer){
+  const bytes=new Uint8Array(buffer);
+  if(bytes.length < PAQUETE_MARCA.length+4) return null;
+  for(let i=0;i<PAQUETE_MARCA.length;i++){ if(bytes[i]!==PAQUETE_MARCA[i]) return null; }
+  const largo=new DataView(bytes.buffer, bytes.byteOffset+PAQUETE_MARCA.length, 4).getUint32(0, true);
+  const ini=PAQUETE_MARCA.length+4;
+  if(largo<=0 || ini+largo>bytes.length) return null;
+  let cabecera;
+  try{ cabecera=JSON.parse(new TextDecoder().decode(bytes.subarray(ini, ini+largo))); }
+  catch(e){ return null; }
+  return { cabecera, cifrado: bytes.subarray(ini+largo) };
+}
+
+/* Recorre el contenido linea por linea (una fila por linea) sin juntar nunca
+   todo el texto: la primera linea es la ficha del paquete y las demas son las
+   filas, en el mismo orden en que se guardaron las fuentes. */
+async function paqueteRecorrerNDJSON(bytes, comprimido, alLeerLinea){
+  let flujo=new Response(bytes).body;
+  if(comprimido){
+    if(typeof DecompressionStream==='undefined') throw new Error('Este navegador no puede abrir el paquete comprimido. Usa Chrome o Edge actualizado.');
+    flujo=flujo.pipeThrough(new DecompressionStream('gzip'));
+  }
+  const lector=flujo.getReader();
+  const dec=new TextDecoder();
+  let resto='';
+  for(;;){
+    const {value, done}=await lector.read();
+    if(done) break;
+    resto+=dec.decode(value,{stream:true});
+    let corte;
+    while((corte=resto.indexOf('\n'))>=0){
+      const linea=resto.slice(0,corte);
+      resto=resto.slice(corte+1);
+      if(linea) alLeerLinea(linea);
+    }
+  }
+  resto+=dec.decode();
+  if(resto.trim()) alLeerLinea(resto);
+}
+
 // Guarda cada tabla del paquete en este navegador para que siga disponible
 // al recargar la pagina (sin escribir nada en la nube).
 async function paqueteGuardarLocal(datasets){
@@ -824,40 +869,114 @@ async function paqueteCargarGuardado(){
 
 async function abrirPaqueteVisor(file){
   if(!file) return;
-  let texto;
-  try{ texto=await file.text(); }
+  let buffer;
+  try{ buffer=await file.arrayBuffer(); }
   catch(err){ console.error(err); showToast('No se pudo leer el archivo: '+err.message,true); return; }
-  await procesarPaqueteTexto(texto);
+  await procesarPaquete(buffer);
 }
 
-// Abre el contenido del paquete (venga de un archivo local o de la carpeta de Drive).
-async function procesarPaqueteTexto(texto){
+/* Punto de entrada unico: recibe el contenido del paquete en bytes, reconoce si
+   es el formato nuevo (binario) o uno de los antiguos (sobre JSON con base64) y
+   lo abre en cualquiera de los dos casos. */
+async function procesarPaquete(buffer){
   try{
     if(!(window.crypto && crypto.subtle)){
       showToast('Este navegador no permite abrir paquetes cifrados. Usa Chrome o Edge actualizado.',true); return;
     }
-    let sobre;
-    try{ sobre=JSON.parse(texto); }catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
-    if(!sobre || sobre.app!==PAQUETE_APP_ID || !sobre.datos){
-      showToast('Este archivo no es un paquete del Panel de Cargue.',true); return;
+    const nuevo=paqueteLeerCabeceraBinaria(buffer);
+    if(nuevo){
+      if(nuevo.cabecera.app!==PAQUETE_APP_ID){
+        showToast('Este archivo no es un paquete del Panel de Cargue.',true); return;
+      }
+      await procesarPaqueteBinario(nuevo.cabecera, nuevo.cifrado);
+      return;
     }
-    const pass=prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
-    if(pass===null) return;
-    showToast('Abriendo el paquete\u2026');
-    await new Promise(r=>setTimeout(r,30));
-    const clave=await paqueteDerivarClave(pass, base64ABytes(sobre.salt), sobre.iteraciones);
-    let plano;
-    try{
-      const abierto=await crypto.subtle.decrypt({name:'AES-GCM', iv: base64ABytes(sobre.iv)}, clave, base64ABytes(sobre.datos));
-      const bytes=new Uint8Array(abierto);
-      plano = sobre.comprimido ? await paqueteDescomprimir(bytes) : new TextDecoder().decode(bytes);
-    }catch(e){
-      showToast('Contrasena incorrecta o paquete danado.',true); return;
-    }
-    const backup=JSON.parse(plano);
-    if(!backup || !Array.isArray(backup.datasets) || !backup.datasets.length){
-      showToast('El paquete no contiene datos.',true); return;
-    }
+    let texto;
+    try{ texto=new TextDecoder().decode(buffer); }
+    catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
+    await procesarPaqueteTexto(texto);
+  }catch(err){
+    console.error(err);
+    showToast('No se pudo abrir el paquete: '+err.message,true);
+  }
+}
+
+// Formato nuevo: se descifra y se van leyendo las filas linea por linea.
+async function procesarPaqueteBinario(cabecera, cifrado){
+  const pass=prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
+  if(pass===null) return;
+  showToast('Abriendo el paquete\u2026');
+  await new Promise(r=>setTimeout(r,30));
+  const clave=await paqueteDerivarClave(pass, base64ABytes(cabecera.salt), cabecera.iteraciones);
+  let abierto;
+  try{
+    abierto=await crypto.subtle.decrypt({name:'AES-GCM', iv: base64ABytes(cabecera.iv)}, clave, cifrado);
+  }catch(e){
+    showToast('Contrasena incorrecta o paquete danado.',true); return;
+  }
+  let ficha=null;
+  const datasets=[];
+  let actual=0;
+  // Avanza a la siguiente fuente que si tenga filas por leer.
+  const acomodar=()=>{
+    while(actual<datasets.length && datasets[actual].rows.length>=(datasets[actual].rowCount||0)) actual++;
+  };
+  try{
+    await paqueteRecorrerNDJSON(new Uint8Array(abierto), !!cabecera.comprimido, (linea)=>{
+      if(!ficha){
+        ficha=JSON.parse(linea);
+        (ficha.datasets||[]).forEach(d=>datasets.push(Object.assign({}, d, {rows:[]})));
+        acomodar();
+        return;
+      }
+      if(actual>=datasets.length) return;
+      datasets[actual].rows.push(JSON.parse(linea));
+      acomodar();
+    });
+  }catch(e){
+    console.error(e);
+    showToast('El paquete se descifro, pero no se pudo leer su contenido: '+e.message,true); return;
+  }
+  if(!ficha || !datasets.length){ showToast('El paquete no contiene datos.',true); return; }
+  await paqueteAplicarBackup({
+    generadoEn: ficha.generadoEn||'',
+    totalFilas: ficha.totalFilas||datasets.reduce((a,b)=>a+b.rows.length,0),
+    driveFiles: ficha.driveFiles||null,
+    datasets
+  });
+}
+
+// Formato antiguo (sobre JSON con textos base64): se mantiene para poder abrir
+// los paquetes que ya se habian repartido.
+async function procesarPaqueteTexto(texto){
+  let sobre;
+  try{ sobre=JSON.parse(texto); }catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
+  if(!sobre || sobre.app!==PAQUETE_APP_ID || !sobre.datos){
+    showToast('Este archivo no es un paquete del Panel de Cargue.',true); return;
+  }
+  const pass=prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
+  if(pass===null) return;
+  showToast('Abriendo el paquete\u2026');
+  await new Promise(r=>setTimeout(r,30));
+  const clave=await paqueteDerivarClave(pass, base64ABytes(sobre.salt), sobre.iteraciones);
+  let plano;
+  try{
+    const abierto=await crypto.subtle.decrypt({name:'AES-GCM', iv: base64ABytes(sobre.iv)}, clave, base64ABytes(sobre.datos));
+    const bytes=new Uint8Array(abierto);
+    plano = sobre.comprimido ? await paqueteDescomprimir(bytes) : new TextDecoder().decode(bytes);
+  }catch(e){
+    showToast('Contrasena incorrecta o paquete danado.',true); return;
+  }
+  const backup=JSON.parse(plano);
+  if(!backup || !Array.isArray(backup.datasets) || !backup.datasets.length){
+    showToast('El paquete no contiene datos.',true); return;
+  }
+  await paqueteAplicarBackup(backup);
+}
+
+// Pasos comunes a los dos formatos: guardar, recordar y calcular indicadores.
+async function paqueteAplicarBackup(backup){
+  try{
     // El visor es solo de consulta: se deja de escuchar la nube para que no
     // sobreescriba lo que trae el paquete.
     try{ stopFirestoreListener(); }catch(e){}
@@ -1060,8 +1179,8 @@ async function traerPaqueteDeCarpetaDrive(){
     botones.forEach(b=>{ b.textContent='Descargando…'; });
     showToast('Descargando el paquete de resultados…');
     const resp=await pqConTiempoLimite(pqDriveFetch('https://www.googleapis.com/drive/v3/files/'+archivo.id+'?alt=media&supportsAllDrives=true', token), 600000, 'DESCARGA_TIMEOUT');
-    const texto=await resp.text();
-    await procesarPaqueteTexto(texto);
+    const buffer=await resp.arrayBuffer();
+    await procesarPaquete(buffer);
   }catch(err){
     console.error(err);
     showToast(pqDriveMensaje(err), true);
