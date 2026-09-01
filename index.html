@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260901h">
+<link rel="stylesheet" href="styles.css?v=20260901i">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -552,15 +552,15 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
       <!-- ---- SUBVISTA: INFORMACIÓN POR FACTURA ---- -->
       <div class="subview" id="sub-facturas">
-        <div class="helpbox">Esta sección se calcula con la tabla <b>Facturas</b> (carpeta de Drive). Cada <b>Codigo</b> facturado se cruza con la tabla <b>Homólogo</b>: si el código existe en el catálogo se cuenta como <b>homologado</b>, si no existe se cuenta como <b>no homologado</b>. Los códigos se cuentan <b>sin repetir</b> dentro de cada punto de venta. El filtro de <b>Punto de venta</b> aplica únicamente a esta sección y es independiente de los filtros generales de la pantalla.</div>
+        <div class="helpbox">Esta sección se calcula con la tabla <b>Facturas</b> (carpeta de Drive). Cada <b>Codigo</b> facturado se cruza con la tabla <b>Homólogo</b>: si el código existe en el catálogo se cuenta como <b>homologado</b>, si no existe se cuenta como <b>no homologado</b>. Los códigos se cuentan <b>sin repetir</b> dentro de cada punto de venta y las <b>facturas</b> se cuentan por número de factura distinto (sin repetir). El filtro de <b>Punto de venta</b> aplica únicamente a esta sección y es independiente de los filtros generales de la pantalla.</div>
         <div class="helpbox" id="facturasDiag" style="display:none;"></div>
         <div class="stat-row" id="statsFacturas"></div>
 
         <div class="seguimiento-section">
           <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
             <div style="flex:1;min-width:220px;">
-              <h3>🧾 Códigos facturados por Punto de venta</h3>
-              <p class="seg-desc">Cada fila es un punto de venta con la cantidad de códigos distintos facturados y su desglose entre homologados y no homologados. Ordenado de mayor a menor cantidad de códigos.</p>
+              <h3>🧾 Facturas y códigos por Punto de venta</h3>
+              <p class="seg-desc">Cada fila es un punto de venta con la <b>cantidad de facturas distintas</b> (números de factura sin repetir) y el desglose de sus códigos entre homologados y no homologados. Ordenado de mayor a menor cantidad de facturas.</p>
             </div>
             <button class="btn btn-export" id="btnDescargarSinHomologo" style="margin-left:auto;align-self:center;background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar códigos sin homólogo (Excel)</button>
           </div>
@@ -574,7 +574,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <table class="data" id="tblFacturasPunto">
               <thead>
                 <tr>
-                  <th>#</th><th>Punto de venta</th><th>Códigos facturados</th><th>Códigos homologados</th><th>Códigos no homologados</th><th>% homologado</th>
+                  <th>#</th><th>Punto de venta</th><th>Cantidad de facturas</th><th>Códigos homologados</th><th>Códigos no homologados</th><th>% homologado</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -801,7 +801,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <!-- ---- SUBVISTA: BASE CUENTAS (una cuenta por EPS consolidada) ---- -->
       <!-- ---- SUBVISTA: BASE SUPERVISORES ---- -->
       <div class="subview" id="sub-supervisores">
-        <div class="helpbox">Hay <b>un supervisor por zona</b> (11 zonas). Para cada <b>homólogo</b> en cada <b>bodega detalle</b> se estima el <b>consumo promedio mensual</b> con un modelo Holt-Winters sobre la historia de cantidades autorizadas y se compara con la <b>existencia</b> y las <b>unidades pendientes</b>, para saber cuánto se necesita. Al lado se muestran las unidades que la bodega tiene <b>en traslado todavía no recibido</b> (tabla Traslados, por bodega destino, solo lo que no está marcado como Recibido) y las que se <b>compraron</b> (tabla Facturas, por punto de venta), junto con la <b>cantidad de facturas del punto de venta</b>. Con ese resultado se propone un <b>plan de traslados entre bodegas de la misma zona</b>: las que tienen excedente le pasan unidades a las que quedan cortas. Se respetan los filtros de bodega y zona de la barra superior.</div>
+        <div class="helpbox">Hay <b>un supervisor por zona</b> (11 zonas). Para cada <b>homólogo</b> en cada <b>bodega detalle</b> se estima el <b>consumo promedio mensual</b> con un modelo Holt-Winters sobre la historia de cantidades autorizadas y se compara con la <b>existencia</b> y las <b>unidades pendientes</b>, para saber cuánto se necesita. Al lado se muestran las unidades que la bodega tiene <b>en traslado todavía no recibido</b> (tabla Traslados, por bodega destino, solo lo que no está marcado como Recibido) y las que se <b>compraron</b> (tabla Facturas, por punto de venta). Con ese resultado se propone un <b>plan de traslados entre bodegas de la misma zona</b>: las que tienen excedente le pasan unidades a las que quedan cortas. Se respetan los filtros de bodega y zona de la barra superior.</div>
         <div class="helpbox" id="supDiag" style="display:none;"></div>
         <div class="stat-row" id="statsSup"></div>
 
@@ -809,7 +809,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
             <div style="flex:1;min-width:240px;">
               <h3>📦 Requerimiento por homólogo</h3>
-              <p class="seg-desc">Una fila por <b>homólogo y bodega detalle</b>: consumo mensual estimado, existencia actual, unidades <b>en traslado no recibidas</b> (lo que viene en camino), unidades <b>compradas</b> y la <b>cantidad de facturas del punto de venta</b> — se cuentan los números de factura distintos de esa bodega, no del homólogo, por eso el valor se repite en todos los homólogos del mismo punto. Además, pendientes por entregar y el total que hace falta tener disponible. El <b>balance</b> = Total requerido − (Existencia + Traslado): positivo indica unidades faltantes.</p>
+              <p class="seg-desc">Una fila por <b>homólogo y bodega detalle</b>: consumo mensual estimado, existencia actual, unidades <b>en traslado no recibidas</b> (lo que viene en camino) y unidades <b>compradas</b>. Además, pendientes por entregar y el total que hace falta tener disponible. El <b>balance</b> = Total requerido − (Existencia + Traslado): positivo indica unidades faltantes.</p>
             </div>
             <div class="field" style="min-width:210px;">
               <label>Supervisor</label>
@@ -831,7 +831,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <thead>
                 <tr>
                   <th>Supervisor</th><th>Bodega Detalle</th><th>Homólogo</th><th>Descripción DCI</th>
-                  <th>Consumo prom. mes</th><th>Existencia</th><th>Traslados no recibidos</th><th>Compras</th><th>Cantidad de Facturas (punto de venta)</th><th>Pendientes</th>
+                  <th>Consumo prom. mes</th><th>Existencia</th><th>Traslados no recibidos</th><th>Compras</th><th>Pendientes</th>
                   <th>Total requerido</th><th>Balance</th><th>% Cobertura</th>
                 </tr>
               </thead>
@@ -988,6 +988,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260901h"></script>
+<script src="script.js?v=20260901i"></script>
 </body>
 </html>
