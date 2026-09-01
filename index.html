@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260901f">
+<link rel="stylesheet" href="styles.css?v=20260901g">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -809,7 +809,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
             <div style="flex:1;min-width:240px;">
               <h3>📦 Requerimiento por homólogo</h3>
-              <p class="seg-desc">Una fila por <b>homólogo y bodega detalle</b>: consumo mensual estimado, existencia actual, unidades <b>recibidas por traslado</b>, unidades <b>compradas</b> (facturas), pendientes por entregar y el total que hace falta tener disponible. El <b>balance</b> negativo indica unidades faltantes.</p>
+              <p class="seg-desc">Una fila por <b>homólogo y bodega detalle</b>: consumo mensual estimado, existencia actual, unidades <b>en traslado no recibidas</b>, unidades <b>compradas</b> y la <b>cantidad de facturas</b> distintas, pendientes por entregar y el total que hace falta tener disponible. El <b>balance</b> = Total requerido − (Existencia + Traslado): positivo indica unidades faltantes.</p>
             </div>
             <div class="field" style="min-width:210px;">
               <label>Supervisor</label>
@@ -831,7 +831,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <thead>
                 <tr>
                   <th>Supervisor</th><th>Bodega Detalle</th><th>Homólogo</th><th>Descripción DCI</th>
-                  <th>Consumo prom. mes</th><th>Existencia</th><th>Traslados</th><th>Compras</th><th>Pendientes</th>
+                  <th>Consumo prom. mes</th><th>Existencia</th><th>Traslados</th><th>Compras</th><th>Cantidad de Facturas</th><th>Pendientes</th>
                   <th>Total requerido</th><th>Balance</th><th>% Cobertura</th>
                 </tr>
               </thead>
@@ -842,7 +842,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 
         <div class="seguimiento-section">
           <h3>🔁 Plan de redistribución entre bodegas de la zona</h3>
-          <p class="seg-desc">Movimientos sugeridos: cada fila indica cuántas unidades conviene trasladar de una bodega con excedente a otra de la <b>misma zona</b> que está corta. <b>Faltante del destino</b> = unidades que le hacen falta a la bodega que recibe (consumo promedio + pendientes − existencia). <b>Excedente del origen</b> = unidades que le sobran a la bodega que entrega despues de cubrir su propia necesidad.</p>
+          <p class="seg-desc">Movimientos sugeridos: cada fila indica cuántas unidades conviene trasladar de una bodega con excedente a otra de la <b>misma zona</b> que está corta. <b>Faltante del destino</b> = unidades que le hacen falta a la bodega que recibe (consumo promedio + pendientes − existencia − traslados en camino). <b>Excedente del origen</b> = unidades que le sobran a la bodega que entrega despues de cubrir su propia necesidad.</p>
           <div class="table-wrap">
             <table class="data" id="tblSupPlan">
               <thead>
@@ -988,6 +988,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260901f"></script>
+<script src="script.js?v=20260901g"></script>
 </body>
 </html>
