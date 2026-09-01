@@ -127,7 +127,7 @@ const DATASETS = [
   {
     key: 'traslados', tabla: 'Tabla_8', title: 'Traslados', required: false,
     desc: 'Traslados entre bodegas realizados por cada usuario. Los datos provienen exclusivamente de la carpeta de Google Drive y se reemplazan por completo en cada sincronización. El Codigo se cruza con la tabla Homólogo para saber si la molécula es Pareto o No Pareto.',
-    cols: ['Traslado','Fecha','Bodega Origen','Bodega Destino','Codigo','Descripcion','Cantidad','Usuario'],
+    cols: ['Traslado','Fecha','Bodega Origen','Bodega Destino','Codigo','Descripcion','Cantidad','Recibido','Usuario'],
     fields: {
       traslado: ['TRASLADO','NRO TRASLADO','NUMERO TRASLADO','NÚMERO TRASLADO','No TRASLADO','DOCUMENTO TRASLADO','DOCUMENTO','CONSECUTIVO'],
       fecha: ['FECHA','FECHA TRASLADO','FECHA DE TRASLADO','FECHA DEL TRASLADO'],
@@ -136,6 +136,9 @@ const DATASETS = [
       codigo: ['CODIGO','CÓDIGO','CODIGO ARTICULO','CODIGO DE ARTICULO','COD ARTICULO','COD. ARTICULO'],
       descripcion: ['DESCRIPCION','DESCRIPCIÓN','DESCRIPCION ARTICULO','DESCRIPCIÓN ARTICULO','ARTICULO','NOMBRE ARTICULO','PRODUCTO'],
       cantidad: ['CANTIDAD','CANTIDAD TRASLADADA','UNIDADES','CANT','CANT.'],
+      // Estado de recepción del traslado: 'Recibido' o 'No Recibido'. En la Base
+      // Supervisores solo se cuentan como pendientes las líneas NO recibidas.
+      recibido: ['RECIBIDO','RECIBIDA','ESTADO RECIBIDO','ESTADO DEL TRASLADO','ESTADO TRASLADO','ESTADO','RECEPCION','RECEPCIÓN'],
       usuario: ['USUARIO','USUARIO CREACION','USUARIO CREACIÓN','USUARIO QUE REALIZA','USUARIO TRASLADO','RESPONSABLE']
     }
   },
@@ -1424,6 +1427,10 @@ async function calcularIndicadores(){
         codigo,
         descripcion: String(r.descripcion||'').trim() || (codigoToDescripcionDci.get(codigo) || ''),
         cantidad: toNumber(r.cantidad),
+        // Texto original de la columna "Recibido" y bandera derivada: si el valor
+        // empieza por "N" (No Recibido / NO RECIBIDA) la línea sigue pendiente.
+        recibido: String(r.recibido||'').trim(),
+        noRecibido: /^n/i.test(String(r.recibido||'').trim()),
         usuario: String(r.usuario||'').trim() || 'SIN USUARIO',
         moleculaPareto: p,
         // Zona de la bodega DESTINO (tabla Bodega y Zona). Permite agrupar y filtrar
@@ -6334,13 +6341,17 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     if(r.codigoArticulo && !codHom.has(r.codigoArticulo)) codHom.set(r.codigoArticulo, r.homologo);
   });
 
-  /* Unidades recibidas por traslado (tabla Traslados, por bodega DESTINO) y
-     unidades compradas (tabla Facturas, por punto de venta), sumadas por
-     homologo + bodega para mostrarlas al lado de la existencia.             */
+  /* Unidades de traslado NO RECIBIDAS (tabla Traslados, columna "Recibido", por
+     bodega DESTINO) y unidades compradas (tabla Facturas, por punto de venta).
+     Solo interesan las lineas "No Recibido": son las que estan en camino y
+     todavia no entraron a la existencia de la bodega.                       */
   const proc=(typeof state!=='undefined' && state && state.processed) ? state.processed : {};
   const trasMap=new Map();
+  let trasNoRecib=0;
   (proc.traslados||[]).forEach(t=>{
+    if(!t.noRecibido) return;            // ya recibido: no queda pendiente por llegar
     const hom=codHom.get(normValue(t.codigo));
+    trasNoRecib++;
     if(!hom || !t.bodegaDestino) return;
     const k=hom+'|'+normValue(t.bodegaDestino);
     trasMap.set(k, (trasMap.get(k)||0) + (Number(t.cantidad)||0));
@@ -6371,7 +6382,8 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const k=hom+'|'+normValue(bod);
     let g=agg.get(k);
     if(!g){
-      g={hom, bodega:bod, zona:zn, existencia:null, pend:0, lineas:0, lineasPend:0, meses:new Map()};
+      g={hom, bodega:bod, zona:zn, existencia:null, pend:0, lineas:0, lineasPend:0, meses:new Map(),
+         pendMes:new Map(), pendLinMes:new Map()};
       agg.set(k,g);
     }
     if(g.existencia===null) g.existencia=Number(r.existenciaPunto)||0;
@@ -6387,15 +6399,19 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       }
     }
     g.lineas++;
-    if(r.lineaPendiente==='SI'){ g.lineasPend++; g.pend += Math.abs(Number(r.diferencia)||0); }
+    /* Los pendientes se guardan por mes de dispensacion: mas abajo solo se suman
+       los de los DOS ULTIMOS meses cargados (los viejos ya no son gestionables). */
+    if(r.lineaPendiente==='SI' && mes){
+      g.pendMes.set(mes, (g.pendMes.get(mes)||0) + Math.abs(Number(r.diferencia)||0));
+      g.pendLinMes.set(mes, (g.pendLinMes.get(mes)||0) + 1);
+    }
   });
 
   /* ---- Normalizacion de la historia acumulativa ---------------------------
-     Se recorren los meses en orden y se clasifica cada uno segun cuanto del
-     calendario alcanzo a cargarse. El ultimo mes casi siempre viene incompleto
-     porque el reporte es acumulativo: se proyecta a mes completo si ya tiene al
-     menos el 60% de los dias, y se descarta de la serie si trae menos. Los meses
-     intermedios se toman como cerrados (su informacion ya llego completa).   */
+     Se recorren los meses en orden y solo se toman los meses COMPLETOS (ya
+     cerrados). El ultimo mes casi siempre viene incompleto porque el reporte es
+     acumulativo: ese mes se DESCARTA por completo y no se proyecta, para que el
+     consumo promedio salga unicamente de meses reales y cerrados.            */
   const mesesTodos=[...mesesGlobal].sort();
   const mesesInfo=mesesTodos.map((k,i)=>{
     const c=_cierreDelMes(k, diaMaxMes.get(k)||0);
@@ -6404,16 +6420,16 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const abierto = esUltimo && !c.cerrado;
     return {
       mes:k, dias:c.dias, dia:c.dia, frac:c.frac, abierto,
-      factor: abierto ? c.factor : 1,
-      usable: abierto ? c.proyectable : true
+      factor: 1,                 // nunca se proyecta: los meses entran tal cual
+      usable: !abierto           // el mes abierto no alimenta el promedio
     };
   });
-  // Meses que efectivamente alimentan el pronostico (con su factor de ajuste).
-  // Si el unico mes cargado esta abierto no se puede descartar: se proyecta igual,
-  // porque de lo contrario la tabla quedaria en cero por falta de historia.
+  // Meses que efectivamente alimentan el promedio (solo meses cerrados).
+  // Si el unico mes cargado esta abierto no se puede descartar: se usa tal cual
+  // (sin proyectar), porque de lo contrario la tabla quedaria en cero.
   let mesesUsados=mesesInfo.filter(m=>m.usable);
   if(!mesesUsados.length && mesesInfo.length){
-    mesesUsados=mesesInfo.map(m=>Object.assign({}, m, {usable:true}));
+    mesesUsados=mesesInfo.map(m=>Object.assign({}, m, {usable:true, factor:1}));
   }
   const mesesOrden=mesesUsados.map(m=>m.mes);
   const factorMes=new Map(mesesUsados.map(m=>[m.mes, m.factor]));
@@ -6423,7 +6439,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   const parcialEnSerie = !!(mesParcial && factorMes.has(mesParcial.mes));
 
   /* Serie mensual de un homologo+bodega: se completa con ceros en los meses sin
-     dispensacion y se lleva a "mes equivalente completo" el mes en curso.    */
+     dispensacion. Todos los meses de la serie son meses cerrados.            */
   const serieDe=(mapMeses)=>{
     if(!mesesOrden.length) return [];
     const propios=mesesOrden.filter(k=>mapMeses.has(k));
@@ -6440,23 +6456,29 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
 
   // ---- Nivel bodega: consumo pronosticado, existencia, pendiente, requerido ----
   // Esta es la base de la Tabla 1: una fila por homologo y bodega detalle.
+  /* Los pendientes solo se cuentan de los DOS ULTIMOS meses cargados (incluido el
+     mes en curso): un pendiente mas viejo ya no refleja la necesidad actual.  */
+  const mesesPend=new Set(mesesTodos.slice(-2));
   _supBodegas=[...agg.values()].map(g=>{
     const serie=serieDe(g.meses);
     const pr=pronosticoConsumoMensual(serie);
     const consumo=Math.round(pr.valor);
     const existencia=g.existencia||0;
-    const requerido=consumo + g.pend;
+    let pend=0, lineasPend=0;
+    mesesPend.forEach(m=>{ pend += g.pendMes.get(m)||0; lineasPend += g.pendLinMes.get(m)||0; });
+    g.pend=pend; g.lineasPend=lineasPend;
+    const requerido=consumo + pend;
     const balance=existencia - requerido;      // + excedente / - faltante
     const k=g.hom+'|'+normValue(g.bodega);
     return {
       supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
       descripcionDci: homDci.get(g.hom) || '',
-      meses:serie.length, metodo:pr.metodo, consumo, existencia, pend:g.pend,
-      traslados: trasMap.get(k) || 0,      // unidades recibidas por traslado
+      meses:serie.length, metodo:pr.metodo, consumo, existencia, pend,
+      traslados: trasMap.get(k) || 0,      // unidades de traslado aun NO recibidas
       compras: compMap.get(k) || 0,        // unidades compradas (facturas)
       requerido, balance, faltante: balance<0 ? -balance : 0,
       cobertura: requerido>0 ? existencia/requerido : null,
-      lineas:g.lineas, lineasPend:g.lineasPend
+      lineas:g.lineas, lineasPend
     };
   });
 
@@ -6497,7 +6519,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   });
   _supPlan=[];
   porZonaHomBodegas.forEach(lista=>{
-    const origen=lista.filter(b=>b.balance>0).map(b=>({bodega:b.bodega, disp:b.balance}))
+    const origen=lista.filter(b=>b.balance>0).map(b=>({bodega:b.bodega, disp:b.balance, exi:b.existencia}))
       .sort((a,b)=>b.disp-a.disp);
     const destino=lista.filter(b=>b.balance<0).map(b=>({bodega:b.bodega, falta:-b.balance, req:b.requerido, exi:b.existencia}))
       .sort((a,b)=>b.falta-a.falta);
@@ -6515,6 +6537,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
             supervisor:ref.supervisor, zona:ref.zona, hom:ref.hom,
             origen:o.bodega, destino:d.bodega, unidades:mov,
             faltaDestino:d.falta, requeridoDestino:d.req, existenciaDestino:d.exi,
+            existenciaOrigen:o.exi,          // existencia total de la bodega que entrega
             sobranteOrigen:o.disp-mov
           });
           o.disp-=mov; falta-=mov;
@@ -6529,6 +6552,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     lineas:rows.length, sinZona, zonasFuera:[...zonasFuera].sort((a,b)=>a.localeCompare(b,'es')),
     meses:mesesOrden.length, desde:mesesOrden[0]||'', hasta:mesesOrden[mesesOrden.length-1]||'',
     mesesCargados:mesesTodos.length,
+    mesesPend:[...mesesPend].sort(),
     parcial: mesParcial ? {mes:mesParcial.mes, dia:mesParcial.dia, dias:mesParcial.dias,
                            pct:Math.round(mesParcial.frac*100), usado:parcialEnSerie} : null,
     excluido: mesExcluido || ''
@@ -6545,11 +6569,16 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       const et=mesLabel(mesParcial.mes)+' va al día '+fmtInt(mesParcial.dia)+' de '+fmtInt(mesParcial.dias)+
                ' ('+fmtInt(_supGlobal.parcial.pct)+'% del mes)';
       if(parcialEnSerie){
-        avisos.push(et+': se proyecta a mes completo para no subestimar el consumo.');
+        avisos.push(et+': es el único mes cargado, así que se usa tal cual (sin proyectar) y el consumo puede quedar subestimado.');
       } else {
-        avisos.push(et+': queda <b>fuera del pronóstico</b> hasta que acumule más días. '+
-          'El consumo se estima con los '+fmtInt(mesesOrden.length)+' mes(es) ya cerrados.');
+        avisos.push(et+': queda <b>fuera del consumo promedio</b> porque el mes aún no ha cerrado. '+
+          'El promedio se calcula solo con los '+fmtInt(mesesOrden.length)+' mes(es) completos y no se proyecta ningún mes.');
       }
+    }
+    // Los pendientes se limitan a la ventana de los dos ultimos meses.
+    if(_supGlobal.mesesPend && _supGlobal.mesesPend.length){
+      avisos.push('Los <b>pendientes</b> corresponden solo a los <b>2 últimos meses</b> ('+
+        escHtml(_supGlobal.mesesPend.map(m=>mesLabel(m)).join(' y '))+'); los pendientes más antiguos no suman al requerimiento.');
     }
     if(mesesOrden.length<3){
       avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> mes(es) completo(s) el consumo se estima con promedio simple. '+
@@ -6559,7 +6588,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
         'Desde 8 meses se activa Holt-Winters con estacionalidad.');
     }
     // Las columnas Traslados y Compras dependen de tablas que se cargan aparte.
-    if(!(proc.traslados||[]).length) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados</b> queda en cero.');
+    if(!(proc.traslados||[]).length) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados (no recibidos)</b> queda en cero.');
     if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: la columna <b>Compras</b> queda en cero.');
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
@@ -6632,16 +6661,16 @@ function pintarBaseSupervisores(){
   if(statsEl){
     const G=_supGlobal||{meses:0,desde:'',hasta:''};
     const per=G.desde ? (mesLabel(G.desde)+' a '+mesLabel(G.hasta)) : 'sin periodo';
-    // La historia es acumulativa: se aclara cuantos meses completos alimentan el pronostico.
+    // La historia es acumulativa: se aclara cuantos meses COMPLETOS alimentan el promedio.
     const notaMes = G.parcial
-      ? (G.parcial.usado ? ' · '+mesLabel(G.parcial.mes)+' proyectado al '+fmtInt(G.parcial.pct)+'%'
-                         : ' · '+mesLabel(G.parcial.mes)+' aún incompleto (excluido)')
+      ? (G.parcial.usado ? ' · '+mesLabel(G.parcial.mes)+' es el único mes cargado (aún abierto)'
+                         : ' · '+mesLabel(G.parcial.mes)+' aún abierto (excluido, sin proyectar)')
       : '';
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Zonas en la selección</div><div class="value">'+fmtInt(zonas.size)+'</div>'+
       '<div class="sub">de '+fmtInt(ZONAS_SUPERVISOR.length)+' zonas con supervisor</div></div>'+
       '<div class="stat"><div class="label">Homólogos por bodega</div><div class="value">'+fmtInt(filas.length)+'</div>'+
-      '<div class="sub">'+fmtInt(G.meses)+' meses en el pronóstico · '+escHtml(per)+escHtml(notaMes)+'</div></div>'+
+      '<div class="sub">'+fmtInt(G.meses)+' meses completos en el promedio · '+escHtml(per)+escHtml(notaMes)+'</div></div>'+
       '<div class="stat"><div class="label">Total requerido</div><div class="value">'+fmtInt(totReq)+'</div>'+
       '<div class="sub">'+fmtInt(totExi)+' unidades en existencia</div></div>'+
       '<div class="stat"><div class="label">Unidades faltantes</div><div class="value '+(totFalta?'pct-bad':'')+'">'+fmtInt(totFalta)+'</div>'+
@@ -6683,13 +6712,14 @@ function pintarBaseSupervisores(){
       '<tr><td class="txt">'+escHtml(p.zona)+'</td>'+
       '<td class="txt">'+escHtml(p.hom)+'</td>'+
       '<td class="txt">'+escHtml(p.origen)+'</td>'+
+      '<td>'+fmtInt(p.existenciaOrigen||0)+'</td>'+
       '<td class="txt">'+escHtml(p.destino)+'</td>'+
       '<td><b>'+fmtInt(p.unidades)+'</b></td>'+
       '<td>'+fmtInt(p.faltaDestino)+'</td>'+
       '<td>'+fmtInt(p.sobranteOrigen)+'</td></tr>'
     ).join('');
-    if(!vistaPlan.length) hp='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados posibles: dentro de la zona no hay bodegas con excedente para las que están cortas.</td></tr>';
-    else if(plan.length>vistaPlan.length) hp+='<tr class="total-row"><td class="txt" colspan="7">Se muestran '+fmtInt(vistaPlan.length)+
+    if(!vistaPlan.length) hp='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados posibles: dentro de la zona no hay bodegas con excedente para las que están cortas.</td></tr>';
+    else if(plan.length>vistaPlan.length) hp+='<tr class="total-row"><td class="txt" colspan="8">Se muestran '+fmtInt(vistaPlan.length)+
       ' de '+fmtInt(plan.length)+' movimientos. El Excel trae el plan completo.</td></tr>';
     tbPlan.innerHTML=hp;
   }
@@ -6732,15 +6762,16 @@ function pintarBaseSupervisores(){
       'Supervisor':t.supervisor, 'Bodega Detalle':t.bodega, 'Homologo':t.hom,
       'Descripcion DCI':t.descripcionDci,
       'Consumo promedio mensual (Holt-Winters)':t.consumo,
-      'Existencia':t.existencia, 'Traslados recibidos':t.traslados, 'Compras (facturas)':t.compras,
-      'Unidades pendientes':t.pend,
+      'Existencia':t.existencia, 'Traslados no recibidos':t.traslados, 'Compras (facturas)':t.compras,
+      'Unidades pendientes (2 ultimos meses)':t.pend,
       'Total requerido':t.requerido, 'Balance (existencia - requerido)':t.balance,
       '% Cobertura':t.cobertura===null?'':+(t.cobertura*100).toFixed(1),
       'Zona':t.zona, 'Metodo de pronostico':t.metodo, 'Meses de historia':t.meses
     }));
     const hoja2=plan.map(p=>({
       'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':p.hom,
-      'Bodega origen (excedente)':p.origen, 'Bodega destino (faltante)':p.destino,
+      'Bodega origen (excedente)':p.origen, 'Existencia bodega origen':p.existenciaOrigen||0,
+      'Bodega destino (faltante)':p.destino,
       'Unidades a trasladar':p.unidades,
       'Faltante del destino':p.faltaDestino, 'Total requerido destino':p.requeridoDestino,
       'Existencia destino':p.existenciaDestino, 'Excedente que queda en origen':p.sobranteOrigen
@@ -6750,8 +6781,8 @@ function pintarBaseSupervisores(){
       a.zona.localeCompare(b.zona,'es') || a.hom.localeCompare(b.hom,'es')).map(z=>({
       'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':z.hom, 'Descripcion DCI':z.descripcionDci,
       'Consumo promedio mensual':z.consumo, 'Existencia':z.existencia,
-      'Traslados recibidos':z.traslados, 'Compras (facturas)':z.compras,
-      'Unidades pendientes':z.pend, 'Total requerido':z.requerido, 'Balance':z.balance,
+      'Traslados no recibidos':z.traslados, 'Compras (facturas)':z.compras,
+      'Unidades pendientes (2 ultimos meses)':z.pend, 'Total requerido':z.requerido, 'Balance':z.balance,
       '% Cobertura':z.cobertura===null?'':+(z.cobertura*100).toFixed(1),
       'Bodegas':z.bodegas, 'Bodegas cortas':z.bodegasDeficit,
       'Unidades faltantes':z.faltante, 'Se cubre con traslado':z.cubreConTraslado,
