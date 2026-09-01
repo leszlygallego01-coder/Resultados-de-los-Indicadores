@@ -194,6 +194,10 @@ nav.tabs button.active .count{background:rgba(255,255,255,.2);border-color:rgba(
 .btn-abc{background:#6366f1;color:#fff;font-weight:700;border-radius:8px;box-shadow:0 1px 2px rgba(99,102,241,.3);}
 .btn-abc:hover{background:#4f46e5;box-shadow:0 4px 12px rgba(99,102,241,.28);}
 .btn-abc:disabled{background:#c7c9f5;box-shadow:none;cursor:not-allowed;}
+/* cantidad autorizada en cero: ambar, texto blanco en negrita */
+.btn-cero{background:#d97706;color:#fff;font-weight:700;border-radius:8px;box-shadow:0 1px 2px rgba(217,119,6,.3);}
+.btn-cero:hover{background:#b45309;box-shadow:0 4px 12px rgba(217,119,6,.28);}
+.btn-cero:disabled{background:#f0cfa2;box-shadow:none;cursor:not-allowed;}
 
 /* ---------------- filtros ---------------- */
 .filters{
