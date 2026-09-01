@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260902a">
+<link rel="stylesheet" href="styles.css?v=20260902b">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -98,6 +98,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="field"><label>&nbsp;</label><button class="btn btn-ghost" id="btnCargarPaquete" title="Abrir el paquete cifrado (.medisfarma) que publica el responsable del Panel de Cargue">🔒 Cargar paquete del panel</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-export" id="btnTraerDrive" title="Lee el paquete de resultados directamente de la carpeta de Google Drive">☁️ Traer resultados de la carpeta</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-abc" id="btnExportarABC" title="Ranking de bodegas por nivel de dispensación (mayor a menor), clasificadas A / B / C">📊 Descargar Análisis ABC</button></div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-cero" id="btnExportarCantidadCero" title="Cuántas líneas por Bodega Detalle tienen Cantidad Autorizada = 0">🚫 Descargar Cantidad Autorizada = 0</button></div>
     </div>
 
     <div class="subfilters" id="subfiltersBar" style="display:none;">
@@ -988,6 +989,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260902a"></script>
+<script src="script.js?v=20260902b"></script>
 </body>
 </html>
