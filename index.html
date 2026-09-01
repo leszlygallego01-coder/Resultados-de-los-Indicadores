@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260901l">
+<link rel="stylesheet" href="styles.css?v=20260901m">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -801,7 +801,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <!-- ---- SUBVISTA: BASE CUENTAS (una cuenta por EPS consolidada) ---- -->
       <!-- ---- SUBVISTA: BASE SUPERVISORES ---- -->
       <div class="subview" id="sub-supervisores">
-        <div class="helpbox">Hay <b>un supervisor por zona</b> (11 zonas). Para cada <b>homólogo</b> en cada <b>bodega detalle</b> se estima el <b>consumo promedio mensual</b> con <b>Suavización Exponencial Simple (SES)</b>, eligiendo para cada homólogo el <b>alfa</b> (0,05 a 1,00) que deja el menor error de ajuste <b>MAD</b> sobre su propia historia de cantidades autorizadas (desempate por <b>MAPE</b>), y se compara con la <b>existencia</b> y las <b>unidades pendientes</b>, para saber cuánto se necesita. Al lado se muestran las unidades que la bodega tiene <b>en traslado todavía no recibido</b> (tabla Traslados, por bodega destino, solo lo que está marcado como <b>No Recibido</b>). Con ese resultado se propone un <b>plan de traslados entre bodegas de la misma zona</b>: las que tienen excedente le pasan unidades a las que quedan cortas. Se respetan los filtros de bodega y zona de la barra superior.</div>
+        <div class="helpbox">Hay <b>un supervisor por zona</b> (11 zonas). Para cada <b>homólogo</b> en cada <b>bodega detalle</b> se estima el <b>consumo promedio mensual</b> con <b>Suavización Exponencial Simple (SES)</b>, eligiendo para cada homólogo el <b>alfa</b> (0,05 a 1,00) que deja el menor error de ajuste <b>MAD</b> sobre su propia historia de cantidades autorizadas (desempate por <b>MAPE</b>), y se compara con la <b>existencia</b> y las <b>unidades pendientes</b>, para saber cuánto se necesita. Al lado se muestran las unidades que la bodega tiene <b>en traslado todavía no recibido</b> (tabla Traslados, por bodega destino, solo lo que está marcado como <b>No Recibido</b>). Con ese resultado se propone un <b>plan de traslados entre bodegas de la misma zona</b>: las que tienen excedente le pasan unidades a las que quedan cortas. Se respetan los filtros de bodega y zona de la barra superior. El buscador de la tabla filtra al mismo tiempo por <b>código de homologación</b>, <b>Descripción DCI</b> y <b>código de artículo</b>. Cuando el código de homologación viene vacío o en basura (por ejemplo <b>0-0-NA</b>, <b>///N</b> o solo ceros), la fila se agrupa por su <b>código de artículo</b> y queda marcada como <b>sin homólogo</b>, para no mezclar medicamentos distintos en una sola fila.</div>
         <div class="helpbox" id="supDiag" style="display:none;"></div>
         <div class="stat-row" id="statsSup"></div>
 
@@ -819,9 +819,9 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <label>Zona</label>
               <select id="fSupZona"><option value="">Todas las zonas</option></select>
             </div>
-            <div class="field" style="min-width:190px;">
-              <label>Homólogo</label>
-              <input type="text" id="fSupHomologo" placeholder="Buscar homólogo...">
+            <div class="field" style="min-width:230px;">
+              <label>Buscar (homólogo, DCI o código)</label>
+              <input type="text" id="fSupHomologo" placeholder="Homólogo, medicamento o código...">
             </div>
             <label class="chk" style="align-self:center;"><input type="checkbox" id="fSupSoloFaltante"> Solo con faltante</label>
             <button class="btn btn-export" id="btnExportSup">⬇ Exportar base de supervisores (Excel)</button>
@@ -988,6 +988,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260901l"></script>
+<script src="script.js?v=20260901m"></script>
 </body>
 </html>
