@@ -492,6 +492,31 @@ function stopFirestoreListener(){
 function stripAccents(s){return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
 function normHeader(s){return stripAccents(String(s||'')).toUpperCase().replace(/\s+/g,' ').trim();}
 function normValue(s){if(s===null||s===undefined)return '';return stripAccents(String(s)).toUpperCase().trim();}
+/* Clave "suelta" de un codigo de articulo: solo letras y numeros y sin ceros a la
+   izquierda. Sirve para emparejar el mismo codigo escrito de formas distintas
+   entre tablas (por ejemplo M-00123, M00123 y 123). */
+function claveCodigo(c){
+  const s=normValue(c).replace(/[^A-Z0-9]/g,'');
+  if(!s) return '';
+  const sinCeros=s.replace(/^0+/,'');
+  return sinCeros || s;
+}
+/* Estado de recepcion de un traslado (columna "Recibido" de la tabla Traslados).
+   Devuelve true cuando la linea NO ha sido recibida, es decir sigue en camino.
+   Solo se considera RECIBIDO lo que viene marcado explicitamente como recibido
+   (Recibido / Si / Yes / True / 1 / X); cualquier otro valor (No, NO RECIBIDO,
+   Pendiente, En transito, 0, False o vacio) se cuenta como pendiente por llegar,
+   para no perder unidades por una escritura distinta del estado. */
+function esTrasladoNoRecibido(v){
+  const s=normValue(v).replace(/[^A-Z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+  if(!s) return true;                                  // sin dato: se asume en camino
+  // "NO RECIBIDO", "SIN RECIBIR", "NO" y similares: sigue pendiente.
+  if(/^(NO|N|SIN|PENDIENTE|FALSE|FALSO|0)\b/.test(s)) return true;
+  const prim=s.split(' ')[0];
+  if(/^RECIBID/.test(prim)) return false;
+  if(['SI','S','Y','YES','TRUE','VERDADERO','1','X','OK','ENTREGADO','ENTREGADA','CONFIRMADO','CONFIRMADA','APROBADO','APROBADA','CERRADO','CERRADA'].indexOf(prim)>=0) return false;
+  return true;                                         // Pendiente, En transito, etc.
+}
 /* Códigos que NO corresponden a un medicamento (servicios, cobros, domicilios, etc.).
    Aunque la columna Diferencia sea negativa, estas líneas no se cuentan como pendientes
    ni como líneas por subsanar en ningún indicador. */
@@ -1300,7 +1325,13 @@ async function calcularIndicadores(){
     (byKey.homologo||[]).forEach(r=>{
       const cod=normValue(r.codigo);
       if(cod && !codigoToHomologo.has(cod)) codigoToHomologo.set(cod, normValue(r.homologo));
+      // Llave suelta del mismo codigo (sin guiones ni ceros a la izquierda) para
+      // cruzar las tablas Traslados y Facturas cuando lo escriben distinto.
+      const ck=claveCodigo(r.codigo);
+      if(ck && !codigoToHomologo.has(ck)) codigoToHomologo.set(ck, normValue(r.homologo));
     });
+    // Homologo de un codigo cualquiera: primero exacto, luego por llave suelta.
+    const homDeCod=(c)=>String(codigoToHomologo.get(normValue(c)) || codigoToHomologo.get(claveCodigo(c)) || '').trim();
     // Cruce DIRECTO Codigo -> Molecula Pareto (columna Codigo contra columna Molecula Pareto,
     // ambas dentro de la hoja Homologo — tal como se definió: "columna código y código de
     // articulo son iguales"). No se pasa por la columna Homologo para este dato.
@@ -1549,7 +1580,10 @@ async function calcularIndicadores(){
         // Texto original de la columna "Recibido" y bandera derivada: si el valor
         // empieza por "N" (No Recibido / NO RECIBIDA) la línea sigue pendiente.
         recibido: String(r.recibido||'').trim(),
-        noRecibido: /^n/i.test(String(r.recibido||'').trim()),
+        noRecibido: esTrasladoNoRecibido(r.recibido),
+        // Homologo del codigo trasladado (tabla Homologo): permite llevar las
+        // unidades en camino al mismo homologo de la Tabla 1 de supervisores.
+        homologo: homDeCod(codigo),
         usuario: String(r.usuario||'').trim() || 'SIN USUARIO',
         moleculaPareto: p,
         // Zona de la bodega DESTINO (tabla Bodega y Zona). Permite agrupar y filtrar
@@ -1565,7 +1599,7 @@ async function calcularIndicadores(){
     const facturasRaw = byKey.facturas || [];
     const facturasRows = facturasRaw.map(r=>{
       const codigo = normValue(r.codigo);
-      const hom = codigoToHomologo.has(codigo) ? String(codigoToHomologo.get(codigo)||'').trim() : '';
+      const hom = homDeCod(codigo);
       return {
         fechaFactura: toDateSafe(r.fechaFactura),
         factura: String(r.factura||'').trim(),
@@ -1576,7 +1610,7 @@ async function calcularIndicadores(){
         cantidad: toNumber(r.cantidad),
         puntoVenta: String(r.puntoVenta||'').trim() || 'SIN PUNTO DE VENTA',
         homologo: hom,
-        tieneHomologo: codigoToHomologo.has(codigo)
+        tieneHomologo: !!homDeCod(codigo)
       };
     });
     const facturasPuntos = Array.from(new Set(facturasRows.map(r=>r.puntoVenta).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
@@ -6458,37 +6492,65 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     if(!r.homologo) return;
     if(!homDci.get(r.homologo) && r.descripcionDci) homDci.set(r.homologo, r.descripcionDci);
     if(r.codigoArticulo && !codHom.has(r.codigoArticulo)) codHom.set(r.codigoArticulo, r.homologo);
+    /* Segunda llave del mismo codigo sin guiones ni ceros a la izquierda: la
+       tabla Traslados y la de Facturas suelen escribirlo distinto. */
+    const ck=claveCodigo(r.codigoArticulo);
+    if(ck && !codHom.has(ck)) codHom.set(ck, r.homologo);
   });
+  // Homologo de un codigo venido de otra tabla (exacto y luego llave suelta).
+  const homDeCodigo=(cod)=>codHom.get(normValue(cod)) || codHom.get(claveCodigo(cod)) || '';
 
   /* Unidades de traslado NO RECIBIDAS (tabla Traslados, columna "Recibido", por
      bodega DESTINO) y unidades compradas (tabla Facturas, por punto de venta).
      Solo interesan las lineas "No Recibido": son las que estan en camino y
      todavia no entraron a la existencia de la bodega.                       */
   const proc=(typeof state!=='undefined' && state && state.processed) ? state.processed : {};
+  /* Los nombres de bodega de Traslados y de Facturas casi nunca vienen escritos
+     igual que la Bodega Detalle del reporte. Se emparejan con la misma logica
+     difusa que usa el resto del visor (nombre exacto, contenido o codigo M/N/B). */
+  const bodegasReporte=new Set();
+  base.forEach(r=>{ const b=normValue(r.bodegaDetalle); if(b) bodegasReporte.add(b); });
+  const cacheBodegaSup=new Map();
+  const bodegaDeNombre=(nombre)=>{
+    const n=normValue(nombre);
+    if(!n) return '';
+    if(bodegasReporte.has(n)) return n;
+    return resolverBodegaReporte(nombre, bodegasReporte, cacheBodegaSup);
+  };
   const trasMap=new Map();
-  let trasNoRecib=0;
+  let trasNoRecib=0, trasSinHom=0, trasSinBodega=0, trasUnidades=0;
+  const trasBodegasSinCruce=new Set();
   (proc.traslados||[]).forEach(t=>{
-    if(!t.noRecibido) return;            // ya recibido: no queda pendiente por llegar
-    const hom=codHom.get(normValue(t.codigo));
+    const pend=('noRecibido' in t) ? t.noRecibido : esTrasladoNoRecibido(t.recibido);
+    if(!pend) return;                    // ya recibido: no queda pendiente por llegar
     trasNoRecib++;
-    if(!hom || !t.bodegaDestino) return;
-    const k=hom+'|'+normValue(t.bodegaDestino);
-    trasMap.set(k, (trasMap.get(k)||0) + (Number(t.cantidad)||0));
+    // Homologo: primero el que ya trae la fila; si no, el cruce por codigo del reporte.
+    const hom=t.homologo || homDeCodigo(t.codigo);
+    const bod=bodegaDeNombre(t.bodegaDestino);
+    if(!hom){ trasSinHom++; return; }
+    if(!bod){ trasSinBodega++; if(t.bodegaDestino) trasBodegasSinCruce.add(String(t.bodegaDestino).trim()); return; }
+    const k=hom+'|'+bod;
+    const u=Number(t.cantidad)||0;
+    trasUnidades+=u;
+    trasMap.set(k, (trasMap.get(k)||0) + u);
   });
   const compMap=new Map();
-  /* Numeros de factura DISTINTOS por homologo + punto de venta: una misma factura
-     puede traer varias lineas del mismo homologo y no debe contarse dos veces.  */
-  const facSetMap=new Map();
+  /* Cantidad de Facturas = numeros de factura DISTINTOS del PUNTO DE VENTA
+     (bodega), sin importar el homologo: es el total de facturas que recibio ese
+     punto. Las unidades compradas si se siguen sumando por homologo+bodega.   */
+  const facSetBodega=new Map();
   (proc.facturas||[]).forEach(fa=>{
-    const hom=fa.homologo || codHom.get(normValue(fa.codigo));
-    if(!hom || !fa.puntoVenta) return;
-    const k=hom+'|'+normValue(fa.puntoVenta);
-    compMap.set(k, (compMap.get(k)||0) + (Number(fa.cantidad)||0));
+    const bod=bodegaDeNombre(fa.puntoVenta);
+    if(!bod) return;
     const nro=String(fa.factura||'').trim();
     if(nro){
-      if(!facSetMap.has(k)) facSetMap.set(k, new Set());
-      facSetMap.get(k).add(nro.toUpperCase());
+      if(!facSetBodega.has(bod)) facSetBodega.set(bod, new Set());
+      facSetBodega.get(bod).add(nro.toUpperCase());
     }
+    const hom=fa.homologo || homDeCodigo(fa.codigo);
+    if(!hom) return;
+    const k=hom+'|'+bod;
+    compMap.set(k, (compMap.get(k)||0) + (Number(fa.cantidad)||0));
   });
 
   /* ---- Acumulado por homologo + bodega -----------------------------------
@@ -6603,9 +6665,12 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     /* Balance = Total requerido - Disponible:
        positivo = unidades que faltan / negativo = excedente.                   */
     const balance=requerido - disponible;
-    const facSet=facSetMap.get(k);
+    // Cantidad de Facturas del PUNTO DE VENTA (misma cifra para todos los homologos
+    // de esa bodega): son las facturas que llegaron al punto.
+    const facSet=facSetBodega.get(normValue(g.bodega));
     return {
       supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
+      bodegaNorm:normValue(g.bodega),   // llave de la bodega para no repetir facturas por zona
       descripcionDci: homDci.get(g.hom) || '',
       meses:serie.length, metodo:pr.metodo, consumo, existencia, pend,
       traslados,
@@ -6625,11 +6690,13 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     let z=porZonaHom.get(k);
     if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, descripcionDci:b.descripcionDci,
                consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0, facturas:0,
-               disponible:0,
+               disponible:0, _bodSet:new Set(),
                bodegas:0, bodegasDeficit:0, bodegasExced:0, faltante:0, excedente:0, meses:0, metodo:b.metodo};
             porZonaHom.set(k,z); }
     z.consumo+=b.consumo; z.existencia+=b.existencia; z.pend+=b.pend; z.requerido+=b.requerido;
-    z.traslados+=b.traslados; z.compras+=b.compras; z.facturas+=b.facturas;
+    z.traslados+=b.traslados; z.compras+=b.compras;
+    // Las facturas se cuentan una sola vez por punto de venta de la zona.
+    if(b.bodegaNorm) z._bodSet.add(b.bodegaNorm);
     z.disponible+=b.disponible;
     z.bodegas++;
     // balance positivo = faltante; negativo = excedente
@@ -6638,6 +6705,11 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     z.meses=Math.max(z.meses, b.meses);
   });
   _supHomologos=[...porZonaHom.values()].map(z=>{
+    // Facturas distintas de todos los puntos de venta de la zona (sin repetir numeros).
+    const nros=new Set();
+    z._bodSet.forEach(bn=>{ const s=facSetBodega.get(bn); if(s) s.forEach(n=>nros.add(n)); });
+    z.facturas=nros.size;
+    delete z._bodSet;
     z.balance = z.requerido - z.disponible;
     z.cobertura = z.requerido>0 ? z.disponible/z.requerido : null;
     // Cuanto se puede tapar moviendo inventario dentro de la zona y cuanto habria que comprar.
@@ -6727,8 +6799,28 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
         'Desde 8 meses se activa Holt-Winters con estacionalidad.');
     }
     // Las columnas Traslados y Compras dependen de tablas que se cargan aparte.
-    if(!(proc.traslados||[]).length) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados (no recibidos)</b> queda en cero.');
-    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: la columna <b>Compras</b> queda en cero.');
+    const totTras=(proc.traslados||[]).length;
+    if(!totTras) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados (no recibidos)</b> queda en cero.');
+    else if(!trasNoRecib) avisos.push('Las <b>'+fmtInt(totTras)+'</b> líneas de la tabla <b>Traslados</b> están marcadas como <b>Recibido</b>, así que la columna <b>Traslados</b> queda en cero: no hay unidades en camino.');
+    else if(!trasMap.size){
+      let m='Hay <b>'+fmtInt(trasNoRecib)+'</b> línea(s) de traslado <b>No Recibido</b>, pero ninguna se pudo llevar a un homólogo: ';
+      const causas=[];
+      if(trasSinHom) causas.push(fmtInt(trasSinHom)+' con el <b>código sin homologar</b>');
+      if(trasSinBodega) causas.push(fmtInt(trasSinBodega)+' con una <b>bodega destino</b> que no coincide con la Bodega Detalle del reporte'+
+        (trasBodegasSinCruce.size? ' (ej.: '+escHtml([...trasBodegasSinCruce].slice(0,3).join(', '))+')':''));
+      m+= causas.length? causas.join(' y ')+'.' : 'revisa las columnas Codigo y Bodega Destino.';
+      avisos.push(m);
+    } else {
+      const partes=[];
+      if(trasSinHom) partes.push(fmtInt(trasSinHom)+' línea(s) con el código sin homologar');
+      if(trasSinBodega) partes.push(fmtInt(trasSinBodega)+' línea(s) con bodega destino sin equivalencia'+
+        (trasBodegasSinCruce.size? ' (ej.: '+escHtml([...trasBodegasSinCruce].slice(0,3).join(', '))+')':''));
+      let m='La columna <b>Traslados</b> suma <b>'+fmtInt(trasUnidades)+'</b> unidad(es) en camino de '+fmtInt(trasNoRecib)+' línea(s) <b>No Recibido</b>';
+      m+= partes.length? '; quedaron por fuera '+partes.join(' y ')+'.' : '.';
+      avisos.push(m);
+    }
+    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: las columnas <b>Compras</b> y <b>Cantidad de Facturas</b> quedan en cero.');
+    else avisos.push('La <b>Cantidad de Facturas</b> cuenta los números de factura <b>distintos del punto de venta</b> (no del homólogo), por eso se repite en todos los homólogos de la misma bodega.');
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
   }
@@ -6909,7 +7001,7 @@ function pintarBaseSupervisores(){
       'Descripcion DCI':t.descripcionDci,
       'Consumo promedio mensual (Holt-Winters)':t.consumo,
       'Existencia':t.existencia, 'Traslados no recibidos':t.traslados, 'Compras (facturas)':t.compras,
-      'Cantidad de Facturas':t.facturas,
+      'Cantidad de Facturas (punto de venta)':t.facturas,
       'Unidades pendientes (2 ultimos meses)':t.pend,
       'Total requerido':t.requerido, 'Disponible (existencia + traslado)':t.disponible,
       'Balance (requerido - disponible)':t.balance,
@@ -6930,7 +7022,7 @@ function pintarBaseSupervisores(){
       'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':z.hom, 'Descripcion DCI':z.descripcionDci,
       'Consumo promedio mensual':z.consumo, 'Existencia':z.existencia,
       'Traslados no recibidos':z.traslados, 'Compras (facturas)':z.compras,
-      'Cantidad de Facturas':z.facturas,
+      'Cantidad de Facturas (puntos de venta de la zona)':z.facturas,
       'Unidades pendientes (2 ultimos meses)':z.pend, 'Total requerido':z.requerido,
       'Disponible (existencia + traslado)':z.disponible, 'Balance':z.balance,
       '% Cobertura':z.cobertura===null?'':(z.cobertura>1?'100%+':+(z.cobertura*100).toFixed(1)),
@@ -7274,7 +7366,8 @@ function buildCorteMetrics(rows){
       }
     });
     out[corte]=Array.from(byBodega.values()).map(g=>({
-      bodega:g.bodega, zona:g.zona,
+      bodega:g.bodega,
+      bodegaNorm:normValue(g.bodega), zona:g.zona,
       docsTotal:g.docsSet.size, docsEnt:g.docsEntSet.size, docsPend:g.docsSet.size-g.docsEntSet.size,
       lineasTotal:g.lineas, lineasEnt:g.lineasEnt, lineasPend:g.lineas-g.lineasEnt,
       eventoTotal:g.eventoSet.size, eventoCon:g.eventoConSet.size, eventoSin:g.eventoSet.size-g.eventoConSet.size,
