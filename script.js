@@ -6823,7 +6823,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     } else {
       avisos.push('El <b>consumo promedio mensual</b> se pronostica con <b>Suavización Exponencial Simple (SES)</b>: para cada homólogo y bodega se prueba alfa de <b>0,05 a 1,00</b> y se elige el que deja el menor <b>MAD</b> (desempate por <b>MAPE</b>). El alfa, el MAD y el MAPE de cada fila quedan en el Excel.');
     }
-    // Las columnas Traslados y Compras dependen de tablas que se cargan aparte.
+    // La columna Traslados depende de una tabla que se carga aparte.
     const totTras=(proc.traslados||[]).length;
     if(!totTras) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados (no recibidos)</b> queda en cero.');
     else if(!trasNoRecib && trasSinEstado>=totTras) avisos.push('Ninguna de las <b>'+fmtInt(totTras)+'</b> líneas de <b>Traslados</b> trae la columna de estado (<b>No Recibido</b> / <b>Recibido</b>), así que la columna <b>Traslados</b> queda en cero: solo se suman las líneas marcadas expresamente como <b>No Recibido</b>.');
@@ -6846,7 +6846,8 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       m+= partes.length? '; quedaron por fuera '+partes.join(' y ')+'.' : '.';
       avisos.push(m);
     }
-    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: la columna <b>Compras</b> queda en cero.');
+    // Compras ya no se muestra en la tabla; solo se avisa por el dato del Excel.
+    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: las <b>compras (facturas)</b> del Excel quedan en cero.');
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
   }
@@ -6957,14 +6958,13 @@ function pintarBaseSupervisores(){
     '<td>'+fmtInt(t.consumo)+'</td>'+
     '<td>'+fmtInt(t.existencia)+'</td>'+
     '<td>'+fmtInt(t.traslados)+'</td>'+
-    '<td>'+fmtInt(t.compras)+'</td>'+
     '<td class="'+(t.pend?'pct-bad':'')+'">'+fmtInt(t.pend)+'</td>'+
     '<td><b>'+fmtInt(t.requerido)+'</b></td>'+
     '<td class="'+(t.balance>0?'pct-bad':'pct-good')+'">'+fmtInt(t.balance)+'</td>'+
     '<td class="'+cobClass(t.cobertura)+'">'+fmtCob(t.cobertura)+'</td></tr>'
   ).join('');
-  if(!vista.length) h='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
-  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="12">Se muestran las '+fmtInt(vista.length)+
+  if(!vista.length) h='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
+  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="11">Se muestran las '+fmtInt(vista.length)+
     ' filas con mayor faltante de '+fmtInt(orden.length)+'. El Excel trae la lista completa.</td></tr>';
   tb.innerHTML=h;
 
