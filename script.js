@@ -2636,13 +2636,17 @@ function renderInfoPorFactura(){
     return true;
   });
 
-  // Códigos SIN REPETIR dentro de cada punto de venta.
+  // Codigos SIN REPETIR dentro de cada punto de venta y numeros de factura DISTINTOS.
   const porPunto=new Map();
   filas.forEach(r=>{
     const k=r.puntoVenta||'SIN PUNTO DE VENTA';
-    if(!porPunto.has(k)) porPunto.set(k, {punto:k, codigos:new Set(), hom:new Set(), noHom:new Set(), lineas:0, cantidad:0});
+    if(!porPunto.has(k)) porPunto.set(k, {punto:k, codigos:new Set(), hom:new Set(), noHom:new Set(), facturas:new Set(), lineas:0, cantidad:0});
     const g=porPunto.get(k);
     g.lineas++; g.cantidad+=r.cantidad;
+    // Cantidad de facturas: numeros de factura sin repetir. Si la linea no trae
+    // numero se cuenta como una factura propia para no perderla.
+    const nro=String(r.factura||'').trim();
+    g.facturas.add(nro ? 'F:'+nro.toUpperCase() : 'L:'+g.lineas);
     if(!r.codigo) return;
     g.codigos.add(r.codigo);
     if(r.tieneHomologo) g.hom.add(r.codigo); else g.noHom.add(r.codigo);
@@ -2650,8 +2654,8 @@ function renderInfoPorFactura(){
 
   const lista=[...porPunto.values()].map(g=>({
     punto:g.punto, codigos:g.codigos.size, hom:g.hom.size, noHom:g.noHom.size,
-    lineas:g.lineas, cantidad:g.cantidad
-  })).sort((a,b)=> (b.codigos-a.codigos) || a.punto.localeCompare(b.punto,'es'));
+    facturas:g.facturas.size, lineas:g.lineas, cantidad:g.cantidad
+  })).sort((a,b)=> (b.facturas-a.facturas) || (b.codigos-a.codigos) || a.punto.localeCompare(b.punto,'es'));
 
   _facturasPuntoCache=lista;
 
@@ -2693,7 +2697,7 @@ function renderInfoPorFactura(){
   let h=lista.map((u,i)=>
     '<tr><td>'+(i+1)+'</td>'+
     '<td class="txt">'+escHtml(u.punto)+'</td>'+
-    '<td><b>'+fmtInt(u.codigos)+'</b></td>'+
+    '<td><b>'+fmtInt(u.facturas)+'</b></td>'+
     '<td>'+fmtInt(u.hom)+'</td>'+
     '<td>'+fmtInt(u.noHom)+'</td>'+
     '<td>'+fmtPct(u.codigos?u.hom/u.codigos:null)+'</td></tr>'
@@ -2702,7 +2706,7 @@ function renderInfoPorFactura(){
   const sumH=lista.reduce((a,u)=>a+u.hom,0);
   const sumN=lista.reduce((a,u)=>a+u.noHom,0);
   h+='<tr class="total-row"><td>—</td><td class="txt">TOTAL ('+lista.length+(lista.length===1?' punto)':' puntos)')+'</td>'+
-     '<td>'+fmtInt(sumC)+'</td><td>'+fmtInt(sumH)+'</td><td>'+fmtInt(sumN)+'</td>'+
+     '<td>'+fmtInt(facturasUnicas)+'</td><td>'+fmtInt(sumH)+'</td><td>'+fmtInt(sumN)+'</td>'+
      '<td>'+fmtPct(sumC?sumH/sumC:null)+'</td></tr>';
   tb.innerHTML=h;
   renderFacturasDetalle(filas);
@@ -6535,18 +6539,10 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     trasMap.set(k, (trasMap.get(k)||0) + u);
   });
   const compMap=new Map();
-  /* Cantidad de Facturas = numeros de factura DISTINTOS del PUNTO DE VENTA
-     (bodega), sin importar el homologo: es el total de facturas que recibio ese
-     punto. Las unidades compradas si se siguen sumando por homologo+bodega.   */
-  const facSetBodega=new Map();
+  /* Unidades compradas: se suman por homologo + bodega (punto de venta).      */
   (proc.facturas||[]).forEach(fa=>{
     const bod=bodegaDeNombre(fa.puntoVenta);
     if(!bod) return;
-    const nro=String(fa.factura||'').trim();
-    if(nro){
-      if(!facSetBodega.has(bod)) facSetBodega.set(bod, new Set());
-      facSetBodega.get(bod).add(nro.toUpperCase());
-    }
     const hom=fa.homologo || homDeCodigo(fa.codigo);
     if(!hom) return;
     const k=hom+'|'+bod;
@@ -6665,17 +6661,13 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     /* Balance = Total requerido - Disponible:
        positivo = unidades que faltan / negativo = excedente.                   */
     const balance=requerido - disponible;
-    // Cantidad de Facturas del PUNTO DE VENTA (misma cifra para todos los homologos
-    // de esa bodega): son las facturas que llegaron al punto.
-    const facSet=facSetBodega.get(normValue(g.bodega));
     return {
       supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
-      bodegaNorm:normValue(g.bodega),   // llave de la bodega para no repetir facturas por zona
+      bodegaNorm:normValue(g.bodega),   // llave normalizada de la bodega
       descripcionDci: homDci.get(g.hom) || '',
       meses:serie.length, metodo:pr.metodo, consumo, existencia, pend,
       traslados,
       compras: compMap.get(k) || 0,        // unidades compradas (facturas)
-      facturas: facSet ? facSet.size : 0,  // cantidad de facturas distintas
       disponible,
       requerido, balance, faltante: balance>0 ? balance : 0,
       cobertura: requerido>0 ? disponible/requerido : null,
@@ -6689,14 +6681,12 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const k=b.zona+'|'+b.hom;
     let z=porZonaHom.get(k);
     if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, descripcionDci:b.descripcionDci,
-               consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0, facturas:0,
-               disponible:0, _bodSet:new Set(),
+               consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0,
+               disponible:0,
                bodegas:0, bodegasDeficit:0, bodegasExced:0, faltante:0, excedente:0, meses:0, metodo:b.metodo};
             porZonaHom.set(k,z); }
     z.consumo+=b.consumo; z.existencia+=b.existencia; z.pend+=b.pend; z.requerido+=b.requerido;
     z.traslados+=b.traslados; z.compras+=b.compras;
-    // Las facturas se cuentan una sola vez por punto de venta de la zona.
-    if(b.bodegaNorm) z._bodSet.add(b.bodegaNorm);
     z.disponible+=b.disponible;
     z.bodegas++;
     // balance positivo = faltante; negativo = excedente
@@ -6705,11 +6695,6 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     z.meses=Math.max(z.meses, b.meses);
   });
   _supHomologos=[...porZonaHom.values()].map(z=>{
-    // Facturas distintas de todos los puntos de venta de la zona (sin repetir numeros).
-    const nros=new Set();
-    z._bodSet.forEach(bn=>{ const s=facSetBodega.get(bn); if(s) s.forEach(n=>nros.add(n)); });
-    z.facturas=nros.size;
-    delete z._bodSet;
     z.balance = z.requerido - z.disponible;
     z.cobertura = z.requerido>0 ? z.disponible/z.requerido : null;
     // Cuanto se puede tapar moviendo inventario dentro de la zona y cuanto habria que comprar.
@@ -6819,8 +6804,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       m+= partes.length? '; quedaron por fuera '+partes.join(' y ')+'.' : '.';
       avisos.push(m);
     }
-    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: las columnas <b>Compras</b> y <b>Cantidad de Facturas</b> quedan en cero.');
-    else avisos.push('La <b>Cantidad de Facturas</b> cuenta los números de factura <b>distintos del punto de venta</b> (no del homólogo), por eso se repite en todos los homólogos de la misma bodega.');
+    if(!(proc.facturas||[]).length) avisos.push('La tabla <b>Facturas</b> no está cargada: la columna <b>Compras</b> queda en cero.');
     if(avisos.length){ diagEl.style.display=''; diagEl.innerHTML='<b>Nota:</b> '+avisos.join(' '); }
     else { diagEl.style.display='none'; diagEl.innerHTML=''; }
   }
@@ -6874,7 +6858,7 @@ function pintarBaseSupervisores(){
   const f=_supFiltrosActuales();
 
   if(!_supBodegas.length){
-    tb.innerHTML='<tr><td colspan="13" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(tbPlan) tbPlan.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
@@ -6932,14 +6916,13 @@ function pintarBaseSupervisores(){
     '<td>'+fmtInt(t.existencia)+'</td>'+
     '<td>'+fmtInt(t.traslados)+'</td>'+
     '<td>'+fmtInt(t.compras)+'</td>'+
-    '<td>'+fmtInt(t.facturas)+'</td>'+
     '<td class="'+(t.pend?'pct-bad':'')+'">'+fmtInt(t.pend)+'</td>'+
     '<td><b>'+fmtInt(t.requerido)+'</b></td>'+
     '<td class="'+(t.balance>0?'pct-bad':'pct-good')+'">'+fmtInt(t.balance)+'</td>'+
     '<td class="'+cobClass(t.cobertura)+'">'+fmtCob(t.cobertura)+'</td></tr>'
   ).join('');
-  if(!vista.length) h='<tr><td colspan="13" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
-  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="13">Se muestran las '+fmtInt(vista.length)+
+  if(!vista.length) h='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
+  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="12">Se muestran las '+fmtInt(vista.length)+
     ' filas con mayor faltante de '+fmtInt(orden.length)+'. El Excel trae la lista completa.</td></tr>';
   tb.innerHTML=h;
 
@@ -7001,7 +6984,6 @@ function pintarBaseSupervisores(){
       'Descripcion DCI':t.descripcionDci,
       'Consumo promedio mensual (Holt-Winters)':t.consumo,
       'Existencia':t.existencia, 'Traslados no recibidos':t.traslados, 'Compras (facturas)':t.compras,
-      'Cantidad de Facturas (punto de venta)':t.facturas,
       'Unidades pendientes (2 ultimos meses)':t.pend,
       'Total requerido':t.requerido, 'Disponible (existencia + traslado)':t.disponible,
       'Balance (requerido - disponible)':t.balance,
@@ -7022,7 +7004,6 @@ function pintarBaseSupervisores(){
       'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':z.hom, 'Descripcion DCI':z.descripcionDci,
       'Consumo promedio mensual':z.consumo, 'Existencia':z.existencia,
       'Traslados no recibidos':z.traslados, 'Compras (facturas)':z.compras,
-      'Cantidad de Facturas (puntos de venta de la zona)':z.facturas,
       'Unidades pendientes (2 ultimos meses)':z.pend, 'Total requerido':z.requerido,
       'Disponible (existencia + traslado)':z.disponible, 'Balance':z.balance,
       '% Cobertura':z.cobertura===null?'':(z.cobertura>1?'100%+':+(z.cobertura*100).toFixed(1)),
