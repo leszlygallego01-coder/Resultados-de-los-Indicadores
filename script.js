@@ -524,9 +524,10 @@ function estadoTraslado(v){
   if(['SI','S','Y','YES','TRUE','VERDADERO','X','OK','ENTREGADO','ENTREGADA','CONFIRMADO','CONFIRMADA','APROBADO','APROBADA','CERRADO','CERRADA'].indexOf(prim)>=0) return 'RECIBIDO';
   return 'PENDIENTE';                                  // En transito, En ruta, etc.
 }
-/* Compatibilidad: true cuando la linea NO esta marcada como recibida. Si no hay
-   dato el criterio global se decide en el calculo (ver trasHayEstado). */
-function esTrasladoNoRecibido(v){ return estadoTraslado(v)!=='RECIBIDO'; }
+/* true SOLO cuando la linea dice expresamente que no se ha recibido
+   ("No Recibido", "Sin recibir", "Pendiente", "En transito"). Las celdas vacias
+   o sin un estado reconocible devuelven false: no se cuentan como en camino. */
+function esTrasladoNoRecibido(v){ return estadoTraslado(v)==='PENDIENTE'; }
 /* Códigos que NO corresponden a un medicamento (servicios, cobros, domicilios, etc.).
    Aunque la columna Diferencia sea negativa, estas líneas no se cuentan como pendientes
    ni como líneas por subsanar en ningún indicador. */
@@ -2217,7 +2218,7 @@ function renderAllTablesFromCache(){
   // Base cuentas: la matriz usa el estado actual y la evolución por cortes el historial.
   if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
   // Base supervisores: necesita el historial completo (todos los meses) para el
-  // pronostico Holt-Winters, asi que se toman las filas vigentes SIN filtro de mes.
+  // pronostico SES, asi que se toman las filas vigentes SIN filtro de mes.
   const _pAll=state.processed||null;
   const rowsVigentesFull = _pAll ? _pAll.rows.filter(r=>r.versionVigente!==false) : rowsVigentes;
   if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(rowsVigentesFull, bodegaSearch, zona);
@@ -6352,7 +6353,8 @@ function pintarBaseCuentas(){
    13c. Base Supervisores: requerimiento por homologo y plan de redistribucion
    -------------------------------------------------------------------------
    Un supervisor por ZONA (11 zonas). Para cada homologo se estima el consumo
-   promedio mensual con Holt-Winters (serie mensual de Cantidad Autorizada) y se
+   promedio mensual con Suavizacion Exponencial Simple (SES, alfa optimo por
+   homologo minimizando MAD) sobre la serie mensual de Cantidad Autorizada y se
    compara contra la existencia y las unidades pendientes, para saber cuanto se
    necesita. Con ese resultado se arma un plan de traslados entre bodegas de la
    MISMA zona: las bodegas con excedente le pasan unidades a las que quedan cortas.
@@ -6403,7 +6405,9 @@ function supervisorDeZona(zona){ return zona ? ('Supervisor '+zona) : ''; }
        se informa, para no pronosticar sobre 3 o 4 dias de datos.
    Un mes se considera cerrado cuando ya trae dispensaciones del ultimo dia.  */
 const SUP_FRACCION_MES_MINIMA=0.6;   // minimo del mes cargado para poder proyectarlo
-const SUP_PHI=0.85;                  // amortiguacion de la tendencia (damped trend)
+const SUP_ALFAS=(()=>{                // rejilla de alfa a probar: 0.05 ... 1.00
+  const a=[]; for(let v=5; v<=100; v+=5) a.push(v/100); return a;
+})();
 // Dias del calendario de un mes 'AAAA-MM'.
 function _diasDelMes(key){
   const m=/^(\d{4})-(\d{2})$/.exec(String(key||''));
@@ -6423,68 +6427,71 @@ function _cierreDelMes(key, diaMax){
   };
 }
 
-/* ---- Pronostico del consumo mensual ---------------------------------------
-   Holt-Winters aditivo con tendencia amortiguada (nivel + tendencia + esta-
-   cionalidad) sobre la serie mensual de Cantidad Autorizada, ya normalizada a
-   meses completos. Como la historia crece mes a mes, el metodo se elige por la
-   cantidad de CICLOS COMPLETOS disponibles y nunca inventa estacionalidad:
-     · 24 meses o mas  -> Holt-Winters con ciclo de 12 meses (2 años completos)
-     · 8 meses o mas   -> Holt-Winters con ciclo de 4 meses (2 trimestres)
-     · 3 meses o mas   -> Holt amortiguado (nivel + tendencia, sin estacionalidad)
-     · menos de 3      -> promedio simple
-   La tendencia se amortigua para que una historia corta y creciente no proyecte
-   consumos explosivos, y el resultado se acota al maximo mes observado + 50%.
-   Siempre devuelve un valor >= 0 (no existe consumo negativo).            */
-function _hwSuavizadoAditivo(serie, m, alpha, beta, gamma){
+/* ---- Pronostico del consumo mensual: Suavizacion Exponencial Simple -------
+   Se usa SES (Simple Exponential Smoothing) sobre la serie mensual de Cantidad
+   Autorizada ya normalizada a meses completos:
+
+     Pronostico(t+1) = Pronostico(t) + alfa * ( Real(t) - Pronostico(t) )
+
+   El alfa NO es fijo: para CADA homologo + bodega se prueba una rejilla de
+   alfa (0.05 a 1.00 de 0.05 en 0.05) y se elige el que deja el menor error de
+   ajuste sobre su propia historia:
+     · criterio principal: MAD  (error absoluto medio, en unidades)
+     · desempate:          MAPE (error porcentual absoluto medio)
+     · segundo desempate:  el alfa mas bajo (pronostico mas estable)
+   Asi un producto de consumo estable recibe un alfa bajo (mucha memoria) y uno
+   con cambios de nivel recibe un alfa alto (reacciona rapido).
+   El resultado nunca es negativo.                                          */
+// SES con un alfa dado. Devuelve el pronostico del mes siguiente y los errores
+// de ajuste (MAD y MAPE) medidos sobre la propia historia.
+function _sesPronostico(serie, alfa){
   const n=serie.length;
-  const ciclos=Math.floor(n/m);
-  const prom=[];
-  for(let c=0;c<ciclos;c++){
-    let s=0; for(let i=0;i<m;i++) s+=serie[c*m+i];
-    prom.push(s/m);
+  let nivel=serie[0];          // arranque: primer mes observado
+  let sumAbs=0, cAbs=0;        // acumuladores de MAD
+  let sumPct=0, cPct=0;        // acumuladores de MAPE (solo reales > 0)
+  for(let t=1;t<n;t++){
+    const error=serie[t]-nivel;             // el pronostico del mes t es "nivel"
+    sumAbs+=Math.abs(error); cAbs++;
+    if(serie[t]>0){ sumPct+=Math.abs(error)/serie[t]; cPct++; }
+    nivel = nivel + alfa*error;             // actualizacion SES
   }
-  let nivel=prom[0];
-  let tend=(prom[1]-prom[0])/m;
-  const est=[];
-  for(let i=0;i<m;i++){
-    let s=0; for(let c=0;c<ciclos;c++) s+=serie[c*m+i]-prom[c];
-    est.push(s/ciclos);
-  }
-  for(let t=0;t<n;t++){
-    const idx=t%m;
-    const nivelAnt=nivel;
-    nivel = alpha*(serie[t]-est[idx]) + (1-alpha)*(nivelAnt+SUP_PHI*tend);
-    tend  = beta*(nivel-nivelAnt) + (1-beta)*SUP_PHI*tend;
-    est[idx] = gamma*(serie[t]-nivel) + (1-gamma)*est[idx];
-  }
-  return Math.max(0, nivel + SUP_PHI*tend + est[n%m]);
+  return {
+    valor: Math.max(0, nivel),
+    mad:  cAbs ? sumAbs/cAbs : 0,
+    mape: cPct ? (sumPct/cPct)*100 : null
+  };
 }
-function _holtLineal(serie, alpha, beta){
-  let nivel=serie[0];
-  let tend=serie[1]-serie[0];
-  for(let t=1;t<serie.length;t++){
-    const nivelAnt=nivel;
-    nivel = alpha*serie[t] + (1-alpha)*(nivelAnt+SUP_PHI*tend);
-    tend  = beta*(nivel-nivelAnt) + (1-beta)*SUP_PHI*tend;
+// Busca el alfa de la rejilla que minimiza MAD; empata por MAPE y luego por el
+// alfa mas bajo. Se corre por homologo + bodega, con su propia historia.
+function _optimizarAlfa(serie){
+  let mejor=null;
+  for(const alfa of SUP_ALFAS){
+    const r=_sesPronostico(serie, alfa);
+    if(!mejor){ mejor={alfa, ...r}; continue; }
+    const dMad=r.mad-mejor.mad;
+    if(dMad < -1e-9){ mejor={alfa, ...r}; continue; }
+    if(Math.abs(dMad) <= 1e-9){
+      const a=r.mape==null?Infinity:r.mape, b=mejor.mape==null?Infinity:mejor.mape;
+      if(a < b-1e-9){ mejor={alfa, ...r}; }   // empate en MAD -> gana menor MAPE
+    }
   }
-  return Math.max(0, nivel + SUP_PHI*tend);
-}
-// Tope de seguridad: con historia corta el suavizado puede dispararse.
-function _acotarPronostico(valor, s){
-  const max=s.reduce((a,b)=>Math.max(a,b), 0);
-  if(max<=0) return 0;
-  return Math.max(0, Math.min(valor, max*1.5));
+  return mejor;
 }
 function pronosticoConsumoMensual(serie){
   const s=(serie||[]).map(v=>Number(v)||0);
   const n=s.length;
-  if(!n) return {valor:0, metodo:'Sin datos'};
-  if(n<3){
-    return {valor:Math.max(0, s.reduce((a,b)=>a+b,0)/n), metodo:'Promedio ('+n+' mes'+(n>1?'es':'')+' completo'+(n>1?'s':'')+')'};
+  if(!n) return {valor:0, metodo:'Sin datos', alfa:null, mad:null, mape:null};
+  if(n===1){
+    return {valor:Math.max(0,s[0]), metodo:'Promedio (1 mes completo)', alfa:null, mad:null, mape:null};
   }
-  if(n>=24) return {valor:_acotarPronostico(_hwSuavizadoAditivo(s,12,0.4,0.1,0.3), s), metodo:'Holt-Winters (ciclo 12 meses)'};
-  if(n>=8)  return {valor:_acotarPronostico(_hwSuavizadoAditivo(s,4,0.4,0.1,0.3), s),  metodo:'Holt-Winters (ciclo 4 meses)'};
-  return {valor:_acotarPronostico(_holtLineal(s,0.5,0.3), s), metodo:'Holt amortiguado (nivel + tendencia)'};
+  const r=_optimizarAlfa(s);
+  return {
+    valor: r.valor,
+    metodo:'SES alfa='+r.alfa.toFixed(2)+' ('+n+' meses completos)',
+    alfa: r.alfa,
+    mad: r.mad,
+    mape: r.mape
+  };
 }
 
 // Caches del ultimo calculo, para que filtros y descarga reusen lo ya procesado.
@@ -6551,20 +6558,15 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   const trasMap=new Map();
   let trasNoRecib=0, trasSinHom=0, trasSinBodega=0, trasUnidades=0;
   const trasBodegasSinCruce=new Set();
-  /* Si la tabla de Traslados TRAE la columna de estado (aunque sea en parte de las
-     lineas), las lineas sin estado NO se cuentan como pendientes: contarlas sumaria
-     unidades ya recibidas. Solo cuando ninguna linea trae estado se asume que todo
-     esta en camino, para no perder informacion en archivos antiguos.            */
-  const trasHayEstado=(proc.traslados||[]).some(t=>{
-    const e=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
-    return !!e;
-  });
+  /* Regla estricta: la columna Traslados SOLO suma las lineas cuyo estado dice
+     explicitamente que no se han recibido ("No Recibido", "Sin recibir",
+     "Pendiente", "En transito"). Las lineas Recibido y las lineas SIN estado
+     quedan fuera: no se asume nada, si el archivo no trae el estado la columna
+     queda en cero y el aviso lo explica.                                       */
+  let trasSinEstado=0;
   (proc.traslados||[]).forEach(t=>{
     const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
-    // Recibido -> ya entro a la bodega. Sin dato -> solo cuenta si el archivo no
-    // trae estado en ninguna linea.
-    const pend = est==='PENDIENTE' ? true : (est==='RECIBIDO' ? false : !trasHayEstado);
-    if(!pend) return;                    // ya recibido: no queda pendiente por llegar
+    if(est!=='PENDIENTE'){ if(!est) trasSinEstado++; return; }
     trasNoRecib++;
     // Homologo: primero el que ya trae la fila; si no, el cruce por codigo del reporte.
     const hom=t.homologo || homDeCodigo(t.codigo);
@@ -6704,6 +6706,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       bodegaNorm:normValue(g.bodega),   // llave normalizada de la bodega
       descripcionDci: homDci.get(g.hom) || '',
       meses:serie.length, metodo:pr.metodo, consumo, existencia, pend,
+      alfa:pr.alfa, mad:pr.mad, mape:pr.mape,   // parametros del ajuste SES
       traslados,
       compras: compMap.get(k) || 0,        // unidades compradas (facturas)
       disponible,
@@ -6814,17 +6817,17 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       avisos.push('Los <b>pendientes</b> corresponden solo a los <b>2 últimos meses</b> ('+
         escHtml(_supGlobal.mesesPend.map(m=>mesLabel(m)).join(' y '))+'); los pendientes más antiguos no suman al requerimiento.');
     }
-    if(mesesOrden.length<3){
-      avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> mes(es) completo(s) el consumo se estima con promedio simple. '+
-        'A partir de 3 meses se usa tendencia y desde 8 meses se activa Holt-Winters; la historia crece con cada cargue.');
-    } else if(mesesOrden.length<8){
-      avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> meses el pronóstico usa nivel y tendencia amortiguada. '+
-        'Desde 8 meses se activa Holt-Winters con estacionalidad.');
+    if(mesesOrden.length<2){
+      avisos.push('Con <b>'+fmtInt(mesesOrden.length)+'</b> mes(es) completo(s) el consumo se toma tal cual. '+
+        'Desde 2 meses se aplica <b>Suavización Exponencial Simple (SES)</b> con el alfa que mejor ajusta cada homólogo; la historia crece con cada cargue.');
+    } else {
+      avisos.push('El <b>consumo promedio mensual</b> se pronostica con <b>Suavización Exponencial Simple (SES)</b>: para cada homólogo y bodega se prueba alfa de <b>0,05 a 1,00</b> y se elige el que deja el menor <b>MAD</b> (desempate por <b>MAPE</b>). El alfa, el MAD y el MAPE de cada fila quedan en el Excel.');
     }
     // Las columnas Traslados y Compras dependen de tablas que se cargan aparte.
     const totTras=(proc.traslados||[]).length;
     if(!totTras) avisos.push('La tabla <b>Traslados</b> no está cargada: la columna <b>Traslados (no recibidos)</b> queda en cero.');
-    else if(!trasNoRecib) avisos.push('Las <b>'+fmtInt(totTras)+'</b> líneas de la tabla <b>Traslados</b> están marcadas como <b>Recibido</b>, así que la columna <b>Traslados</b> queda en cero: no hay unidades en camino.');
+    else if(!trasNoRecib && trasSinEstado>=totTras) avisos.push('Ninguna de las <b>'+fmtInt(totTras)+'</b> líneas de <b>Traslados</b> trae la columna de estado (<b>No Recibido</b> / <b>Recibido</b>), así que la columna <b>Traslados</b> queda en cero: solo se suman las líneas marcadas expresamente como <b>No Recibido</b>.');
+    else if(!trasNoRecib) avisos.push('Ninguna línea de la tabla <b>Traslados</b> está marcada como <b>No Recibido</b> ('+fmtInt(totTras)+' línea(s) revisadas), así que la columna <b>Traslados</b> queda en cero: no hay unidades en camino.');
     else if(!trasMap.size){
       let m='Hay <b>'+fmtInt(trasNoRecib)+'</b> línea(s) de traslado <b>No Recibido</b>, pero ninguna se pudo llevar a un homólogo: ';
       const causas=[];
@@ -6838,6 +6841,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
       if(trasSinHom) partes.push(fmtInt(trasSinHom)+' línea(s) con el código sin homologar');
       if(trasSinBodega) partes.push(fmtInt(trasSinBodega)+' línea(s) con bodega destino sin equivalencia'+
         (trasBodegasSinCruce.size? ' (ej.: '+escHtml([...trasBodegasSinCruce].slice(0,3).join(', '))+')':''));
+      if(trasSinEstado) partes.push(fmtInt(trasSinEstado)+' línea(s) sin estado en la columna Recibido (no se cuentan)');
       let m='La columna <b>Traslados</b> suma <b>'+fmtInt(trasUnidades)+'</b> unidad(es) en camino de '+fmtInt(trasNoRecib)+' línea(s) <b>No Recibido</b>';
       m+= partes.length? '; quedaron por fuera '+partes.join(' y ')+'.' : '.';
       avisos.push(m);
@@ -7020,13 +7024,16 @@ function pintarBaseSupervisores(){
     const hoja1=filas.slice().sort((a,b)=> b.faltante-a.faltante || b.requerido-a.requerido).map(t=>({
       'Supervisor':t.supervisor, 'Bodega Detalle':t.bodega, 'Homologo':t.hom,
       'Descripcion DCI':t.descripcionDci,
-      'Consumo promedio mensual (Holt-Winters)':t.consumo,
+      'Consumo promedio mensual (SES)':t.consumo,
       'Existencia':t.existencia, 'Traslados no recibidos':t.traslados, 'Compras (facturas)':t.compras,
       'Unidades pendientes (2 ultimos meses)':t.pend,
       'Total requerido':t.requerido, 'Disponible (existencia + traslado)':t.disponible,
       'Balance (requerido - disponible)':t.balance,
       '% Cobertura':t.cobertura===null?'':(t.cobertura>1?'100%+':+(t.cobertura*100).toFixed(1)),
-      'Zona':t.zona, 'Metodo de pronostico':t.metodo, 'Meses de historia':t.meses
+      'Zona':t.zona, 'Metodo de pronostico':t.metodo, 'Meses de historia':t.meses,
+      'Alfa optimo':t.alfa===null||t.alfa===undefined?'':+t.alfa.toFixed(2),
+      'MAD (error absoluto medio)':t.mad===null||t.mad===undefined?'':+t.mad.toFixed(2),
+      'MAPE %':t.mape===null||t.mape===undefined?'':+t.mape.toFixed(1)
     }));
     const hoja2=plan.map(p=>({
       'Supervisor':p.supervisor, 'Zona':p.zona, 'Homologo':p.hom,
