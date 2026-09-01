@@ -6476,11 +6476,19 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     trasMap.set(k, (trasMap.get(k)||0) + (Number(t.cantidad)||0));
   });
   const compMap=new Map();
+  /* Numeros de factura DISTINTOS por homologo + punto de venta: una misma factura
+     puede traer varias lineas del mismo homologo y no debe contarse dos veces.  */
+  const facSetMap=new Map();
   (proc.facturas||[]).forEach(fa=>{
     const hom=fa.homologo || codHom.get(normValue(fa.codigo));
     if(!hom || !fa.puntoVenta) return;
     const k=hom+'|'+normValue(fa.puntoVenta);
     compMap.set(k, (compMap.get(k)||0) + (Number(fa.cantidad)||0));
+    const nro=String(fa.factura||'').trim();
+    if(nro){
+      if(!facSetMap.has(k)) facSetMap.set(k, new Set());
+      facSetMap.get(k).add(nro.toUpperCase());
+    }
   });
 
   /* ---- Acumulado por homologo + bodega -----------------------------------
@@ -6587,16 +6595,25 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     mesesPend.forEach(m=>{ pend += g.pendMes.get(m)||0; lineasPend += g.pendLinMes.get(m)||0; });
     g.pend=pend; g.lineasPend=lineasPend;
     const requerido=consumo + pend;
-    const balance=existencia - requerido;      // + excedente / - faltante
     const k=g.hom+'|'+normValue(g.bodega);
+    const traslados=trasMap.get(k) || 0;   // unidades de traslado aun NO recibidas
+    /* Disponible = lo que hay en la bodega MAS lo que viene en camino (traslados
+       no recibidos consolidados por codigo de homologacion).                   */
+    const disponible=existencia + traslados;
+    /* Balance = Total requerido - Disponible:
+       positivo = unidades que faltan / negativo = excedente.                   */
+    const balance=requerido - disponible;
+    const facSet=facSetMap.get(k);
     return {
       supervisor:supervisorDeZona(g.zona), zona:g.zona, hom:g.hom, bodega:g.bodega,
       descripcionDci: homDci.get(g.hom) || '',
       meses:serie.length, metodo:pr.metodo, consumo, existencia, pend,
-      traslados: trasMap.get(k) || 0,      // unidades de traslado aun NO recibidas
+      traslados,
       compras: compMap.get(k) || 0,        // unidades compradas (facturas)
-      requerido, balance, faltante: balance<0 ? -balance : 0,
-      cobertura: requerido>0 ? existencia/requerido : null,
+      facturas: facSet ? facSet.size : 0,  // cantidad de facturas distintas
+      disponible,
+      requerido, balance, faltante: balance>0 ? balance : 0,
+      cobertura: requerido>0 ? disponible/requerido : null,
       lineas:g.lineas, lineasPend
     };
   });
@@ -6607,19 +6624,22 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
     const k=b.zona+'|'+b.hom;
     let z=porZonaHom.get(k);
     if(!z){ z={supervisor:b.supervisor, zona:b.zona, hom:b.hom, descripcionDci:b.descripcionDci,
-               consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0,
+               consumo:0, existencia:0, pend:0, requerido:0, traslados:0, compras:0, facturas:0,
+               disponible:0,
                bodegas:0, bodegasDeficit:0, bodegasExced:0, faltante:0, excedente:0, meses:0, metodo:b.metodo};
             porZonaHom.set(k,z); }
     z.consumo+=b.consumo; z.existencia+=b.existencia; z.pend+=b.pend; z.requerido+=b.requerido;
-    z.traslados+=b.traslados; z.compras+=b.compras;
+    z.traslados+=b.traslados; z.compras+=b.compras; z.facturas+=b.facturas;
+    z.disponible+=b.disponible;
     z.bodegas++;
-    if(b.balance<0){ z.bodegasDeficit++; z.faltante += -b.balance; }
-    else if(b.balance>0){ z.bodegasExced++; z.excedente += b.balance; }
+    // balance positivo = faltante; negativo = excedente
+    if(b.balance>0){ z.bodegasDeficit++; z.faltante += b.balance; }
+    else if(b.balance<0){ z.bodegasExced++; z.excedente += -b.balance; }
     z.meses=Math.max(z.meses, b.meses);
   });
   _supHomologos=[...porZonaHom.values()].map(z=>{
-    z.balance = z.existencia - z.requerido;
-    z.cobertura = z.requerido>0 ? z.existencia/z.requerido : null;
+    z.balance = z.requerido - z.disponible;
+    z.cobertura = z.requerido>0 ? z.disponible/z.requerido : null;
     // Cuanto se puede tapar moviendo inventario dentro de la zona y cuanto habria que comprar.
     z.cubreConTraslado = Math.min(z.faltante, z.excedente);
     z.porComprar = Math.max(0, z.faltante - z.excedente);
@@ -6627,8 +6647,8 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   });
 
   /* ---- Tabla 2: plan de redistribucion dentro de la misma zona -------------
-     Por cada zona y homologo, las bodegas con excedente (Existencia - Total
-     requerido > 0) le entregan unidades a las bodegas con faltante, de mayor a
+     Por cada zona y homologo, las bodegas con excedente (Total requerido -
+     disponible < 0) le entregan unidades a las bodegas con faltante, de mayor a
      menor, hasta agotar el excedente. Nunca se cruza informacion entre zonas.  */
   const porZonaHomBodegas=new Map();
   _supBodegas.forEach(b=>{
@@ -6638,9 +6658,9 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   });
   _supPlan=[];
   porZonaHomBodegas.forEach(lista=>{
-    const origen=lista.filter(b=>b.balance>0).map(b=>({bodega:b.bodega, disp:b.balance, exi:b.existencia}))
+    const origen=lista.filter(b=>b.balance<0).map(b=>({bodega:b.bodega, disp:-b.balance, exi:b.existencia}))
       .sort((a,b)=>b.disp-a.disp);
-    const destino=lista.filter(b=>b.balance<0).map(b=>({bodega:b.bodega, falta:-b.balance, req:b.requerido, exi:b.existencia}))
+    const destino=lista.filter(b=>b.balance>0).map(b=>({bodega:b.bodega, falta:b.balance, req:b.requerido, exi:b.existencia}))
       .sort((a,b)=>b.falta-a.falta);
     if(!origen.length || !destino.length) return;
     const ref=lista[0];
@@ -6748,6 +6768,12 @@ function _supVisible(t, f){
   return true;
 }
 
+/* Semaforo del % Cobertura de la Tabla 1:
+   mayor a 100% -> verde y se muestra "100%+" (no tiene sentido pasar de la meta),
+   entre 90% y 100% -> amarillo, menor a 90% -> rojo.                          */
+function cobClass(n){ if(n===null||n===undefined||isNaN(n)) return ''; if(n>1) return 'cob-good'; if(n>=0.90) return 'cob-mid'; return 'cob-bad'; }
+function fmtCob(n){ if(n===null||n===undefined||isNaN(n)) return '—'; if(n>1) return '100%+'; return (n*100).toFixed(1)+'%'; }
+
 function pintarBaseSupervisores(){
   const tb=document.querySelector('#tblSupReq tbody');
   const tbPlan=document.querySelector('#tblSupPlan tbody');
@@ -6756,7 +6782,7 @@ function pintarBaseSupervisores(){
   const f=_supFiltrosActuales();
 
   if(!_supBodegas.length){
-    tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    tb.innerHTML='<tr><td colspan="13" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(tbPlan) tbPlan.innerHTML='<tr><td colspan="7" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
@@ -6814,13 +6840,14 @@ function pintarBaseSupervisores(){
     '<td>'+fmtInt(t.existencia)+'</td>'+
     '<td>'+fmtInt(t.traslados)+'</td>'+
     '<td>'+fmtInt(t.compras)+'</td>'+
+    '<td>'+fmtInt(t.facturas)+'</td>'+
     '<td class="'+(t.pend?'pct-bad':'')+'">'+fmtInt(t.pend)+'</td>'+
     '<td><b>'+fmtInt(t.requerido)+'</b></td>'+
-    '<td class="'+(t.balance<0?'pct-bad':'pct-good')+'">'+fmtInt(t.balance)+'</td>'+
-    '<td class="'+effClass(t.cobertura)+'">'+fmtPct(t.cobertura)+'</td></tr>'
+    '<td class="'+(t.balance>0?'pct-bad':'pct-good')+'">'+fmtInt(t.balance)+'</td>'+
+    '<td class="'+cobClass(t.cobertura)+'">'+fmtCob(t.cobertura)+'</td></tr>'
   ).join('');
-  if(!vista.length) h='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
-  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="12">Se muestran las '+fmtInt(vista.length)+
+  if(!vista.length) h='<tr><td colspan="13" class="txt" style="text-align:center;color:#9CA9B6;">Ningún homólogo cumple los filtros elegidos.</td></tr>';
+  else if(orden.length>vista.length) h+='<tr class="total-row"><td class="txt" colspan="13">Se muestran las '+fmtInt(vista.length)+
     ' filas con mayor faltante de '+fmtInt(orden.length)+'. El Excel trae la lista completa.</td></tr>';
   tb.innerHTML=h;
 
@@ -6882,9 +6909,11 @@ function pintarBaseSupervisores(){
       'Descripcion DCI':t.descripcionDci,
       'Consumo promedio mensual (Holt-Winters)':t.consumo,
       'Existencia':t.existencia, 'Traslados no recibidos':t.traslados, 'Compras (facturas)':t.compras,
+      'Cantidad de Facturas':t.facturas,
       'Unidades pendientes (2 ultimos meses)':t.pend,
-      'Total requerido':t.requerido, 'Balance (existencia - requerido)':t.balance,
-      '% Cobertura':t.cobertura===null?'':+(t.cobertura*100).toFixed(1),
+      'Total requerido':t.requerido, 'Disponible (existencia + traslado)':t.disponible,
+      'Balance (requerido - disponible)':t.balance,
+      '% Cobertura':t.cobertura===null?'':(t.cobertura>1?'100%+':+(t.cobertura*100).toFixed(1)),
       'Zona':t.zona, 'Metodo de pronostico':t.metodo, 'Meses de historia':t.meses
     }));
     const hoja2=plan.map(p=>({
@@ -6901,8 +6930,10 @@ function pintarBaseSupervisores(){
       'Supervisor':z.supervisor, 'Zona':z.zona, 'Homologo':z.hom, 'Descripcion DCI':z.descripcionDci,
       'Consumo promedio mensual':z.consumo, 'Existencia':z.existencia,
       'Traslados no recibidos':z.traslados, 'Compras (facturas)':z.compras,
-      'Unidades pendientes (2 ultimos meses)':z.pend, 'Total requerido':z.requerido, 'Balance':z.balance,
-      '% Cobertura':z.cobertura===null?'':+(z.cobertura*100).toFixed(1),
+      'Cantidad de Facturas':z.facturas,
+      'Unidades pendientes (2 ultimos meses)':z.pend, 'Total requerido':z.requerido,
+      'Disponible (existencia + traslado)':z.disponible, 'Balance':z.balance,
+      '% Cobertura':z.cobertura===null?'':(z.cobertura>1?'100%+':+(z.cobertura*100).toFixed(1)),
       'Bodegas':z.bodegas, 'Bodegas cortas':z.bodegasDeficit,
       'Unidades faltantes':z.faltante, 'Se cubre con traslado':z.cubreConTraslado,
       'Por comprar':z.porComprar, 'Meses de historia':z.meses
