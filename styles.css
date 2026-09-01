@@ -417,6 +417,15 @@ table.data thead th.sortable.sort-active{text-decoration:underline;text-underlin
 .pct-mid{color:var(--amber);font-weight:600;}
 .pct-bad{color:var(--red);font-weight:600;}
 
+/* semaforo del % Cobertura (con fondo): mayor a 100% verde, 90-100% amarillo,
+   menor a 90% rojo. Se usa en la tabla Requerimiento por homologo. */
+table.data tbody td.cob-good{background:#d1fae5;color:#065f46;font-weight:700;}
+table.data tbody td.cob-mid{background:#fef3c7;color:#92400e;font-weight:700;}
+table.data tbody td.cob-bad{background:#fee2e2;color:#991b1b;font-weight:700;}
+table.data tbody tr:nth-child(even) td.cob-good,table.data tbody tr:hover td.cob-good{background:#d1fae5;}
+table.data tbody tr:nth-child(even) td.cob-mid,table.data tbody tr:hover td.cob-mid{background:#fef3c7;}
+table.data tbody tr:nth-child(even) td.cob-bad,table.data tbody tr:hover td.cob-bad{background:#fee2e2;}
+
 /* ---------------- estado vacio ---------------- */
 .empty-state{text-align:center;padding:60px 20px;color:var(--ink-soft);background:var(--white);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm);}
 .empty-state .glyph{font-size:34px;margin-bottom:10px;color:var(--blue);}
