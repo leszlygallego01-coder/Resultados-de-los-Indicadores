@@ -1875,7 +1875,7 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
 
   // Apply filters
   const filtered = rowsAll.filter(r => {
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona !== zona) return false;
     return true;
   });
@@ -2296,7 +2296,7 @@ let _inactivasDispCache = [];
 let _inactivasLineasCache = [];
 function renderIndicadorInactivas(rowsAll, bodegaSearch, zona){
   const ambito = rowsAll.filter(r=>{
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   });
@@ -2807,7 +2807,7 @@ function getPendientesReporte(){
     if(r.versionVigente===false) return;
     if(!idxUltima.has(r.idx)) return;
     if(!esEstadoActivo(r.estadoDispensa)) return;
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return;
     if(zona && r.zona!==zona) return;
     if(!lineaEsPendiente(r)) return;
     const und=Math.abs(toNumber(r.diferencia));
@@ -3170,7 +3170,7 @@ let lastSoporteCtx=null;
 function groupByBodega(rows, bodegaSearch, zona){
   const g=new Map();
   rows.forEach(r=>{
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return;
     if(zona && r.zona!==zona) return;
     if(!g.has(r.bodegaDetalle)) g.set(r.bodegaDetalle, {zona:r.zona, bodega:r.bodegaDetalle, rows:[]});
     g.get(r.bodegaDetalle).rows.push(r);
@@ -3784,7 +3784,7 @@ function renderDiagLinea(bodegaSearch, zona, totalLin, totalEnt, totalPend){
   const el = document.getElementById('lineaDiag');
   if(!el) return;
   const enAlcance = (r)=>{
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   };
@@ -3833,7 +3833,7 @@ function gruposLineasRepetidas(bodegaSearch, zona){
     if(r.versionVigente===false) return false;             // versión superada por un recargue
     if(!esEstadoActivo(r.estadoDispensa)) return false;    // se excluyen las dispensas INACTIVO
     if(!r.documento) return false;
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   });
@@ -4755,7 +4755,7 @@ document.getElementById('btnDescargarParetoExistencias').addEventListener('click
   const base = filteredRowsCache.filter(r=>{
     if(r.versionVigente===false) return false;          // versión superada por un recargue
     if(!esEstadoActivo(r.estadoDispensa)) return false;
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     // Misma regla del Indicador por Línea: pendiente = Diferencia < 0.
     return lineaEsPendiente(r) && (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO');
@@ -4789,7 +4789,7 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     if(r.versionVigente===false) return false;
     if(!_idxUltimaVersionComprar.has(r.idx)) return false;
     if(!esEstadoActivo(r.estadoDispensa)) return false;
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     // Aún pendiente según el último cargue (Diferencia < 0) y sin existencia disponible en ningún lado.
     const aunPendiente = lineaEsPendiente(r);
@@ -4817,7 +4817,7 @@ document.getElementById('btnDescargarSinHomologar').addEventListener('click', ()
   const sinHom = filteredRowsCache.filter(r=>{
     if(r.versionVigente===false) return false;          // versión superada por un recargue
     if(!esEstadoActivo(r.estadoDispensa)) return false;
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     if(!lineaEsPendiente(r)) return false;               // pendiente = Diferencia < 0
     return r.moleculaPareto!=='PARETO' && r.moleculaPareto!=='NO PARETO';
@@ -4854,7 +4854,7 @@ document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
     if(!lineaEsPendiente(r)) return false;               // pendiente = Diferencia < 0
     if(!normValue(r.estado).includes('AGOTAD')) return false;
     hayAgotadasSinFiltro=true;                          // hay agotadas, aunque no en este filtro
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   }).map(r=>({
@@ -4890,7 +4890,7 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     if(r.versionVigente===false) return false;
     if(!_idxUltima.has(r.idx)) return false;
     if(!esEstadoActivo(r.estadoDispensa)) return false;
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   }).map(r=>({
@@ -5649,7 +5649,7 @@ function renderCohortes(rowsAllRaw, bodegaSearch, zona){
 
   // Solo dispensas con Estado Activo, respetando los filtros de bodega y zona de la barra superior.
   const rows=soloActivas(base).filter(r=>{
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   });
@@ -6206,7 +6206,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   // Mismo alcance que el resto del visor: solo dispensas con Estado Activo y
   // respetando los filtros de bodega y zona de la barra superior.
   const enFiltro=(r)=>{
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   };
@@ -6653,7 +6653,7 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   // Mismo alcance que el resto del visor: solo dispensas activas y respetando
   // los filtros de bodega y zona de la barra superior.
   const rows=soloActivas(base).filter(r=>{
-    if(bodegaSearch && !normValue(r.bodegaDetalle).includes(bodegaSearch)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
   });
