@@ -37,6 +37,7 @@ function epsAGrupo(eps){
   if(nv.includes('COMFENAL')) return 'COMFENALCO';
   if(nv.includes('EMSSANAR')) return 'EMSSANAR';
   if(nv.includes('MAISFEN')) return 'MAISFEN';
+  if(nv.includes('POSITIVA')) return 'POSITIVA';
   return String(eps||'').trim() || 'N/D'; // si no está en la tabla, queda como su propia sigla (no se pierde)
 }
 
@@ -6259,13 +6260,23 @@ const CUENTA_EPS_LABEL = {
   'FIDEICOMISOS':'FOMAG (Fideicomisos La Previsora)',
   'MAISFEN':'MAISFEN',
   'FAMILIAR':'EPS FAMILIAR DE COLOMBIA',
-  'S.O.S':'S.O.S (Servicio Occidental de Salud)'
+  'S.O.S':'S.O.S (Servicio Occidental de Salud)',
+  'POSITIVA':'POSITIVA (Compañía de Seguros)',
+  'EMSSANAR':'EMSSANAR',
+  'COMFENALCO':'COMFENALCO VALLE'
 };
 function cuentaEpsLabel(k){ return CUENTA_EPS_LABEL[k] || k; }
 // El tablero trabaja por CUENTA = EPS consolidada, con un único líder por EPS.
 // De la matriz interna solo se toman las EPS que tienen Líder (los gestores de
 // cuenta no generan filas: sus líneas quedan en la cuenta de la EPS).
-const CUENTAS_EPS = [...new Set(RESPONSABLES_CUENTA.filter(r=>r.cargo==='Líder').flatMap(r=>r.eps))]
+// Cuentas que deben tener su propia fila de líder aunque en la matriz interna solo
+// figuren gestores de cuenta (o aún no tengan a nadie asignado): así sus líneas dejan
+// de caer en “líneas sin líder”.
+const CUENTAS_EPS_ADICIONALES = ['POSITIVA','S.O.S','EMSSANAR','COMFENALCO'];
+const CUENTAS_EPS = [...new Set([
+    ...RESPONSABLES_CUENTA.filter(r=>r.cargo==='Líder').flatMap(r=>r.eps),
+    ...CUENTAS_EPS_ADICIONALES
+  ])]
   .sort((a,b)=>cuentaEpsLabel(a).localeCompare(cuentaEpsLabel(b),'es'));
 // Una fila por EPS: la clave interna ya es la etiqueta pública (no hay nombres de personas).
 const LIDERES_CUENTA = CUENTAS_EPS.map(e=>({nombre:'Líder '+cuentaEpsLabel(e), cargo:'Líder', eps:[e]}));
