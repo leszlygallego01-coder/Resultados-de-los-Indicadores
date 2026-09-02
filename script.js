@@ -6314,14 +6314,21 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   };
   const rows=soloActivas(base).filter(enFiltro);
 
+  // Una dispensa se considera entregada solo si ninguna de sus lineas quedo
+  // pendiente (mismo criterio de pendienteDispensa que usa el indicador de dispensas).
+  const dispensaEntregadaResp=(r)=> r.pendienteDispensa==='NO';
+
   const acc=new Map();
   LIDERES_CUENTA.forEach(resp=>acc.set(resp.nombre, {
     resp, lineas:0, ent:0, pen:0, und:0, undPend:0,
-    docs:new Set(), bodegas:new Set(), epsSet:new Set()
+    // docs: dispensas de la cuenta. docsEnt / docsPend las separan por estado de la
+    // dispensa completa (entregada solo si TODAS sus lineas quedaron entregadas).
+    docs:new Set(), docsPend:new Set(),
+    bodegas:new Set(), epsSet:new Set()
   }));
   const det=new Map();
   let lineasAsignadas=0, entGlobal=0, penGlobal=0, undPendGlobal=0, sinResp=0;
-  const docsGlobal=new Set(), epsSinResp=new Set();
+  const docsGlobal=new Set(), docsGlobalPend=new Set(), epsSinResp=new Set();
 
   rows.forEach(r=>{
     const lista=cuentaResponsablesDeLinea(r);
@@ -6331,13 +6338,21 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     // El TOTAL cuenta la línea una sola vez, aunque la atiendan varios líderes.
     lineasAsignadas++;
     if(entregada) entGlobal++; else { penGlobal++; undPendGlobal+=pendUnd; }
-    if(r.documento) docsGlobal.add(r.bodegaDetalle+'|'+r.documento);
+    if(r.documento){
+      const kDoc=r.bodegaDetalle+'|'+r.documento;
+      docsGlobal.add(kDoc);
+      if(!dispensaEntregadaResp(r)) docsGlobalPend.add(kDoc);
+    }
     lista.forEach(resp=>{
       const g=acc.get(resp.nombre);
       g.lineas++;
       if(entregada) g.ent++; else { g.pen++; g.undPend+=pendUnd; }
       g.und += (r.unidades||0);
-      if(r.documento) g.docs.add(r.bodegaDetalle+'|'+r.documento);
+      if(r.documento){
+        const kDoc=r.bodegaDetalle+'|'+r.documento;
+        g.docs.add(kDoc);
+        if(!dispensaEntregadaResp(r)) g.docsPend.add(kDoc);
+      }
       g.bodegas.add(r.bodegaDetalle||'SIN BODEGA');
       g.epsSet.add(r.epsGrupo||'N/D');
       // El detalle abre la cuenta por la EPS tal como llega en el reporte
@@ -6345,12 +6360,15 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
       const epsRaw=r.eps||'N/D';
       const k=resp.nombre+'|'+epsRaw;
       if(!det.has(k)) det.set(k, {nombre:resp.nombre, cargo:resp.cargo, eps:epsRaw, epsGrupo:r.epsGrupo||'N/D',
-        lineas:0, ent:0, pen:0, und:0, undPend:0, docs:new Set()});
+        lineas:0, ent:0, pen:0, und:0, undPend:0, docs:new Set(), docsPend:new Set()});
       const d=det.get(k);
       d.lineas++;
       if(entregada) d.ent++; else { d.pen++; d.undPend+=pendUnd; }
       d.und += (r.unidades||0);
-      if(r.documento) d.docs.add(r.documento);
+      if(r.documento){
+        d.docs.add(r.documento);
+        if(!dispensaEntregadaResp(r)) d.docsPend.add(r.documento);
+      }
     });
   });
 
@@ -6360,7 +6378,10 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
       nombre:resp.nombre, cargo:resp.cargo,
       epsTxt:cuentaAlcanceTxt(resp),
       epsKeys:resp.eps.slice(),
-      dispensas:g.docs.size, lineas:g.lineas, ent:g.ent, pen:g.pen,
+      dispensas:g.docs.size,
+      dispEnt:g.docs.size-g.docsPend.size, dispPen:g.docsPend.size,
+      cumplDisp: g.docs.size ? (g.docs.size-g.docsPend.size)/g.docs.size : null,
+      lineas:g.lineas, ent:g.ent, pen:g.pen,
       cumpl: g.lineas ? g.ent/g.lineas : null,
       und:g.und, undPend:g.undPend, bodegas:g.bodegas.size, epsVistas:g.epsSet.size
     };
@@ -6368,13 +6389,18 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
 
   _cuentasDetalle=[...det.values()].map(d=>({
     nombre:d.nombre, cargo:d.cargo, eps:d.eps, epsKeys:[d.epsGrupo],
-    dispensas:d.docs.size, lineas:d.lineas, ent:d.ent, pen:d.pen,
+    dispensas:d.docs.size,
+    dispEnt:d.docs.size-d.docsPend.size, dispPen:d.docsPend.size,
+    cumplDisp: d.docs.size ? (d.docs.size-d.docsPend.size)/d.docs.size : null,
+    lineas:d.lineas, ent:d.ent, pen:d.pen,
     cumpl: d.lineas ? d.ent/d.lineas : null, und:d.und, undPend:d.undPend
   })).sort((a,b)=> b.pen-a.pen || b.lineas-a.lineas || a.nombre.localeCompare(b.nombre,'es'));
 
   _cuentasGlobal={
     lineasTotales:rows.length, lineasAsignadas, ent:entGlobal, pen:penGlobal,
     undPend:undPendGlobal, sinResp, dispensas:docsGlobal.size,
+    dispEnt:docsGlobal.size-docsGlobalPend.size, dispPen:docsGlobalPend.size,
+    cumplDisp: docsGlobal.size ? (docsGlobal.size-docsGlobalPend.size)/docsGlobal.size : null,
     epsSinResp:[...epsSinResp].sort((a,b)=>a.localeCompare(b,'es'))
   };
 
@@ -6470,7 +6496,7 @@ function pintarBaseCuentas(){
   const f=_cuentasFiltrosActuales();
 
   if(!_cuentasMatriz.length){
-    tb.innerHTML='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
+    tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(tbCor) tbCor.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
@@ -6480,7 +6506,7 @@ function pintarBaseCuentas(){
   const nombresVis=new Set(matriz.map(t=>t.nombre));
 
   // ---- KPIs ----
-  const G=_cuentasGlobal || {lineasTotales:0, lineasAsignadas:0, ent:0, pen:0, undPend:0, sinResp:0, dispensas:0};
+  const G=_cuentasGlobal || {lineasTotales:0, lineasAsignadas:0, ent:0, pen:0, undPend:0, sinResp:0, dispensas:0, dispEnt:0, dispPen:0, cumplDisp:null};
   const sumL=matriz.reduce((a,b)=>a+b.lineas,0);
   const sumE=matriz.reduce((a,b)=>a+b.ent,0);
   const sumP=matriz.reduce((a,b)=>a+b.pen,0);
@@ -6510,6 +6536,9 @@ function pintarBaseCuentas(){
     '<tr><td class="txt"><b>'+escHtml(cuentaLiderLabel(t.nombre))+'</b></td>'+
     '<td class="txt">'+escHtml(t.epsTxt)+'</td>'+
     '<td>'+fmtInt(t.dispensas)+'</td>'+
+    '<td>'+fmtInt(t.dispEnt)+'</td>'+
+    '<td class="'+(t.dispPen?'pct-bad':'')+'">'+fmtInt(t.dispPen)+'</td>'+
+    '<td class="'+effClass(t.cumplDisp)+'"><b>'+fmtPct(t.cumplDisp)+'</b></td>'+
     '<td><b>'+fmtInt(t.lineas)+'</b></td>'+
     '<td>'+fmtInt(t.ent)+'</td>'+
     '<td class="'+(t.pen?'pct-bad':'')+'">'+fmtInt(t.pen)+'</td>'+
@@ -6517,10 +6546,13 @@ function pintarBaseCuentas(){
     '<td>'+fmtInt(t.undPend)+'</td>'+
     '<td>'+fmtInt(t.bodegas)+'</td></tr>'
   ).join('');
-  if(!orden.length) h='<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">Ningún líder cumple los filtros elegidos.</td></tr>';
+  if(!orden.length) h='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">Ningún líder cumple los filtros elegidos.</td></tr>';
   else h+='<tr class="total-row"><td class="txt">TOTAL (líneas sin duplicar entre líderes)</td>'+
     '<td>—</td>'+
-    '<td>'+fmtInt(G.dispensas)+'</td><td>'+fmtInt(G.lineasAsignadas)+'</td>'+
+    '<td>'+fmtInt(G.dispensas)+'</td>'+
+    '<td>'+fmtInt(G.dispEnt)+'</td><td>'+fmtInt(G.dispPen)+'</td>'+
+    '<td>'+fmtPct(G.cumplDisp)+'</td>'+
+    '<td>'+fmtInt(G.lineasAsignadas)+'</td>'+
     '<td>'+fmtInt(G.ent)+'</td><td>'+fmtInt(G.pen)+'</td>'+
     '<td>'+fmtPct(G.lineasAsignadas?G.ent/G.lineasAsignadas:null)+'</td>'+
     '<td>'+fmtInt(G.undPend)+'</td><td>—</td></tr>';
@@ -6559,13 +6591,17 @@ function pintarBaseCuentas(){
     const nombresVis=new Set(matriz.map(t=>t.nombre));
     const hojaMatriz=matriz.map(t=>({
       'Lider':cuentaLiderLabel(t.nombre), 'EPS a cargo':t.epsTxt,
-      'Dispensas':t.dispensas, 'Lineas':t.lineas, 'Entregadas':t.ent, 'Pendientes':t.pen,
+      'Dispensas':t.dispensas, 'Dispensas entregadas':t.dispEnt, 'Dispensas pendientes':t.dispPen,
+      '% Cumplimiento dispensas':t.cumplDisp===null?'':+(t.cumplDisp*100).toFixed(1),
+      'Lineas':t.lineas, 'Entregadas':t.ent, 'Pendientes':t.pen,
       '% Cumplimiento':t.cumpl===null?'':+(t.cumpl*100).toFixed(1),
       'Unidades pendientes':t.undPend, 'Unidades dispensadas':t.und, 'Bodegas':t.bodegas
     }));
     const hojaDet=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f)).map(d=>({
       'Lider':cuentaLiderLabel(d.nombre), 'EPS':d.eps,
-      'Dispensas':d.dispensas, 'Lineas':d.lineas, 'Entregadas':d.ent, 'Pendientes':d.pen,
+      'Dispensas':d.dispensas, 'Dispensas entregadas':d.dispEnt, 'Dispensas pendientes':d.dispPen,
+      '% Cumplimiento dispensas':d.cumplDisp===null?'':+(d.cumplDisp*100).toFixed(1),
+      'Lineas':d.lineas, 'Entregadas':d.ent, 'Pendientes':d.pen,
       '% Cumplimiento':d.cumpl===null?'':+(d.cumpl*100).toFixed(1),
       'Unidades pendientes':d.undPend
     }));
