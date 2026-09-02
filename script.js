@@ -947,52 +947,92 @@ async function paqueteCargarGuardado(){
   return encontradas>0;
 }
 
-async function abrirPaqueteVisor(file){
-  if(!file) return;
-  let buffer;
-  try{ buffer=await file.arrayBuffer(); }
-  catch(err){ console.error(err); showToast('No se pudo leer el archivo: '+err.message,true); return; }
-  await procesarPaquete(buffer);
+/* Abre uno o varios archivos escogidos a mano. Si se escogen varios (un archivo
+   por mes), se combinan en memoria igual que cuando se traen de la carpeta. */
+async function abrirPaqueteVisor(archivos){
+  const lista=archivos ? (archivos.length!==undefined && typeof archivos.item==='function' ? Array.from(archivos)
+                          : (Array.isArray(archivos) ? archivos : [archivos])) : [];
+  if(!lista.length) return;
+  if(lista.length===1){
+    let buffer;
+    try{ buffer=await lista[0].arrayBuffer(); }
+    catch(err){ console.error(err); showToast('No se pudo leer el archivo: '+err.message,true); return; }
+    await procesarPaquete(buffer);
+    return;
+  }
+  const pass=prompt('Contrasena de los paquetes (la misma para todos los meses):');
+  if(pass===null) return;
+  const partes=[];
+  try{
+    for(let i=0;i<lista.length;i++){
+      showToast('Abriendo '+(i+1)+' de '+lista.length+': '+lista[i].name+'\u2026');
+      await new Promise(r=>setTimeout(r,30));
+      const buffer=await lista[i].arrayBuffer();
+      const backup=await procesarPaquete(buffer, {pass, soloLeer:true, silencioso:true});
+      if(backup) partes.push(backup);
+    }
+  }catch(err){
+    console.error(err);
+    showToast(err && err.message==='PAQUETE_PASS'
+      ? 'Contrasena incorrecta o alguno de los archivos esta danado.'
+      : 'No se pudieron abrir los archivos: '+((err&&err.message)||'error desconocido'), true);
+    return;
+  }
+  if(!partes.length){ showToast('Ninguno de los archivos tenia datos para mostrar.',true); return; }
+  await paqueteAplicarBackup(paqueteFusionarBackups(partes));
 }
 
 /* Punto de entrada unico: recibe el contenido del paquete en bytes, reconoce si
    es el formato nuevo (binario) o uno de los antiguos (sobre JSON con base64) y
-   lo abre en cualquiera de los dos casos. */
-async function procesarPaquete(buffer){
+   devuelve su contenido ya descifrado. Con `soloLeer` no lo aplica: quien llama
+   recoge varios meses y los combina antes de mostrarlos. */
+async function procesarPaquete(buffer, op){
+  const opciones=op||{};
   try{
     if(!(window.crypto && crypto.subtle)){
-      showToast('Este navegador no permite abrir paquetes cifrados. Usa Chrome o Edge actualizado.',true); return;
+      showToast('Este navegador no permite abrir paquetes cifrados. Usa Chrome o Edge actualizado.',true); return null;
     }
+    let backup=null;
     const nuevo=paqueteLeerCabeceraBinaria(buffer);
     if(nuevo){
       if(nuevo.cabecera.app!==PAQUETE_APP_ID){
-        showToast('Este archivo no es un paquete del Panel de Cargue.',true); return;
+        showToast('Este archivo no es un paquete del Panel de Cargue.',true); return null;
       }
-      await procesarPaqueteBinario(nuevo.cabecera, nuevo.cifrado);
-      return;
+      backup=await procesarPaqueteBinario(nuevo.cabecera, nuevo.cifrado, opciones);
+    }else{
+      let texto;
+      try{ texto=new TextDecoder().decode(buffer); }
+      catch(e){ showToast('El archivo no es un paquete valido.',true); return null; }
+      backup=await procesarPaqueteTexto(texto, opciones);
     }
-    let texto;
-    try{ texto=new TextDecoder().decode(buffer); }
-    catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
-    await procesarPaqueteTexto(texto);
+    if(!backup) return null;
+    if(opciones.soloLeer) return backup;
+    await paqueteAplicarBackup(backup);
+    return backup;
   }catch(err){
+    if(opciones.soloLeer) throw err;
     console.error(err);
     showToast('No se pudo abrir el paquete: '+err.message,true);
+    return null;
   }
 }
 
 // Formato nuevo: se descifra y se van leyendo las filas linea por linea.
-async function procesarPaqueteBinario(cabecera, cifrado){
-  const pass=prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
-  if(pass===null) return;
-  showToast('Abriendo el paquete\u2026');
+async function procesarPaqueteBinario(cabecera, cifrado, op){
+  const opciones=op||{};
+  const pass=(opciones.pass!==undefined && opciones.pass!==null)
+    ? opciones.pass
+    : prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
+  if(pass===null) return null;
+  if(!opciones.silencioso) showToast('Abriendo el paquete\u2026');
   await new Promise(r=>setTimeout(r,30));
   const clave=await paqueteDerivarClave(pass, base64ABytes(cabecera.salt), cabecera.iteraciones);
   let abierto;
   try{
     abierto=await crypto.subtle.decrypt({name:'AES-GCM', iv: base64ABytes(cabecera.iv)}, clave, cifrado);
   }catch(e){
-    showToast('Contrasena incorrecta o paquete danado.',true); return;
+    if(opciones.soloLeer) throw new Error('PAQUETE_PASS');
+    showToast('Contrasena incorrecta o paquete danado.',true); return null;
   }
   let ficha=null;
   const datasets=[];
@@ -1014,29 +1054,37 @@ async function procesarPaqueteBinario(cabecera, cifrado){
       acomodar();
     });
   }catch(e){
+    if(opciones.soloLeer) throw e;
     console.error(e);
-    showToast('El paquete se descifro, pero no se pudo leer su contenido: '+e.message,true); return;
+    showToast('El paquete se descifro, pero no se pudo leer su contenido: '+e.message,true); return null;
   }
-  if(!ficha || !datasets.length){ showToast('El paquete no contiene datos.',true); return; }
-  await paqueteAplicarBackup({
+  if(!ficha || !datasets.length){
+    if(!opciones.silencioso) showToast('El paquete no contiene datos.',true);
+    return null;
+  }
+  return {
     generadoEn: ficha.generadoEn||'',
+    periodo: ficha.periodo||'',
     totalFilas: ficha.totalFilas||datasets.reduce((a,b)=>a+b.rows.length,0),
     driveFiles: ficha.driveFiles||null,
     datasets
-  });
+  };
 }
 
 // Formato antiguo (sobre JSON con textos base64): se mantiene para poder abrir
 // los paquetes que ya se habian repartido.
-async function procesarPaqueteTexto(texto){
+async function procesarPaqueteTexto(texto, op){
+  const opciones=op||{};
   let sobre;
-  try{ sobre=JSON.parse(texto); }catch(e){ showToast('El archivo no es un paquete valido.',true); return; }
+  try{ sobre=JSON.parse(texto); }catch(e){ showToast('El archivo no es un paquete valido.',true); return null; }
   if(!sobre || sobre.app!==PAQUETE_APP_ID || !sobre.datos){
-    showToast('Este archivo no es un paquete del Panel de Cargue.',true); return;
+    showToast('Este archivo no es un paquete del Panel de Cargue.',true); return null;
   }
-  const pass=prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
-  if(pass===null) return;
-  showToast('Abriendo el paquete\u2026');
+  const pass=(opciones.pass!==undefined && opciones.pass!==null)
+    ? opciones.pass
+    : prompt('Contrasena del paquete (te la entrega el responsable del Panel de Cargue):');
+  if(pass===null) return null;
+  if(!opciones.silencioso) showToast('Abriendo el paquete\u2026');
   await new Promise(r=>setTimeout(r,30));
   const clave=await paqueteDerivarClave(pass, base64ABytes(sobre.salt), sobre.iteraciones);
   let plano;
@@ -1045,13 +1093,83 @@ async function procesarPaqueteTexto(texto){
     const bytes=new Uint8Array(abierto);
     plano = sobre.comprimido ? await paqueteDescomprimir(bytes) : new TextDecoder().decode(bytes);
   }catch(e){
-    showToast('Contrasena incorrecta o paquete danado.',true); return;
+    if(opciones.soloLeer) throw new Error('PAQUETE_PASS');
+    showToast('Contrasena incorrecta o paquete danado.',true); return null;
   }
   const backup=JSON.parse(plano);
   if(!backup || !Array.isArray(backup.datasets) || !backup.datasets.length){
-    showToast('El paquete no contiene datos.',true); return;
+    if(!opciones.silencioso) showToast('El paquete no contiene datos.',true);
+    return null;
   }
-  await paqueteAplicarBackup(backup);
+  return backup;
+}
+
+/* =========================================================================
+   Fusion de varios meses en memoria
+   Cada archivo trae el Reporte de Dispensacion recortado a su mes y las demas
+   tarjetas completas. Al combinar, el Reporte se ACUMULA (mes tras mes, sin
+   repetir lineas) y de las demas tarjetas se conserva la version mas reciente.
+   ========================================================================= */
+const PAQUETE_CLAVE_ACUMULABLE='reporte';
+// Firma de una linea del Reporte para descartar repetidas al unir meses.
+function paqueteFirmaFilaReporte(r){
+  if(!r || typeof r!=='object') return '';
+  const f=r.fechaDispensacion;
+  const fecha=(f && typeof f==='object' && typeof f.__date==='string') ? f.__date
+            : (f instanceof Date ? f.toISOString() : String(f==null?'':f));
+  return [r.documento, r.codigoArticulo, r.bodegaDetalle, r.contrato, fecha,
+          r.unidades, r.cantidadAutorizada, r.diferencia]
+    .map(v=>String(v==null?'':v).trim().toUpperCase()).join('|');
+}
+function paqueteFusionarBackups(partes){
+  const utiles=(partes||[]).filter(p=>p && Array.isArray(p.datasets));
+  if(!utiles.length) return {datasets:[], totalFilas:0, generadoEn:''};
+  // Se ordenan por fecha de generacion para que la version mas nueva de las
+  // tarjetas no acumulables sea la que quede.
+  const orden=utiles.slice().sort((a,b)=>String(a.generadoEn||'').localeCompare(String(b.generadoEn||'')));
+  const mapa=new Map();       // key -> dataset combinado
+  const firmas=new Map();     // key -> firmas ya vistas (solo acumulables)
+  const periodos=[];
+  let generadoEn='';
+  let driveFiles=null;
+  orden.forEach(p=>{
+    if(p.periodo && periodos.indexOf(p.periodo)<0) periodos.push(p.periodo);
+    if(String(p.generadoEn||'')>generadoEn) generadoEn=String(p.generadoEn||'');
+    if(p.driveFiles) driveFiles=p.driveFiles;
+    p.datasets.forEach(d=>{
+      if(!d || !d.key) return;
+      const filas=Array.isArray(d.rows)?d.rows:[];
+      if(d.key===PAQUETE_CLAVE_ACUMULABLE){
+        if(!mapa.has(d.key)){
+          mapa.set(d.key, Object.assign({}, d, {rows:[]}));
+          firmas.set(d.key, new Set());
+        }
+        const dest=mapa.get(d.key), vistas=firmas.get(d.key);
+        for(let i=0;i<filas.length;i++){
+          const fx=paqueteFirmaFilaReporte(filas[i]);
+          if(fx && vistas.has(fx)) continue;
+          if(fx) vistas.add(fx);
+          dest.rows.push(filas[i]);
+        }
+        dest.fileName=d.fileName||dest.fileName||'';
+        if(String(d.updatedAt||'')>String(dest.updatedAt||'')) dest.updatedAt=d.updatedAt||'';
+        dest.batches=d.batches||dest.batches||null;
+        dest.rowCount=dest.rows.length;
+      }else{
+        // Catalogos y consolidados: se reemplazan por la copia mas reciente.
+        mapa.set(d.key, Object.assign({}, d, {rows:filas, rowCount:filas.length}));
+      }
+    });
+  });
+  const datasets=Array.from(mapa.values());
+  return {
+    generadoEn,
+    periodo: periodos.sort().join(', '),
+    periodos: periodos.sort(),
+    totalFilas: datasets.reduce((a,b)=>a+(b.rows?b.rows.length:0),0),
+    driveFiles,
+    datasets
+  };
 }
 
 // Pasos comunes a los dos formatos: guardar, recordar y calcular indicadores.
@@ -1064,6 +1182,7 @@ async function paqueteAplicarBackup(backup){
     try{
       localStorage.setItem(PAQUETE_META_KEY, JSON.stringify({
         generadoEn: backup.generadoEn||'', abiertoEn: new Date().toISOString(),
+        periodo: backup.periodo||'',
         fuentes: backup.datasets.length, totalFilas: backup.totalFilas||0,
         keys: backup.datasets.map(d=>d.key)
       }));
@@ -1076,7 +1195,12 @@ async function paqueteAplicarBackup(backup){
       }catch(e){ /* ignorar */ }
     }
     updateTopStatus();
-    showToast('Paquete cargado: '+backup.datasets.length+' fuente(s) \u00b7 '+fmtInt(backup.totalFilas||0)+' filas. Calculando indicadores\u2026');
+    // Si se unieron varios meses, se avisa cuales quedaron cargados.
+    const cuantosMeses=(backup.periodos && backup.periodos.length) ? backup.periodos.length : 0;
+    const detalleMeses=cuantosMeses>1
+      ? (' \u00b7 ' + cuantosMeses + ' meses unidos (' + backup.periodos.map(pqEtiquetaMesLargo).filter(Boolean).join(', ') + ')')
+      : '';
+    showToast('Paquete cargado: '+backup.datasets.length+' fuente(s) \u00b7 '+fmtInt(backup.totalFilas||0)+' filas'+detalleMeses+'. Calculando indicadores\u2026');
     try{
       if(typeof ensureFacturasData==='function') await ensureFacturasData();
       await calcularIndicadores();
@@ -1097,7 +1221,7 @@ async function paqueteAplicarBackup(backup){
   const b2=document.getElementById('btnCargarPaqueteVacio');
   if(b1) b1.addEventListener('click', abrir);
   if(b2) b2.addEventListener('click', abrir);
-  input.addEventListener('change', e=>{ const f=e.target.files && e.target.files[0]; if(f) abrirPaqueteVisor(f); });
+  input.addEventListener('change', e=>{ const f=e.target.files; if(f && f.length) abrirPaqueteVisor(f); });
 })();
 
 /* =========================================================================
@@ -1239,7 +1363,89 @@ function pqConTiempoLimite(promesa, ms, codigo){
     );
   });
 }
-// Descarga el archivo mas reciente de la carpeta y lo abre.
+/* Lee el nombre del archivo para saber a que mes pertenece.
+   Los archivos se llaman resultados_AAAA_MM.medisfarma; los del formato
+   anterior (un unico paquete general) se muestran como "todos los datos". */
+function pqMesDeNombre(nombre){
+  const m=/resultados_(\d{4})_(\d{2})\.medisfarma$/i.exec(String(nombre||''));
+  return m ? (m[1]+'-'+m[2]) : '';
+}
+const PQ_MESES_LARGOS=['enero','febrero','marzo','abril','mayo','junio','julio',
+                       'agosto','septiembre','octubre','noviembre','diciembre'];
+function pqEtiquetaMesLargo(ym){
+  const m=/^(\d{4})-(\d{2})$/.exec(String(ym||''));
+  if(!m) return '';
+  return (PQ_MESES_LARGOS[parseInt(m[2],10)-1]||m[2])+' de '+m[1];
+}
+function pqPeso(bytes){
+  const n=Number(bytes||0);
+  if(!n) return '';
+  if(n<1048576) return Math.max(1,Math.round(n/1024))+' KB';
+  return (n/1048576).toFixed(1)+' MB';
+}
+function pqFechaCorta(iso){
+  const d=new Date(iso);
+  if(isNaN(d)) return '';
+  const p=n=>String(n).padStart(2,'0');
+  return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear()+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+
+/* Ventana con casillas: devuelve los archivos marcados o null si se cancela. */
+function pqElegirMeses(archivos){
+  return new Promise(resolve=>{
+    const modal=document.getElementById('mesesModal');
+    const lista=document.getElementById('mesesLista');
+    if(!modal || !lista){ resolve(archivos.slice(0,1)); return; }
+    lista.innerHTML=archivos.map((a,i)=>{
+      const mes=pqMesDeNombre(a.name);
+      const titulo=mes ? pqEtiquetaMesLargo(mes) : (a.name||'paquete');
+      const detalle=[pqFechaCorta(a.modifiedTime), pqPeso(a.size)].filter(Boolean).join(' \u00b7 ');
+      return '<label style="display:flex;gap:9px;align-items:flex-start;padding:7px 6px;border-radius:8px;cursor:pointer;">'
+        + '<input type="checkbox" class="pqMesChk" data-idx="'+i+'"'+(i===0?' checked':'')+' style="margin-top:3px;">'
+        + '<span><b style="text-transform:capitalize;">'+escHtml(titulo)+'</b>'
+        + (detalle?'<br><span style="font-size:11.5px;color:var(--ink-soft);">'+escHtml(detalle)+'</span>':'')
+        + '</span></label>';
+    }).join('');
+    const marcadas=()=>Array.from(lista.querySelectorAll('.pqMesChk'));
+    let cerrar=null;
+    const terminar=valor=>{ if(cerrar) cerrar(); resolve(valor); };
+    const alCargar=()=>{
+      const sel=marcadas().filter(c=>c.checked).map(c=>archivos[parseInt(c.dataset.idx,10)]);
+      if(!sel.length){ showToast('Marca al menos un mes.',true); return; }
+      terminar(sel);
+    };
+    const alCancelar=()=>terminar(null);
+    const alTodos=()=>marcadas().forEach(c=>{ c.checked=true; });
+    const alNinguno=()=>marcadas().forEach(c=>{ c.checked=false; });
+    const alTeclado=e=>{ if(e.key==='Escape') alCancelar(); };
+    const alFondo=e=>{ if(e.target===modal) alCancelar(); };
+    const bCargar=document.getElementById('btnMesesCargar');
+    const bCancelar=document.getElementById('btnMesesCancelar');
+    const bCerrar=document.getElementById('btnCerrarMeses');
+    const bTodos=document.getElementById('btnMesesTodos');
+    const bNinguno=document.getElementById('btnMesesNinguno');
+    cerrar=()=>{
+      modal.classList.remove('show');
+      if(bCargar) bCargar.removeEventListener('click', alCargar);
+      if(bCancelar) bCancelar.removeEventListener('click', alCancelar);
+      if(bCerrar) bCerrar.removeEventListener('click', alCancelar);
+      if(bTodos) bTodos.removeEventListener('click', alTodos);
+      if(bNinguno) bNinguno.removeEventListener('click', alNinguno);
+      document.removeEventListener('keydown', alTeclado);
+      modal.removeEventListener('click', alFondo);
+    };
+    if(bCargar) bCargar.addEventListener('click', alCargar);
+    if(bCancelar) bCancelar.addEventListener('click', alCancelar);
+    if(bCerrar) bCerrar.addEventListener('click', alCancelar);
+    if(bTodos) bTodos.addEventListener('click', alTodos);
+    if(bNinguno) bNinguno.addEventListener('click', alNinguno);
+    document.addEventListener('keydown', alTeclado);
+    modal.addEventListener('click', alFondo);
+    modal.classList.add('show');
+  });
+}
+
+/* Revisa la carpeta, deja elegir los meses y los abre combinados. */
 async function traerPaqueteDeCarpetaDrive(){
   const botones=[document.getElementById('btnTraerDrive'), document.getElementById('btnTraerDriveVacio')].filter(Boolean);
   const textos=botones.map(b=>b.textContent);
@@ -1250,20 +1456,51 @@ async function traerPaqueteDeCarpetaDrive(){
     const q="'"+DRIVE_FOLDER_PAQUETE+"' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'";
     const url='https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)
       + '&fields=files(id,name,mimeType,modifiedTime,size)'
-      + '&orderBy=modifiedTime desc&pageSize=50'
+      + '&orderBy=name desc&pageSize=200'
       + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
     const lista=await (await pqConTiempoLimite(pqDriveFetch(url, token), 45000, 'LISTA_TIMEOUT')).json();
-    const archivos=(lista.files||[]);
+    let archivos=(lista.files||[]);
     if(!archivos.length) throw new Error('CARPETA_VACIA');
-    const archivo=archivos[0]; // la carpeta no es acumulativa: siempre el mas reciente
-    botones.forEach(b=>{ b.textContent='Descargando…'; });
-    showToast('Descargando el paquete de resultados…');
-    const resp=await pqConTiempoLimite(pqDriveFetch('https://www.googleapis.com/drive/v3/files/'+archivo.id+'?alt=media&supportsAllDrives=true', token), 600000, 'DESCARGA_TIMEOUT');
-    const buffer=await resp.arrayBuffer();
-    await procesarPaquete(buffer);
+    // Primero los meses (del mas reciente al mas antiguo) y al final los paquetes antiguos.
+    archivos=archivos.slice().sort((a,b)=>{
+      const ma=pqMesDeNombre(a.name), mb=pqMesDeNombre(b.name);
+      if(ma && mb) return mb.localeCompare(ma);
+      if(ma) return -1;
+      if(mb) return 1;
+      return String(b.modifiedTime||'').localeCompare(String(a.modifiedTime||''));
+    });
+    let escogidos=archivos;
+    if(archivos.length>1){
+      botones.forEach((b,i)=>{ b.disabled=false; b.textContent=textos[i]; });
+      escogidos=await pqElegirMeses(archivos);
+      if(!escogidos) return;
+      botones.forEach(b=>{ b.disabled=true; b.textContent='Descargando…'; });
+    }
+    let pass=null;
+    if(escogidos.length>1){
+      pass=prompt('Contrasena de los paquetes (la misma para todos los meses):');
+      if(pass===null) return;
+    }
+    const partes=[];
+    for(let i=0;i<escogidos.length;i++){
+      const archivo=escogidos[i];
+      const nombreMes=pqEtiquetaMesLargo(pqMesDeNombre(archivo.name))||archivo.name;
+      botones.forEach(b=>{ b.textContent='Descargando '+(i+1)+'/'+escogidos.length+'…'; });
+      showToast('Descargando '+nombreMes+' ('+(i+1)+' de '+escogidos.length+')…');
+      const resp=await pqConTiempoLimite(pqDriveFetch('https://www.googleapis.com/drive/v3/files/'+archivo.id+'?alt=media&supportsAllDrives=true', token), 600000, 'DESCARGA_TIMEOUT');
+      const buffer=await resp.arrayBuffer();
+      if(escogidos.length===1){ await procesarPaquete(buffer); return; }
+      const backup=await procesarPaquete(buffer, {pass, soloLeer:true, silencioso:true});
+      if(backup) partes.push(backup);
+    }
+    if(!partes.length){ showToast('Los archivos escogidos no tenian datos para mostrar.',true); return; }
+    showToast('Uniendo '+partes.length+' meses…');
+    await paqueteAplicarBackup(paqueteFusionarBackups(partes));
   }catch(err){
     console.error(err);
-    showToast(pqDriveMensaje(err), true);
+    showToast(err && err.message==='PAQUETE_PASS'
+      ? 'Contrasena incorrecta o alguno de los archivos esta danado.'
+      : pqDriveMensaje(err), true);
   }finally{
     botones.forEach((b,i)=>{ b.disabled=false; b.textContent=textos[i]; });
   }
