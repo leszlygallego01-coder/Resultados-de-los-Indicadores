@@ -3196,14 +3196,22 @@ function renderIndicadorDispensa(rowsAllRaw, bodegaSearch, zona){
   // Este indicador cuenta SOLO las dispensas con Estado Activo: las INACTIVO se
   // excluyen por completo (tienen su propia pestana).
   const rowsAll = soloActivas(rowsAllRaw);
-  // ---- 1.1 - 1.5.3: resumen GLOBAL (sobre rowsAll, sin filtro de bodega/zona) ----
-  const totalDispensas = new Set(rowsAll.map(r=>r.dispensaYPunto)).size;
-  const capitaRows = rowsAll.filter(r=>r.contrato==='CAPITA');
-  const eventoRows = rowsAll.filter(r=>r.contrato==='EVENTO');
+  // ---- 1.1 - 1.5.3: resumen del AMBITO EN PANTALLA ----
+  // Las tarjetas siguen TODOS los filtros: los generales (mes, fechas, contrato, EPS,
+  // grupo EPS, diagnostico) ya vienen aplicados en rowsAll, y aqui se aplican tambien
+  // los subfiltros de bodega y zona para que el resumen coincida con la tabla de abajo.
+  const rowsAmbito = rowsAll.filter(r=>{
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    return true;
+  });
+  const totalDispensas = new Set(rowsAmbito.map(r=>r.dispensaYPunto)).size;
+  const capitaRows = rowsAmbito.filter(r=>r.contrato==='CAPITA');
+  const eventoRows = rowsAmbito.filter(r=>r.contrato==='EVENTO');
   const dispCapita = new Set(capitaRows.map(r=>r.dispensaYPunto)).size;
   const dispEvento = new Set(eventoRows.map(r=>r.dispensaYPunto)).size;
-  const dispConSoporte = new Set(rowsAll.filter(r=>r.tieneSoportes==='TIENE SOPORTE').map(r=>r.dispensaYPunto)).size;
-  const dispSinSoporte = new Set(rowsAll.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
+  const dispConSoporte = new Set(rowsAmbito.filter(r=>r.tieneSoportes==='TIENE SOPORTE').map(r=>r.dispensaYPunto)).size;
+  const dispSinSoporte = new Set(rowsAmbito.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
   const sinSoporteCapita = new Set(capitaRows.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
   const sinSoporteEvento = new Set(eventoRows.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
   const pctSinSopCapita = dispSinSoporte ? sinSoporteCapita/dispSinSoporte : null;
@@ -3218,6 +3226,9 @@ function renderIndicadorDispensa(rowsAllRaw, bodegaSearch, zona){
     <div class="stat"><div class="label">1.5.1 Sin soporte · Capita</div><div class="value">${fmtInt(sinSoporteCapita)}</div><div class="sub">${fmtPct(pctSinSopCapita)} de las sin soporte</div></div>
     <div class="stat"><div class="label">1.5.2 Sin soporte · Evento</div><div class="value">${fmtInt(sinSoporteEvento)}</div><div class="sub">${fmtPct(pctSinSopEvento)} de las sin soporte</div></div>
   `;
+
+  // ---- Anillo de soporte para las dispensas CAPITA (sigue los mismos filtros) ----
+  renderDonutCapitaSoporte(dispCapita, sinSoporteCapita);
 
   // ---- 1.6 - 1.12: por bodega detalle (con filtro de búsqueda / zona) ----
   const groups = groupByBodega(rowsAll, bodegaSearch, zona);
@@ -3350,6 +3361,43 @@ function drawPieForSelection(table){
     <div class="item"><span class="sw" style="background:#D98A2B;"></span>Pendiente<span class="val">${fmtPct(pend)}</span></div>
     <div class="item" style="color:#5C6C7E;font-size:11px;">${label}</div>
   `;
+}
+// ---- Anillo: % de dispensas CAPITA con soporte vs sin soporte ----
+// Recibe el total de dispensas capita y cuantas de esas no tienen soportes,
+// ambos ya calculados con TODOS los filtros activos de la pantalla.
+function renderDonutCapitaSoporte(dispCapita, sinSoporteCapita){
+  const svg=document.getElementById('donutCapitaSoporte');
+  const leg=document.getElementById('donutCapitaSoporteLegend');
+  const stats=document.getElementById('statsCapitaSoporte');
+  if(!svg && !leg && !stats) return;
+  const total=dispCapita||0;
+  const sin=Math.min(sinSoporteCapita||0, total);
+  const con=total-sin;
+  const pctCon = total? con/total : null;
+  const pctSin = total? sin/total : null;
+  if(total>0){
+    drawDonut('donutCapitaSoporte', [
+      {label:'Con soporte', value:con, color:'#1E8F5E'},
+      {label:'Sin soporte', value:sin, color:'#D98A2B'}
+    ], fmtPct(pctCon), '#1E8F5E');
+  }else{
+    // Sin datos en el ambito filtrado: se dibuja un anillo gris con guion al centro.
+    drawDonut('donutCapitaSoporte', [{label:'Sin datos', value:1, color:'#E6EDF4'}], '—', '#5C6C7E');
+  }
+  if(leg){
+    leg.innerHTML = `
+      <div class="item"><span class="sw" style="background:#1E8F5E;"></span>Con soporte<span class="val">${fmtPct(pctCon)}</span></div>
+      <div class="item"><span class="sw" style="background:#D98A2B;"></span>Sin soporte<span class="val">${fmtPct(pctSin)}</span></div>
+      <div class="item" style="color:#5C6C7E;font-size:11px;">Base: ${fmtInt(total)} dispensas cápita</div>
+    `;
+  }
+  if(stats){
+    stats.innerHTML = `
+      <div class="stat"><div class="label">Dispensas cápita (base)</div><div class="value">${fmtInt(total)}</div></div>
+      <div class="stat"><div class="label">Cápita con soporte</div><div class="value">${fmtInt(con)}</div><div class="sub">${fmtPct(pctCon)} de las cápita</div></div>
+      <div class="stat warn"><div class="label">Cápita sin soporte</div><div class="value">${fmtInt(sin)}</div><div class="sub">${fmtPct(pctSin)} de las cápita</div></div>
+    `;
+  }
 }
 function drawDonut(svgId, slices, centerText, centerColor){
   const svg=document.getElementById(svgId);
