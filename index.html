@@ -129,7 +129,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
     </div>
 
     <!-- Selector de archivo oculto: se abre desde los botones "Cargar paquete del panel" -->
-    <input type="file" id="inputPaquete" accept=".medisfarma,.json" style="display:none;">
+    <input type="file" id="inputPaquete" accept=".medisfarma,.json" style="display:none;" multiple>
 
     <div id="resultadosBody" style="display:none;">
       <div class="result-tabs">
@@ -1003,7 +1003,25 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
   </div>
 </div>
 
+<!-- Ventana para escoger los meses guardados en la carpeta de Google Drive -->
+<div class="modal-overlay" id="mesesModal">
+  <div class="modal-box" style="max-width:560px;">
+    <button class="modal-close" id="btnCerrarMeses" type="button" aria-label="Cerrar">✕</button>
+    <h2>Elige los meses que quieres ver</h2>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin:0 0 12px;">La carpeta guarda un archivo por mes. Marca uno o varios: al abrirlos, el <b>Reporte de Dispensación</b> se une mes tras mes y las demás fuentes toman la versión más reciente.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <button class="btn btn-ghost" id="btnMesesTodos" type="button" style="padding:6px 12px;font-size:12.5px;">Marcar todos</button>
+      <button class="btn btn-ghost" id="btnMesesNinguno" type="button" style="padding:6px 12px;font-size:12.5px;">Quitar todos</button>
+    </div>
+    <div id="mesesLista" style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+      <button type="button" class="btn btn-ghost" id="btnMesesCancelar">Cancelar</button>
+      <button type="button" class="btn btn-primary" id="btnMesesCargar">Cargar seleccionados</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260903a"></script>
+<script src="script.js?v=20260903b"></script>
 </body>
 </html>
