@@ -3791,6 +3791,20 @@ function descargarImagenIndicadorDispensa(){
 }
 document.getElementById('btnDescargarImagenDispensa').addEventListener('click', descargarImagenIndicadorDispensa);
 
+/* Zonas que NO son puntos de venta operativos y por eso quedan fuera de los
+   Top 20 de dispensas: "CERRADA" (puntos cerrados), "BODEGA" y "BODEGA VIRTUAL"
+   (centros de acopio / bodegas logisticas). Se comparan sin tildes, en
+   mayusculas y sin espacios de sobra, asi que reconoce variantes como
+   "Cerradas", "BODEGA-VIRTUAL" o "Bodega  Virtual". */
+function zonaNoOperativaDispensa(zona){
+  const z=normValue(zona).replace(/[^A-Z0-9]+/g,' ').trim();
+  if(!z) return false;                       // sin zona: se deja pasar
+  if(/^CERRAD[AO]S?$/.test(z)) return true;  // CERRADA / CERRADO / CERRADAS
+  if(/^BODEGA(S)?$/.test(z)) return true;    // BODEGA / BODEGAS
+  if(/^BODEGA(S)? VIRTUAL(ES)?$/.test(z)) return true;
+  return false;
+}
+
 /* ---- Imagen PNG del Top 20 de bodegas detalle (Reporte de Dispensacion) ----
    modo='eficiencia' -> mejores indicadores de eficiencia (mayor a menor)
    modo='pendiente'  -> indices de pendientes mas altos (mayor a menor)
@@ -3801,13 +3815,13 @@ function descargarImagenTopBodegasDispensa(modo){
   if(!tabla || !tabla.length){ showToast('Primero calcula los indicadores.', true); return; }
 
   const esEf = (modo === 'eficiencia');
-  // Solo bodegas con dispensas activas: sin dispensas no hay indicador comparable.
-  // En el Top 20 de mayor índice de pendientes se excluyen además las bodegas cuya zona
-  // corresponde a puntos cerrados (zona "CERRADAS"), de modo que el listado siga
-  // teniendo 20 bodegas operativas.
-  const esZonaCerrada = (z)=> normValue(z).indexOf('CERRAD') >= 0;
-  const base = tabla.filter(t => (t.dispensas||0) > 0 && (esEf || !esZonaCerrada(t.zona)));
-  if(!base.length){ showToast('No hay bodegas con dispensas activas para el filtro actual.', true); return; }
+  /* Solo bodegas con dispensas activas: sin dispensas no hay indicador comparable.
+     Ademas se dejan fuera de los dos Top 20 las zonas que no son puntos de venta
+     operativos: "CERRADA" (puntos cerrados), "BODEGA" y "BODEGA VIRTUAL"
+     (centros de acopio y bodegas logisticas). Al excluirlas antes de ordenar, el
+     listado siempre completa 20 bodegas detalle operativas. */
+  const base = tabla.filter(t => (t.dispensas||0) > 0 && !zonaNoOperativaDispensa(t.zona));
+  if(!base.length){ showToast('No hay bodegas operativas con dispensas activas para el filtro actual.', true); return; }
 
   const orden = base.slice().sort((a,b)=>{
     const va = esEf ? (a.efDispensa||0) : (a.pendDispensa||0);
@@ -3821,8 +3835,9 @@ function descargarImagenTopBodegasDispensa(modo){
   const zonaSel = document.getElementById('fZona').value || 'Todas las zonas';
   const titulo = esEf ? 'Top 20 bodegas detalle · Mejor indicador de eficiencia'
                       : 'Top 20 bodegas detalle · Mayor índice de pendientes';
-  const criterio = esEf ? 'Ordenado por indicador de eficiencia, de mayor a menor.'
-                        : 'Ordenado por índice de pendientes, de mayor a menor. Se excluyen las bodegas de zonas cerradas.';
+  const criterio = (esEf ? 'Ordenado por indicador de eficiencia, de mayor a menor.'
+                         : 'Ordenado por índice de pendientes, de mayor a menor.')
+                 + ' Se excluyen las zonas Cerrada, Bodega y Bodega Virtual.';
   const acento = esEf ? '#1E8F5E' : '#D98A2B';
 
   const tD=sumField(top,'dispensas'), tE=sumField(top,'dispensasEntregadas'), tP=sumField(top,'dispensasPendientes');
@@ -3976,7 +3991,7 @@ function descargarImagenTopBodegasDispensa(modo){
   });
 
   ctx.fillStyle='#9CA9B6'; ctx.font='11px Arial, sans-serif';
-  ctx.fillText('Solo dispensas con estado activo. El gráfico general corresponde al agregado de las 20 bodegas mostradas.', 28, H-18);
+  ctx.fillText('Solo dispensas con estado activo, sin las zonas Cerrada, Bodega ni Bodega Virtual. El gráfico general corresponde al agregado de las '+top.length+' bodegas mostradas.', 28, H-18);
 
   const a=document.createElement('a');
   const slug=zonaSel.replace(/[^A-Za-z0-9\-_]+/g,'_').slice(0,40);
