@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260902e">
+<link rel="stylesheet" href="styles.css?v=20260902f">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -881,7 +881,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;">
             <div style="flex:1;min-width:240px;">
               <h3>👥 Base de cuentas por líder</h3>
-              <p class="seg-desc">Líneas a cargo, entregadas, pendientes y % de cumplimiento de cada líder, con la EPS que atiende.</p>
+              <p class="seg-desc">Dispensas y líneas a cargo, entregadas, pendientes y % de cumplimiento de cada líder, con la EPS que atiende. Una dispensa se cuenta como <b>entregada</b> solo si todas sus líneas quedaron entregadas.</p>
             </div>
             <div class="field" style="min-width:210px;">
               <label>Líder</label>
@@ -898,7 +898,8 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <thead>
                 <tr>
                   <th>Líder</th><th>EPS a cargo</th>
-                  <th>Dispensas</th><th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
+                  <th>Dispensas</th><th>Disp. entregadas</th><th>Disp. pendientes</th><th>% Cumpl. dispensas</th>
+                  <th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
                   <th>% Cumplimiento</th><th>Und. pendientes</th><th>Bodegas</th>
                 </tr>
               </thead>
@@ -1003,6 +1004,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260902e"></script>
+<script src="script.js?v=20260902f"></script>
 </body>
 </html>
