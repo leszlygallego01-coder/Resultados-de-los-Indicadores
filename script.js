@@ -2288,6 +2288,47 @@ function lineaEsPendiente(r){
   if(!r || r.noMedicamento) return false;
   return toNumber(r.diferencia) < 0;
 }
+
+/* ---- Cobertura real del inventario (regla de existencia suficiente) ----------
+   Un mismo homologo puede tener VARIAS lineas pendientes y todas comparten la MISMA
+   existencia. Antes cada linea se marcaba como subsanable si la existencia alcanzaba
+   para ella sola, asi que el mismo inventario se contaba varias veces.
+   Ahora se SUMAN todos los pendientes del item y solo se consideran cubiertos si la
+   existencia alcanza para el total:
+     · En el Punto: se agrupa por Homologo + Bodega (ese stock es de ese punto).
+     · En Bodega Principal: se agrupa por Homologo sobre todo el ambito filtrado y solo
+       compiten las lineas que el punto no alcanzo a cubrir (el stock central es uno solo).
+   Devuelve utilidades para consultar la cobertura de cada linea y el pendiente total
+   acumulado del item, que se usan en las tablas y en las descargas.                */
+function calcularCoberturaExistencias(rows){
+  const pendDe = r => Math.abs(toNumber(r && r.diferencia));
+  const elegible = r => !!(r && lineaEsPendiente(r) && r.homologo);
+  const punto=new Map();    // Homologo|Bodega -> { pend, exist, cubre }
+  const central=new Map();  // Homologo        -> { pend, exist, cubre }
+  (rows||[]).forEach(r=>{
+    if(!elegible(r)) return;
+    const k=r.homologo+'|'+r.bodegaNorm;
+    const it=punto.get(k) || { pend:0, exist:toNumber(r.existenciaPunto), cubre:false };
+    it.pend+=pendDe(r);
+    punto.set(k,it);
+  });
+  punto.forEach(it=>{ it.cubre = it.exist>0 && it.exist>=it.pend; });
+  const cubiertoPunto = r => elegible(r) ? !!(punto.get(r.homologo+'|'+r.bodegaNorm)||{}).cubre : false;
+  (rows||[]).forEach(r=>{
+    if(!elegible(r) || cubiertoPunto(r)) return;
+    const it=central.get(r.homologo) || { pend:0, exist:toNumber(r.existenciaBodega), cubre:false };
+    it.pend+=pendDe(r);
+    central.set(r.homologo,it);
+  });
+  central.forEach(it=>{ it.cubre = it.exist>0 && it.exist>=it.pend; });
+  const cubiertoBodega = r => (elegible(r) && !cubiertoPunto(r)) ? !!(central.get(r.homologo)||{}).cubre : false;
+  return {
+    cubiertoPunto, cubiertoBodega,
+    // Pendiente total acumulado del item (suma de todas sus lineas pendientes).
+    pendItemPunto:  r => elegible(r) ? ((punto.get(r.homologo+'|'+r.bodegaNorm)||{}).pend||0) : 0,
+    pendItemBodega: r => elegible(r) ? ((central.get(r.homologo)||{}).pend||0) : 0
+  };
+}
 // Guarda las dispensas inactivas ya agrupadas (Documento + Bodega) del último render,
 // para que el botón de descarga por bodega exporte exactamente lo que se ve en pantalla.
 let _inactivasDispCache = [];
@@ -3953,6 +3994,9 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
   // Solo dispensas con Estado Activo (se excluyen las INACTIVO).
   const rowsAll = soloActivas(rowsAllRaw);
   const groups=groupByBodega(rowsAll, bodegaSearch, zona);
+  // Cobertura de inventario calculada sobre TODO el ambito filtrado: una linea solo cuenta
+  // como subsanable si la existencia alcanza para la suma de pendientes de ese mismo item.
+  const cob = calcularCoberturaExistencias(groups.reduce((acc,g)=>acc.concat(g.rows),[]));
   const table=groups.map(g=>{
     const rs=g.rows;
     let lineas=0, lineasEnt=0, lineasPen=0, sinHomologar=0;
@@ -3974,13 +4018,13 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
       if(r.moleculaPareto==='PARETO'){
         molParetoPend++;
         if(agotado) paretoAgotado++;
-        if(r.existenciaPunto>0 && r.sePuedeSubsanarPunto==='SI') cantPuntoPareto++;
-        else if(r.existenciaBodega>0 && r.sePuedeSubsanarPunto==='NO' && r.sePuedeSubsanarBodega==='SI') cantBodegaPareto++;
+        if(cob.cubiertoPunto(r)) cantPuntoPareto++;
+        else if(cob.cubiertoBodega(r)) cantBodegaPareto++;
       }else if(r.moleculaPareto==='NO PARETO'){
         molNoParetoPend++;
         if(agotado) noParetoAgotado++;
-        if(r.existenciaPunto>0 && r.sePuedeSubsanarPunto==='SI') cantPuntoNoPareto++;
-        else if(r.existenciaBodega>0 && r.sePuedeSubsanarPunto==='NO' && r.sePuedeSubsanarBodega==='SI') cantBodegaNoPareto++;
+        if(cob.cubiertoPunto(r)) cantPuntoNoPareto++;
+        else if(cob.cubiertoBodega(r)) cantBodegaNoPareto++;
       }else{
         // Línea pendiente cuyo código no tiene clasificación Pareto/No Pareto en el catálogo Homólogo
         sinHomologar++;
@@ -4808,20 +4852,30 @@ document.getElementById('btnDescargarParetoExistencias').addEventListener('click
     // Misma regla del Indicador por Línea: pendiente = Diferencia < 0.
     return lineaEsPendiente(r) && (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO');
   });
-  const rowShape = r => ({
-    'Zona':r.zona,'Bodega Detalle':r.bodegaDetalle,'Tipo':r.moleculaPareto,'Ubicación':r.sePuedeSubsanarPunto==='SI' ? 'Punto' : 'Bodega Principal','Documento':r.documento,
+  // Solo items cuyo stock cubre la suma completa de sus pendientes (misma regla de las
+  // tablas Eficiencia Pareto / No Pareto (cantidad)).
+  const cob = calcularCoberturaExistencias(base);
+  const rowShape = (r, donde) => ({
+    'Zona':r.zona,'Bodega Detalle':r.bodegaDetalle,'Tipo':r.moleculaPareto,'Ubicación':donde,'Documento':r.documento,
     'Código Articulo':r.codigoArticulo,'Descripción DCI':r.descripcionDci,'Homólogo':r.homologo,'Diferencia (pendiente)':r.diferencia,
-    'Existencia Disponible':r.sePuedeSubsanarPunto==='SI' ? r.existenciaPunto : r.existenciaBodega
+    'Pendiente de esta línea':Math.abs(toNumber(r.diferencia)),
+    // Pendiente acumulado del item: suma de TODAS sus lineas pendientes que compiten por
+    // el mismo inventario. Solo se exporta si la existencia alcanza para ese total.
+    'Pendiente total del ítem':donde==='Punto' ? cob.pendItemPunto(r) : cob.pendItemBodega(r),
+    'Cantidad en el Punto':toNumber(r.existenciaPunto),
+    'Cantidad en Bodega Principal':toNumber(r.existenciaBodega),
+    'Existencia Disponible':donde==='Punto' ? toNumber(r.existenciaPunto) : toNumber(r.existenciaBodega),
+    'Existencia suficiente para todo el ítem':'SI'
   });
-  const enElPunto = base.filter(r=>r.sePuedeSubsanarPunto==='SI' && r.existenciaPunto>0).map(rowShape);
-  const enBodegaPrincipal = base.filter(r=>r.sePuedeSubsanarPunto==='NO' && r.sePuedeSubsanarBodega==='SI' && r.existenciaBodega>0).map(rowShape);
+  const enElPunto = base.filter(r=>cob.cubiertoPunto(r)).map(r=>rowShape(r,'Punto'));
+  const enBodegaPrincipal = base.filter(r=>cob.cubiertoBodega(r)).map(r=>rowShape(r,'Bodega Principal'));
   if(!enElPunto.length && !enBodegaPrincipal.length){ showToast('No hay moléculas Pareto/No Pareto con existencia para subsanar en el filtro actual.', true); return; }
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(enElPunto.length?enElPunto:[{'Sin datos':''}]), 'Existencia en el Punto');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(enBodegaPrincipal.length?enBodegaPrincipal:[{'Sin datos':''}]), 'Existencia en Bodega Principal');
   const fecha=new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, `Pareto_NoPareto_Existencias_${fecha}.xlsx`);
-  showToast('Excel de Pareto/No Pareto exportado.');
+  showToast('Excel de Pareto/No Pareto exportado: '+fmtInt(enElPunto.length)+' líneas cubiertas en el punto y '+fmtInt(enBodegaPrincipal.length)+' en bodega principal (solo ítems con existencia suficiente).');
 });
 
 // ---- Códigos a Comprar: líneas pendientes que NO se pueden subsanar ni con lo que hay
