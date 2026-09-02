@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260902c">
+<link rel="stylesheet" href="styles.css?v=20260902d">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -152,6 +152,20 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           <button class="btn btn-export" id="btnDescargarDetalleBodega">⬇ Descargar detalle por bodega (Excel)</button>
         </div>
         <div class="stat-row" id="statsDispensa"></div>
+
+        <!-- ---- Anillo: soporte de las dispensas CAPITA (sigue todos los filtros) ---- -->
+        <div class="chart-row" id="capitaSoporteRow">
+          <div class="chart-card">
+            <h4>Soporte de dispensas Cápita</h4>
+            <svg id="donutCapitaSoporte" width="200" height="200" viewBox="0 0 200 200"></svg>
+            <div class="legend" id="donutCapitaSoporteLegend"></div>
+          </div>
+          <div class="table-wrap" style="margin-bottom:0;padding:16px;overflow:visible;">
+            <p class="seg-desc" style="margin:0 0 10px;"><b>Qué muestra:</b> el porcentaje de <b>dispensas de contrato CÁPITA</b> que ya tienen soporte frente a las que no lo tienen. El cálculo respeta <b>todos los filtros activos</b> (mes, fechas, contrato, EPS, grupo EPS, diagnóstico, bodega y zona), así que el anillo y las tarjetas de arriba cambian juntos.</p>
+            <p class="seg-desc" style="margin:0 0 10px;"><b>Criterio:</b> una dispensa cuenta como <b>sin soporte</b> si al menos una de sus líneas activas viene sin soportes; el resto son <b>con soporte</b>. Con esa regla las dos porciones suman siempre el total de dispensas cápita y coinciden con la tarjeta <i>1.5.1 Sin soporte · Cápita</i>. Solo se consideran dispensas con <b>Estado Activo</b>.</p>
+            <div class="stat-row" id="statsCapitaSoporte" style="margin-bottom:0;"></div>
+          </div>
+        </div>
 
         <!-- ---- Seguimiento de Dispensación agrupada por Bodega ---- -->
         <div class="seguimiento-section" id="seguimientoSection">
@@ -989,6 +1003,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260902c"></script>
+<script src="script.js?v=20260902d"></script>
 </body>
 </html>
