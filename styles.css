@@ -483,6 +483,33 @@ table.data tbody tr:nth-child(even) td.cob-bad,table.data tbody tr:hover td.cob-
 .auth-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:6px;}
 @media (max-width:480px){.auth-actions{flex-direction:column-reverse;}.auth-actions .btn{width:100%;}}
 
+/* ---- inicio de sesion obligatorio (rol + clave) ---- */
+/* Mientras no haya sesion valida se oculta todo el tablero y solo se ve el login */
+body.sesion-bloqueada .app{visibility:hidden;}
+body.sesion-bloqueada{overflow:hidden;}
+#loginModal{z-index:200;}
+.login-box{max-width:380px;}
+.login-box .auth-actions{justify-content:center;}
+.login-box .auth-actions .btn{min-width:150px;}
+.login-select{
+  width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;
+  background:var(--bg-alt);color:var(--ink);box-sizing:border-box;font-family:var(--body);
+}
+.login-select:focus{outline:none;border-color:var(--blue);background:var(--white);box-shadow:0 0 0 3px rgba(11,95,165,.12);}
+
+/* chip del rol activo y boton de salida en la barra superior */
+.top-status .rol-chip{
+  margin-left:6px;padding:3px 11px;border-radius:999px;white-space:nowrap;
+  background:var(--blue-tint);border:1px solid #c5d8ea;color:var(--blue-dark);
+  font-family:var(--body);font-size:12px;font-weight:500;
+}
+.top-status .rol-chip b{font-family:var(--mono);font-weight:700;color:var(--blue-dark);}
+.btn-salir{
+  font-family:var(--body);font-weight:600;font-size:11.5px;padding:5px 13px;border-radius:999px;cursor:pointer;
+  background:var(--white);color:var(--red);border:1px solid var(--red-line);
+}
+.btn-salir:hover{background:var(--red-soft);}
+
 .corte-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
 @media (max-width:900px){.corte-grid{grid-template-columns:1fr;}}
 .corte-card{border:1px solid var(--line);border-radius:var(--radius);padding:14px;background:var(--bg-alt);text-align:center;}
