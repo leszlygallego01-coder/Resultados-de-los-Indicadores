@@ -32,7 +32,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 
-<body>
+<body class="sesion-bloqueada">
 <div class="app">
 
   <header class="top">
@@ -49,6 +49,8 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <span class="dot" id="dbDot"></span>
       <span id="dbStatusText">Sin datos guardados en este navegador</span>
       <span class="res-count-chip">Registros en pantalla: <b id="resCount">—</b></span>
+      <span class="rol-chip" id="rolChip" style="display:none;">Rol: <b id="rolNombre">—</b></span>
+      <button type="button" class="btn-salir" id="btnCerrarSesion" style="display:none;" title="Salir y volver a pedir el rol y la clave">Cerrar sesión</button>
     </div>
   </header>
 
@@ -940,6 +942,36 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
   <footer class="foot">Indicadores de Operaciones · procesamiento 100% local en el navegador · nada se envía a ningún servidor</footer>
 </div>
 
+<!-- Inicio de sesion obligatorio: sin rol y clave validos no se muestra el visor -->
+<div class="modal-overlay show" id="loginModal">
+  <div class="modal-box auth-box login-box">
+    <div class="auth-icon" aria-hidden="true">🔐</div>
+    <h2>Inicio de sesión</h2>
+    <p class="auth-sub">Selecciona tu <b>rol</b> e ingresa la clave asignada para consultar los indicadores.</p>
+    <form id="loginForm" autocomplete="off">
+      <div class="field auth-field">
+        <label for="loginRol">Rol</label>
+        <select id="loginRol" class="login-select">
+          <option value="">Selecciona tu rol…</option>
+          <option value="supervisor">Supervisor</option>
+          <option value="gerencia">Gerencia</option>
+          <option value="director">Director Operativo</option>
+          <option value="coordinador">Coordinador Bodega</option>
+          <option value="administrador">Administrador</option>
+        </select>
+      </div>
+      <div class="field auth-field">
+        <label for="loginClave">Clave</label>
+        <input type="password" id="loginClave" name="loginClave" placeholder="Clave del rol" autocomplete="off">
+      </div>
+      <div class="auth-error" id="loginError" role="alert" aria-live="polite"></div>
+      <div class="auth-actions">
+        <button type="submit" class="btn btn-primary" id="btnLoginEntrar">Ingresar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Ventana de acceso: pide usuario y clave antes de abrir el Reporte Comparativo Periodico -->
 <div class="modal-overlay" id="authModal">
   <div class="modal-box auth-box">
@@ -1022,6 +1054,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260903c"></script>
+<script src="script.js?v=20260903d"></script>
 </body>
 </html>
