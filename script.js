@@ -290,6 +290,59 @@ function localPutRecord(record){
 function localGetRecord(key){ return localTx('readonly', store => store.get(key)); }
 function localDeleteRecord(key){ return localTx('readwrite', store => store.delete(key)); }
 
+/* =========================================================================
+   2-ter. Historia CONSOLIDADA del Reporte de Dispensacion
+   -------------------------------------------------------------------------
+   La carpeta de resultados guarda un archivo por mes y el visor permite abrir
+   solo algunos meses. Eso esta bien para los indicadores del periodo, pero hay
+   tres vistas que son CONSOLIDADOS de toda la operacion y no pueden moverse
+   cuando se abre un mes distinto o llega un cargue nuevo:
+
+     1. Consumo promedio mes de la Base de Supervisores
+     2. Reporte Comparativo (estado inicial vs estado actual)
+     3. Reasignacion mensual de entregas
+
+   Para que queden fijas se guarda aparte, en este navegador, la union de TODAS
+   las filas del Reporte que se han abierto alguna vez (sin repetir). Esa
+   historia nunca se recorta por meses ni por filtros: solo crece cuando llega
+   informacion nueva.
+   ========================================================================= */
+const CONSOLIDADO_KEY='reporte_consolidado';
+let _consolidadoCache=null;
+
+// Lee la historia consolidada guardada en este navegador.
+async function consolidadoLeer(){
+  if(_consolidadoCache) return _consolidadoCache;
+  let rec=null;
+  try{ rec=await localGetRecord(CONSOLIDADO_KEY); }catch(e){ rec=null; }
+  _consolidadoCache = (rec && Array.isArray(rec.rows)) ? rec.rows : [];
+  return _consolidadoCache;
+}
+
+/* Suma las filas del cargue actual a la historia consolidada y la devuelve.
+   Las filas repetidas se descartan con la misma firma que se usa al unir meses,
+   asi que abrir dos veces el mismo mes no infla las cifras y una linea que
+   cambio de estado (pendiente -> entregada) si entra como version nueva.     */
+async function consolidadoAgregar(filas){
+  const previas=await consolidadoLeer();
+  const vistas=new Set();
+  const out=[];
+  const meter=(f)=>{
+    if(!f || typeof f!=='object') return;
+    const fx=paqueteFirmaFilaReporte(f);
+    if(fx){ if(vistas.has(fx)) return; vistas.add(fx); }
+    out.push(f);
+  };
+  previas.forEach(meter);
+  (filas||[]).forEach(meter);
+  _consolidadoCache=out;
+  try{
+    await localPutRecord({ key:CONSOLIDADO_KEY, rows:out, fileName:'', batches:null,
+                           updatedAt:new Date().toISOString() });
+  }catch(e){ /* si no hay espacio, al menos queda en memoria durante la sesion */ }
+  return out;
+}
+
 /* --- Operaciones CRUD --- */
 
 async function idbPut(record) {
@@ -1680,6 +1733,11 @@ async function calcularIndicadores(){
     const reporteRaw=byKey.reporte||[];
     if(!reporteRaw.length) throw new Error('No hay datos en Reporte de Dispensación.');
 
+    /* Todo el enriquecimiento del Reporte queda en una función para poder
+       aplicarlo DOS veces con exactamente las mismas reglas:
+         - a los meses abiertos en pantalla (indicadores del periodo)
+         - a la historia consolidada completa (vistas de cifras fijas)          */
+    function enriquecerFilasReporte(reporteRaw){
     const rows=reporteRaw.map((r,idx)=>{
       const codigoArticulo=normValue(r.codigoArticulo);
       const homologo=codigoToHomologo.get(codigoArticulo) || '';
@@ -1810,6 +1868,26 @@ async function calcularIndicadores(){
       r.pendienteDispensa = r.documento ? (docPendMap.get(claveDocBodega(r)) ? 'SI':'NO') : r.lineaPendiente;
       r.dispensaYPunto = r.bodegaDetalle + '||' + (r.documento || ('_R'+r.idx));   // Dispensa y Punto
     });
+    return rows;
+    }
+
+    const rows=enriquecerFilasReporte(reporteRaw);
+
+    /* Historia CONSOLIDADA: se suman las filas de este cargue a lo que ya se
+       había abierto en este navegador y se enriquece igual. De aquí salen el
+       consumo promedio mes, el Reporte Comparativo y la Reasignación mensual,
+       para que esas cifras no cambien al abrir otros meses.                    */
+    let rowsConsolidado=rows;
+    try{
+      const crudoConsolidado=await consolidadoAgregar(reporteRaw);
+      if(crudoConsolidado && crudoConsolidado.length>rows.length){
+        rowsConsolidado=enriquecerFilasReporte(crudoConsolidado);
+      }
+    }catch(e){
+      // Si el navegador no permite guardar la historia, las vistas consolidadas
+      // siguen funcionando con lo que esté cargado en pantalla.
+      console.warn('No se pudo actualizar la historia consolidada:', e);
+    }
 
     // El estado vigente de cada línea sale del propio cargue acumulativo del Reporte de
     // Dispensación: cada cargue trae de nuevo la línea con su estado actualizado, por lo que
@@ -1909,7 +1987,7 @@ async function calcularIndicadores(){
     });
     const facturasPuntos = Array.from(new Set(facturasRows.map(r=>r.puntoVenta).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
 
-    state.processed={rows, contratos, epsList, epsGrupos, cie10List, zonas, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
+    state.processed={rows, rowsConsolidado, contratos, epsList, epsGrupos, cie10List, zonas, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
     populateFilters();
     populateTrasladosFilters();
     populateFacturasFilters();
@@ -2054,6 +2132,30 @@ document.getElementById('fInactivasUsuario').addEventListener('change', ()=>{
 });
 
 let filteredRowsCache=[];
+
+/* =========================================================================
+   Vistas CONSOLIDADAS (cifras fijas de todos los meses)
+   -------------------------------------------------------------------------
+   Tres vistas del visor no son "foto del filtro" sino CONSOLIDADOS de toda la
+   operacion: el Reporte Comparativo, la Reasignacion mensual de entregas y el
+   consumo promedio mes de la Base de Supervisores. Como el Reporte de
+   Dispensacion es acumulativo, si estas vistas se calcularan con las filas ya
+   recortadas por los filtros (mes, rango de fechas, corte, contrato, EPS,
+   CIE10) sus valores cambiarian cada vez que se agrega un cargue o se mueve un
+   filtro. Por eso siempre se alimentan de TODA la informacion cargada.
+   filasConsolidado() devuelve todas las filas CON su historial de versiones
+   (el comparativo necesita la primera y la ultima version de cada linea) y
+   filasConsolidadoVigentes() solo la ultima version de cada linea.          */
+const CORTE_CONSOLIDADO = 3;   // los consolidados siempre usan el corte final
+function filasConsolidado(){
+  const p = (typeof state!=='undefined' && state) ? state.processed : null;
+  if(!p) return [];
+  if(p.rowsConsolidado && p.rowsConsolidado.length) return p.rowsConsolidado;
+  return (p.rows && p.rows.length) ? p.rows : [];
+}
+function filasConsolidadoVigentes(){
+  return filasConsolidado().filter(r=>r.versionVigente!==false);
+}
 
 function aplicarFiltrosYRenderizar(){
   const p=state.processed; if(!p) return;
@@ -2316,7 +2418,10 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   bHtml += '</tr>';
   document.getElementById('tblSeguimientoBody').innerHTML = bHtml;
 
-  renderSegMeses(filtered, corteGlobalSeg);
+  // La Reasignación mensual de entregas es un CONSOLIDADO: siempre se calcula con
+  // toda la información cargada y el corte final, para que las cifras de cada mes
+  // queden fijas y no cambien al mover los filtros o al agregar cargues.
+  renderSegMeses(filasConsolidado(), CORTE_CONSOLIDADO);
 }
 
 /* -------------------------------------------------------------------------
@@ -2475,19 +2580,21 @@ function renderAllTablesFromCache(){
   renderIndicadorDispensa(rowsVigentes, bodegaSearch, zona);
   renderIndicadorLinea(rowsVigentes, bodegaSearch, zona);
   renderIndicadorSoporteEvento(rowsVigentes.filter(r=>r.contrato==='EVENTO'), bodegaSearch, zona);
-  // Comparativo y seguimiento por corte sí necesitan el historial completo de versiones:
-  // internamente toman la versión vigente al cierre de cada corte.
-  renderComparativos(filteredRowsCache);
+  // El Reporte Comparativo es un CONSOLIDADO: se calcula sobre toda la información
+  // cargada (todos los meses, sin filtros de pantalla) para que sus cifras queden
+  // fijas y no se muevan con cada cargue nuevo.
+  renderComparativos(filasConsolidado());
+  // El seguimiento por corte sí sigue los filtros: necesita el historial completo de
+  // versiones y toma la versión vigente al cierre de cada corte.
   renderSeguimientoBodega(filteredRowsCache, bodegaSearch, zona);
   renderIndicadorInactivas(rowsVigentes, bodegaSearch, zona);
   if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
   // Base cuentas: la matriz usa el estado actual y la evolución por cortes el historial.
   if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
-  // Base supervisores: necesita el historial completo (todos los meses) para el
-  // pronostico SES, asi que se toman las filas vigentes SIN filtro de mes.
-  const _pAll=state.processed||null;
-  const rowsVigentesFull = _pAll ? _pAll.rows.filter(r=>r.versionVigente!==false) : rowsVigentes;
-  if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(rowsVigentesFull, bodegaSearch, zona);
+  // Base supervisores: el consumo promedio mes es un CONSOLIDADO de todos los meses,
+  // asi que se alimenta de las filas vigentes de TODA la carga, sin filtros de mes,
+  // fecha ni corte. Los filtros de bodega y zona solo eligen que filas se muestran.
+  if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(filasConsolidadoVigentes(), bodegaSearch, zona);
   // El detalle por factura usa la cantidad pendiente del reporte, así que se
   // repinta cada vez que cambian los filtros generales.
   if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
@@ -8450,9 +8557,11 @@ function populatePeriodicoFilters(){
   const selB=document.getElementById('pfBodega');
   // Filtro por mes: se arman las opciones con los meses (fecha de dispensación) presentes
   // en el histórico activo, ordenados cronológicamente.
+  // Meses del consolidado: la ventana siempre ofrece todos los meses de la historia.
+  const filasRP = filasConsolidado();
   const selMes=document.getElementById('pfMes');
   if(selMes){
-    const activas=soloActivas(p.rows);
+    const activas=soloActivas(filasRP);
     const mesesSet=new Set();
     for(let i=0;i<activas.length;i++){ const k=mesKey(activas[i].fecha); if(k) mesesSet.add(k); }
     const meses=Array.from(mesesSet).sort();
@@ -8464,7 +8573,7 @@ function populatePeriodicoFilters(){
   selM.innerHTML='<option value="">Todas</option>'+p.contratos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selZ.innerHTML='<option value="">Todas</option>'+p.zonas.map(z=>`<option value="${z}">${z}</option>`).join('');
   // Solo bodegas con dispensas activas: las INACTIVO no entran en este reporte.
-  const bodegas=[...new Set(soloActivas(p.rows).map(r=>r.bodegaDetalle).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const bodegas=[...new Set(soloActivas(filasRP).map(r=>r.bodegaDetalle).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
   selB.innerHTML='<option value="">Todas</option>'+bodegas.map(b=>`<option value="${b}">${b}</option>`).join('');
 }
 ['pfMes','pfEpsGrupo','pfModalidad','pfZona','pfBodega'].forEach(id=>{
@@ -8476,7 +8585,11 @@ function populatePeriodicoFilters(){
    igual que en los indicadores de la pantalla principal, para que las cifras del
    Reporte Comparativo Periódico coincidan con el Indicador Soporte Evento.        */
 function getPeriodicoFilteredRows(){
-  const allRows = soloActivas((state.processed && state.processed.rows) || []);
+  /* El Reporte Comparativo es un CONSOLIDADO: siempre parte de toda la historia
+     cargada, no solo de los meses abiertos en pantalla, para que sus cifras no
+     cambien cuando se agrega un cargue o se abre otro mes. Los filtros propios
+     de esta ventana sí se respetan porque los elige el usuario.               */
+  const allRows = soloActivas(filasConsolidado());
   const selMes=document.getElementById('pfMes');
   const fMesRP = selMes ? selMes.value : '';
   const fEG = document.getElementById('pfEpsGrupo').value;
