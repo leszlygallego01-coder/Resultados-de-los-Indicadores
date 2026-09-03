@@ -5091,6 +5091,155 @@ document.getElementById('btnExportarCantidadCero').addEventListener('click', ()=
  }
 });
 
+/* ---- Dispensas y medicamentos por día: un solo Excel con TRES hojas ----------
+   Hoja 1: Cantidad de dispensas y Dispensas Entregadas (por Zona y Bodega Detalle).
+   Hoja 2: Dispensas por día (con entregadas y pendientes de cada fecha).
+   Hoja 3: Medicamentos entregados por día, con Homólogo y Descripción DCI.
+   Alcance: dispensas ACTIVAS, última versión cargada de cada línea y todos los
+   filtros de pantalla (incluidos los subfiltros de bodega y zona).
+   Una dispensa se considera ENTREGADA cuando TODAS sus líneas vigentes están
+   entregadas (Unidades > 0 y Diferencia = 0), igual que en los indicadores.   */
+document.getElementById('btnExportarDispensasDia').addEventListener('click', ()=>{
+ try{
+  if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
+  const bodegaTexto = getBodegaFiltroTexto();
+  const bodegaSearch = normValue(bodegaTexto);
+  const zona = document.getElementById('fZona').value;
+
+  const base = snapshotUltimaVersion(filteredRowsCache).filter(r=>{
+    if(r.versionVigente===false) return false;
+    if(!esEstadoActivo(r.estadoDispensa)) return false;
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    return true;
+  });
+  if(!base.length){ showToast('No hay dispensas activas para los filtros actuales.', true); return; }
+
+  // ---- Estado de cada dispensa (dispensa + punto de entrega) ----
+  const dispInfo = new Map();
+  base.forEach(r=>{
+    const k = r.dispensaYPunto || (r.bodegaDetalle+'||'+(r.documento||('_R'+r.idx)));
+    let d = dispInfo.get(k);
+    if(!d){
+      d = { clave:k, zona:r.zona||'N/D', bodega:r.bodegaDetalle||'N/D', documento:r.documento||'',
+            fecha:r.fecha||null, lineas:0, lineasEnt:0 };
+      dispInfo.set(k, d);
+    }
+    d.lineas++;
+    if(lineaEsEntregada(r)) d.lineasEnt++;
+    // Se conserva la fecha más antigua de la dispensa como fecha de dispensación.
+    if(r.fecha && (!d.fecha || r.fecha < d.fecha)) d.fecha = r.fecha;
+  });
+  const dispensas = [...dispInfo.values()];
+  dispensas.forEach(d=>{ d.entregada = d.lineas>0 && d.lineasEnt===d.lineas; });
+
+  // ---- Hoja 1: cantidad de dispensas y dispensas entregadas ----
+  const porBodega = new Map();
+  dispensas.forEach(d=>{
+    const k = d.zona+'||'+d.bodega;
+    if(!porBodega.has(k)) porBodega.set(k, {zona:d.zona, bodega:d.bodega, total:0, ent:0});
+    const g = porBodega.get(k);
+    g.total++;
+    if(d.entregada) g.ent++;
+  });
+  const hoja1 = [...porBodega.values()]
+    .sort((a,b)=> a.zona.localeCompare(b.zona,'es') || (b.total-a.total) || a.bodega.localeCompare(b.bodega,'es'))
+    .map(g=>({
+      'Zona': g.zona,
+      'Bodega Detalle': g.bodega,
+      'Cantidad de Dispensas': g.total,
+      'Dispensas Entregadas': g.ent,
+      'Dispensas Pendientes': g.total-g.ent,
+      '% Entregadas': g.total ? g.ent/g.total : ''
+    }));
+  const totDisp = dispensas.length;
+  const totEnt = dispensas.filter(d=>d.entregada).length;
+  hoja1.push({
+    'Zona':'TOTAL', 'Bodega Detalle':'',
+    'Cantidad de Dispensas': totDisp,
+    'Dispensas Entregadas': totEnt,
+    'Dispensas Pendientes': totDisp-totEnt,
+    '% Entregadas': totDisp ? totEnt/totDisp : ''
+  });
+
+  // ---- Hoja 2: dispensas por día ----
+  const porDia = new Map();
+  dispensas.forEach(d=>{
+    const k = d.fecha ? dateToISO(d.fecha) : 'SIN FECHA';
+    if(!porDia.has(k)) porDia.set(k, {fecha:k, total:0, ent:0});
+    const g = porDia.get(k);
+    g.total++;
+    if(d.entregada) g.ent++;
+  });
+  const hoja2 = [...porDia.values()]
+    .sort((a,b)=> String(a.fecha).localeCompare(String(b.fecha)))
+    .map(g=>({
+      'Fecha de Dispensación': g.fecha,
+      'Cantidad de Dispensas': g.total,
+      'Dispensas Entregadas': g.ent,
+      'Dispensas Pendientes': g.total-g.ent,
+      '% Entregadas': g.total ? g.ent/g.total : ''
+    }));
+  hoja2.push({
+    'Fecha de Dispensación':'TOTAL',
+    'Cantidad de Dispensas': totDisp,
+    'Dispensas Entregadas': totEnt,
+    'Dispensas Pendientes': totDisp-totEnt,
+    '% Entregadas': totDisp ? totEnt/totDisp : ''
+  });
+
+  // ---- Hoja 3: medicamentos entregados por día (Homólogo + Descripción DCI) ----
+  const porDiaMed = new Map();
+  base.filter(lineaEsEntregada).forEach(r=>{
+    const dia = r.fecha ? dateToISO(r.fecha) : 'SIN FECHA';
+    const cod = r.codigoArticulo || '';
+    const k = dia+'||'+cod;
+    if(!porDiaMed.has(k)){
+      porDiaMed.set(k, {
+        fecha:dia, codigo:cod, homologo:r.homologo||'', dci:r.descripcionDci||r.descripcionReporte||'',
+        lineas:0, unidades:0, docs:new Set()
+      });
+    }
+    const g = porDiaMed.get(k);
+    g.lineas++;
+    g.unidades += toNumber(r.unidades);
+    g.docs.add(r.dispensaYPunto || (r.bodegaDetalle+'||'+(r.documento||('_R'+r.idx))));
+    if(!g.homologo && r.homologo) g.homologo = r.homologo;
+    if(!g.dci && r.descripcionDci) g.dci = r.descripcionDci;
+  });
+  const hoja3 = [...porDiaMed.values()]
+    .sort((a,b)=> String(a.fecha).localeCompare(String(b.fecha)) || (b.unidades-a.unidades) || String(a.codigo).localeCompare(String(b.codigo),'es'))
+    .map(g=>({
+      'Fecha de Dispensación': g.fecha,
+      'Codigo': g.codigo,
+      'Homólogo': g.homologo,
+      'Descripción DCI': g.dci,
+      'Unidades Entregadas': g.unidades,
+      'Líneas Entregadas': g.lineas,
+      'Dispensas': g.docs.size
+    }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja1), 'Cantidad de Dispensas');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja2), 'Dispensas por Día');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja3), 'Medicamentos por Día');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+    'Cantidad de dispensas': totDisp,
+    'Dispensas entregadas': totEnt,
+    'Días con dispensación': porDia.size,
+    'Filtro de bodega': bodegaTexto || '(todas)',
+    'Zona': zona || '(todas)',
+    'Regla de dispensa entregada': 'Todas sus líneas vigentes entregadas (Unidades > 0 y Diferencia = 0)',
+    'Alcance': 'Solo dispensas activas (se excluye INACTIVO), última versión de cada línea, con los filtros de pantalla aplicados'
+  }]), 'CRITERIO');
+  XLSX.writeFile(wb, 'Dispensas_y_Medicamentos_por_Dia_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Excel exportado con 3 hojas: '+fmtInt(totDisp)+' dispensas ('+fmtInt(totEnt)+' entregadas), '+fmtInt(porDia.size)+' días y '+fmtInt(hoja3.length)+' filas de medicamentos.');
+ }catch(err){
+  console.error('Error al generar el Excel de dispensas y medicamentos por día:', err);
+  showToast('Error al generar el Excel de dispensas y medicamentos por día: '+(err && err.message ? err.message : err), true);
+ }
+});
+
 document.getElementById('btnDescargarParetoExistencias').addEventListener('click', ()=>{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
   // Incluye PARETO y NO PARETO, respetando todos los filtros activos en pantalla
@@ -8842,7 +8991,7 @@ const ROLES_VISOR = {
 
 /* Botones de descarga generales que un rol limitado no debe usar, porque
    entregan información de tableros a los que no tiene acceso.               */
-const BOTONES_SOLO_ACCESO_TOTAL = ['btnExportar','btnExportarABC','btnExportarCantidadCero'];
+const BOTONES_SOLO_ACCESO_TOTAL = ['btnExportar','btnExportarABC','btnExportarCantidadCero','btnExportarDispensasDia'];
 
 let _rolSesion = null;   // id del rol con la sesión abierta
 
