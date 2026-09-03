@@ -198,6 +198,10 @@ nav.tabs button.active .count{background:rgba(255,255,255,.2);border-color:rgba(
 .btn-cero{background:#d97706;color:#fff;font-weight:700;border-radius:8px;box-shadow:0 1px 2px rgba(217,119,6,.3);}
 .btn-cero:hover{background:#b45309;box-shadow:0 4px 12px rgba(217,119,6,.28);}
 .btn-cero:disabled{background:#f0cfa2;box-shadow:none;cursor:not-allowed;}
+/* dispensas y medicamentos por dia: teal, texto blanco en negrita */
+.btn-dia{background:#0f766e;color:#fff;font-weight:700;border-radius:8px;box-shadow:0 1px 2px rgba(15,118,110,.3);}
+.btn-dia:hover{background:#115e59;box-shadow:0 4px 12px rgba(15,118,110,.28);}
+.btn-dia:disabled{background:#a7cfcb;box-shadow:none;cursor:not-allowed;}
 
 /* ---------------- filtros ---------------- */
 .filters{
