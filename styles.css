@@ -406,6 +406,13 @@ table.data thead th.sortable.sort-active{text-decoration:underline;text-underlin
 #tblCuentasResp tbody tr:hover td.col-lineas{background:#DCF2E2;}
 #tblCuentasResp tbody tr.total-row td.col-lineas{background:#CFEFD7;color:#0B3D1C;}
 
+/* Mes del corte, escrito en gris debajo de la cifra en las celdas de los cortes
+   del comparativo por bodega (ej. "Corte Sept"). */
+#tblPeriodico td .corte-mes{
+  display:block;font-family:var(--body);font-size:10px;font-weight:600;
+  color:#9CA9B6;line-height:1.25;margin-top:2px;white-space:nowrap;
+}
+
 /* Colores de agrupacion en el indicador por linea: Pareto y No Pareto */
 #tblLinea thead th.grp-pareto{background:#2f7d8c;color:#fff;}
 #tblLinea thead th.grp-nopareto{background:#5b7d3a;color:#fff;}
