@@ -2858,6 +2858,7 @@ function renderIndicadorTraslados(){
       diagEl.innerHTML='<b>Sin datos de traslados.</b> Ve a la pestaña de cargue, sincroniza la tarjeta <b>Traslados</b> desde Google Drive y vuelve a calcular los indicadores.';
     }
     tb.innerHTML='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados cargados.</td></tr>';
+    renderDonutTrasladosRecibidos([]);
     _trasladosUsuarioCache=[];
     return;
   }
@@ -2873,6 +2874,10 @@ function renderIndicadorTraslados(){
     if(destino && r.bodegaDestino!==destino) return false;
     return true;
   });
+
+  // El anillo de recepcion usa las MISMAS filas filtradas (zona, origen y destino),
+  // por eso cambia junto con los selectores de esta seccion.
+  renderDonutTrasladosRecibidos(filas);
 
   // Traslados ÚNICOS por usuario: se agrupa por número de Traslado (si viene vacío se
   // usa una clave por fila para no perder el registro). Un traslado puede contener
@@ -2954,6 +2959,44 @@ function renderIndicadorTraslados(){
      '<td>'+fmtInt(sumL)+'</td><td>'+fmtInt(sumLP)+'</td><td>'+fmtInt(sumLNP)+'</td><td>'+fmtInt(sumLNH)+'</td>'+
      '<td>'+fmtPct(totalTraslados?sum/totalTraslados:null)+'</td></tr>';
   tb.innerHTML=h;
+}
+
+/* ---- Anillo: % de traslados recibidos vs no recibidos ----------------------
+   Se cuenta por LINEA de la tabla Traslados y solo con las lineas que traen un
+   estado reconocible en la columna "Recibido"; las lineas sin estado se informan
+   aparte en la leyenda para no inflar ninguno de los dos porcentajes.
+   Recibe las filas YA filtradas por zona / bodega origen / bodega destino, de modo
+   que el anillo se mueve con los filtros de la seccion.                        */
+function renderDonutTrasladosRecibidos(filas){
+  const svg=document.getElementById('donutTrasladosRecibidos');
+  const leg=document.getElementById('donutTrasladosRecibidosLegend');
+  if(!svg && !leg) return;
+  let rec=0, noRec=0, sinEstado=0;
+  (filas||[]).forEach(t=>{
+    const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
+    if(est==='RECIBIDO') rec++;
+    else if(est==='PENDIENTE') noRec++;
+    else sinEstado++;
+  });
+  const base=rec+noRec;
+  const pctRec = base ? rec/base : null;
+  const pctNo  = base ? noRec/base : null;
+  if(base>0){
+    drawDonut('donutTrasladosRecibidos', [
+      {label:'Recibidos', value:rec, color:'#1E8F5E'},
+      {label:'No recibidos', value:noRec, color:'#D98A2B'}
+    ], fmtPct(pctRec), '#1E8F5E');
+  }else{
+    drawDonut('donutTrasladosRecibidos', [{label:'Sin datos', value:1, color:'#E6EDF4'}], '—', '#5C6C7E');
+  }
+  if(leg){
+    leg.innerHTML =
+      '<div class="item"><span class="sw" style="background:#1E8F5E;"></span>Recibidos<span class="val">'+fmtPct(pctRec)+'</span></div>'+
+      '<div class="item"><span class="sw" style="background:#D98A2B;"></span>No recibidos<span class="val">'+fmtPct(pctNo)+'</span></div>'+
+      '<div class="item" style="color:#5C6C7E;font-size:11px;">Base: '+fmtInt(base)+' línea(s) con estado'+
+        (sinEstado ? ' · '+fmtInt(sinEstado)+' sin estado (no se cuentan)' : '')+'</div>'+
+      '<div class="item" style="color:#5C6C7E;font-size:11px;">'+fmtInt(rec)+' recibidas · '+fmtInt(noRec)+' en camino</div>';
+  }
 }
 
 ['fTrasladoOrigen','fTrasladoDestino'].forEach(id=>{
@@ -7095,10 +7138,10 @@ function pintarBaseCuentas(){
     '<td>'+fmtInt(t.dispEnt)+'</td>'+
     '<td class="'+(t.dispPen?'pct-bad':'')+'">'+fmtInt(t.dispPen)+'</td>'+
     '<td class="'+effClass(t.cumplDisp)+'"><b>'+fmtPct(t.cumplDisp)+'</b></td>'+
-    '<td><b>'+fmtInt(t.lineas)+'</b></td>'+
-    '<td>'+fmtInt(t.ent)+'</td>'+
-    '<td class="'+(t.pen?'pct-bad':'')+'">'+fmtInt(t.pen)+'</td>'+
-    '<td class="'+effClass(t.cumpl)+'"><b>'+fmtPct(t.cumpl)+'</b></td>'+
+    '<td class="col-lineas"><b>'+fmtInt(t.lineas)+'</b></td>'+
+    '<td class="col-lineas">'+fmtInt(t.ent)+'</td>'+
+    '<td class="col-lineas '+(t.pen?'pct-bad':'')+'">'+fmtInt(t.pen)+'</td>'+
+    '<td class="col-lineas '+effClass(t.cumpl)+'"><b>'+fmtPct(t.cumpl)+'</b></td>'+
     '<td>'+fmtInt(t.undPend)+'</td>'+
     '<td>'+fmtInt(t.bodegas)+'</td></tr>'
   ).join('');
@@ -7108,9 +7151,9 @@ function pintarBaseCuentas(){
     '<td>'+fmtInt(G.dispensas)+'</td>'+
     '<td>'+fmtInt(G.dispEnt)+'</td><td>'+fmtInt(G.dispPen)+'</td>'+
     '<td>'+fmtPct(G.cumplDisp)+'</td>'+
-    '<td>'+fmtInt(G.lineasAsignadas)+'</td>'+
-    '<td>'+fmtInt(G.ent)+'</td><td>'+fmtInt(G.pen)+'</td>'+
-    '<td>'+fmtPct(G.lineasAsignadas?G.ent/G.lineasAsignadas:null)+'</td>'+
+    '<td class="col-lineas">'+fmtInt(G.lineasAsignadas)+'</td>'+
+    '<td class="col-lineas">'+fmtInt(G.ent)+'</td><td class="col-lineas">'+fmtInt(G.pen)+'</td>'+
+    '<td class="col-lineas">'+fmtPct(G.lineasAsignadas?G.ent/G.lineasAsignadas:null)+'</td>'+
     '<td>'+fmtInt(G.undPend)+'</td><td>—</td></tr>';
   tb.innerHTML=h;
 
@@ -7149,8 +7192,8 @@ function pintarBaseCuentas(){
       'Lider':cuentaLiderLabel(t.nombre), 'EPS a cargo':t.epsTxt,
       'Dispensas':t.dispensas, 'Dispensas entregadas':t.dispEnt, 'Dispensas pendientes':t.dispPen,
       '% Cumplimiento dispensas':t.cumplDisp===null?'':+(t.cumplDisp*100).toFixed(1),
-      'Lineas':t.lineas, 'Entregadas':t.ent, 'Pendientes':t.pen,
-      '% Cumplimiento':t.cumpl===null?'':+(t.cumpl*100).toFixed(1),
+      'Lineas':t.lineas, 'Lin. Entregadas':t.ent, 'Lin. Pendientes':t.pen,
+      '% Cumpl. Lineas':t.cumpl===null?'':+(t.cumpl*100).toFixed(1),
       'Unidades pendientes':t.undPend, 'Unidades dispensadas':t.und, 'Bodegas':t.bodegas
     }));
     const hojaDet=_cuentasDetalle.filter(d=>nombresVis.has(d.nombre) && _cuentasFilaVisible(d, f)).map(d=>({
