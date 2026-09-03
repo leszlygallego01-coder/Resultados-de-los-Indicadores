@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260904b">
+<link rel="stylesheet" href="styles.css?v=20260904c">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -560,15 +560,24 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <input type="text" id="fTrasladoUsuario" placeholder="Escribe parte del nombre…">
             </div>
           </div>
-          <div class="table-wrap" style="max-height:520px;">
-            <table class="data" id="tblTrasladosUsuario">
-              <thead>
-                <tr>
-                  <th>#</th><th>Usuario</th><th>Traslados realizados</th><th>Líneas totales</th><th>Líneas Pareto</th><th>Líneas No Pareto</th><th>Líneas no homologadas</th><th>% del total</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+          <!-- Anillo de recepción a la izquierda + tabla por usuario a la derecha.
+               El anillo se recalcula con los mismos filtros de esta sección. -->
+          <div class="chart-row" style="margin-bottom:0;">
+            <div class="chart-card">
+              <h4>Recepción de traslados</h4>
+              <svg id="donutTrasladosRecibidos" width="200" height="200" viewBox="0 0 200 200"></svg>
+              <div class="legend" id="donutTrasladosRecibidosLegend"></div>
+            </div>
+            <div class="table-wrap" style="max-height:520px;margin-bottom:0;">
+              <table class="data" id="tblTrasladosUsuario">
+                <thead>
+                  <tr>
+                    <th>#</th><th>Usuario</th><th>Traslados realizados</th><th>Líneas totales</th><th>Líneas Pareto</th><th>Líneas No Pareto</th><th>Líneas no homologadas</th><th>% del total</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -908,8 +917,8 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
                 <tr>
                   <th>Líder</th><th>EPS a cargo</th>
                   <th>Dispensas</th><th>Disp. entregadas</th><th>Disp. pendientes</th><th>% Cumpl. dispensas</th>
-                  <th>Líneas</th><th>Entregadas</th><th>Pendientes</th>
-                  <th>% Cumplimiento</th><th>Und. pendientes</th><th>Bodegas</th>
+                  <th class="col-lineas">Líneas</th><th class="col-lineas">Lin. Entregadas</th><th class="col-lineas">Lin. Pendientes</th>
+                  <th class="col-lineas">% Cumpl. Lineas</th><th>Und. pendientes</th><th>Bodegas</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -1062,6 +1071,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260904b"></script>
+<script src="script.js?v=20260904c"></script>
 </body>
 </html>
