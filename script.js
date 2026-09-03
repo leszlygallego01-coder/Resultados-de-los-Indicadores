@@ -8678,6 +8678,34 @@ function mesesPorCorte(rows){
   });
   return out;
 }
+/* Igual que mesesPorCorte pero separado por BODEGA: devuelve
+   Map(bodega -> {1:'Sept',2:'Oct',3:''}). Sirve para escribir el mes debajo de la cifra
+   de cada celda, porque una bodega puede haber dispensado en un mes distinto al
+   predominante del corte. */
+function mesesPorCorteBodega(rows){
+  const porBod=new Map();
+  (rows||[]).forEach(r=>{
+    const c=corteDeDispensacion(r);
+    if(!c) return;
+    const k=mesDeDispensacion(r);
+    if(!k) return;
+    const bod=r.bodegaDetalle;
+    if(!porBod.has(bod)) porBod.set(bod, {1:new Map(),2:new Map(),3:new Map()});
+    const m=porBod.get(bod)[c];
+    m.set(k, (m.get(k)||0)+1);
+  });
+  const out=new Map();
+  porBod.forEach((conteo, bod)=>{
+    const res={1:'',2:'',3:''};
+    [1,2,3].forEach(c=>{
+      const ord=[...conteo[c].entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+      if(!ord.length) return;
+      res[c]=ord.slice(0,2).map(e=>abrevMesKey(e[0])).filter(Boolean).join('/');
+    });
+    out.set(bod, res);
+  });
+  return out;
+}
 function renderReportePeriodico(){
   const filtered = getPeriodicoFilteredRows();
   const metrics = buildCorteMetrics(filtered);
@@ -8697,10 +8725,18 @@ function renderReportePeriodico(){
   const activoBod = (c, bodega) => { const s=cargueBodega.get(bodega); return !!s && s.has(c) && !fuera(c); };
   const DASH = '—';
   const cortesLabels={1:'Corte 1 (día 1-10)',2:'Corte 2 (día 11-20)',3:'Corte 3 (día 21-31)'};
-  /* Mes al que corresponde cada corte: se lee de la FECHA DE DISPENSACIÓN de las filas
-     que caen en ese corte y se toma el mes con más registros. Si el corte tiene filas de
-     varios meses se muestran los dos primeros (ej. "Corte Sept/Oct"). */
+  /* Mes al que corresponde cada corte, para escribirlo DEBAJO de la cifra de cada celda
+     (ej. "Corte Sept"). Se lee de la FECHA DE DISPENSACIÓN: mesCorteBodRP tiene el mes por
+     bodega y corte, y mesCorteRP el mes general del corte como respaldo cuando la bodega
+     no aporta fechas propias. */
   const mesCorteRP = mesesPorCorte(baseCortes);
+  const mesCorteBodRP = mesesPorCorteBodega(baseCortes);
+  /* Etiqueta gris con el mes del corte, en una segunda línea bajo el número. */
+  const etiqMesCelda = (bodega, c) => {
+    const porBod = mesCorteBodRP.get(bodega);
+    const mes = (porBod && porBod[c]) || mesCorteRP[c] || '';
+    return mes ? '<span class="corte-mes">Corte '+escHtml(mes)+'</span>' : '';
+  };
   const labelEnt = periodicoTabActual==='documento' ? 'Entregadas' : periodicoTabActual==='linea' ? 'Entregadas' : 'Con soporte';
   const labelPend = periodicoTabActual==='documento' ? 'Pendientes' : periodicoTabActual==='linea' ? 'Pendientes' : 'Sin soporte';
   const fieldA = periodicoTabActual==='documento' ? 'docsEnt' : periodicoTabActual==='linea' ? 'lineasEnt' : 'eventoCon';
@@ -8871,7 +8907,8 @@ function renderReportePeriodico(){
       if(cortesMk[i].sin){ tds+=(cortesMk[i].sinBod?tdSinCargueBod+tdSinCargueBod:tdSinCargue+tdSinCargue); return; }
       if(!f.rec[i]){ tds+=tdSinEntregaBod+tdSinEntregaBod; return; }
       if(cortesMk[i].igual){ tds+=tdSinCambioRP+tdSinCambioRP; return; }
-      tds+='<td>'+fmtInt(cortesMk[i].ent)+'</td><td>'+fmtInt(cortesMk[i].pend)+'</td>';
+      tds+='<td>'+fmtInt(cortesMk[i].ent)+etiqMesCelda(f.bodega, i+1)+'</td>'+
+           '<td>'+fmtInt(cortesMk[i].pend)+etiqMesCelda(f.bodega, i+1)+'</td>';
     });
     tds+='<td>'+fmtInt(f.recTotal)+'</td>';
     return '<tr>'+tds+'</tr>';
@@ -8889,20 +8926,18 @@ function renderReportePeriodico(){
     if(!activo(i+1)){ filaTotal+=tdSinCargue+tdSinCargue; return; }
     if(!tot.rec[i]){ filaTotal+=tdSinEntregaTot+tdSinEntregaTot; return; }
     if(!rpCambio[i]){ filaTotal+=tdSinCambioRP+tdSinCambioRP; return; }
-    filaTotal+='<td>'+fmtInt(tot.c[i].ent)+'</td><td>'+fmtInt(tot.c[i].pend)+'</td>';
+    const mesTot = mesCorteRP[i+1] ? '<span class="corte-mes">Corte '+escHtml(mesCorteRP[i+1])+'</span>' : '';
+    filaTotal+='<td>'+fmtInt(tot.c[i].ent)+mesTot+'</td><td>'+fmtInt(tot.c[i].pend)+mesTot+'</td>';
   });
   filaTotal+='<td>'+fmtInt(tot.recTotal)+'</td></tr>';
 
-  const etiqMesCorte = (c) => mesCorteRP[c]
-    ? '<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Corte '+escHtml(mesCorteRP[c])+'</span>'
-    : '';
   const etiqCorte = (c, txt) => fuera(c)
-    ? '<th colspan="2" style="color:#C3CCD6;">'+txt+' <span style="font-weight:600;">· fuera del corte</span>'+etiqMesCorte(c)+'</th>'
+    ? '<th colspan="2" style="color:#C3CCD6;">'+txt+' <span style="font-weight:600;">· fuera del corte</span></th>'
     : (activo(c) && !tot.rec[c-1])
-      ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin entregas</span>'+etiqMesCorte(c)+'</th>'
+      ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin entregas</span></th>'
       : (activo(c) && !rpCambio[c-1])
-        ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin cambios</span>'+etiqMesCorte(c)+'</th>'
-        : '<th colspan="2">'+txt+(activo(c)?'':' <span style="color:#9CA9B6;font-weight:600;">· sin dispensaciones</span>')+etiqMesCorte(c)+'</th>';
+        ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin cambios</span></th>'
+        : '<th colspan="2">'+txt+(activo(c)?'':' <span style="color:#9CA9B6;font-weight:600;">· sin dispensaciones</span>')+'</th>';
   let ths1='<tr><th rowspan="2">Bodega</th><th rowspan="2">Total</th>'
     +'<th rowspan="2">'+labelEnt+' totales<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Actual / Anterior (dif.)</span></th>'
     +'<th rowspan="2">'+labelPend+' totales<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Actual / Anterior (dif.)</span></th>'
