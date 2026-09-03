@@ -8821,9 +8821,158 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
 });
 
 /* =========================================================================
+   15. Inicio de sesión obligatorio: rol + clave
+   Al abrir el visor no se muestra nada hasta que la persona elija su rol y
+   escriba la clave asignada. La sesión se recuerda solo mientras la pestaña
+   del navegador siga abierta (sessionStorage) y se puede cerrar con el botón
+   "Cerrar sesión" de la barra superior.
+   ========================================================================= */
+const SESION_ROL_KEY = 'visor_sesion_rol';
+
+/* Definición de roles: clave de acceso y qué tableros puede ver cada uno.
+   'total:true' significa acceso completo a todo el visor.                   */
+const ROLES_VISOR = {
+  supervisor:    { nombre:'Supervisor',        clave:'Sup2026*',   total:false,
+                   vistas:['dispensa','linea','soporte','supervisores'] },
+  gerencia:      { nombre:'Gerencia',          clave:'Ger2026*',   total:true },
+  director:      { nombre:'Director Operativo', clave:'Dir2026*',   total:true },
+  coordinador:   { nombre:'Coordinador Bodega', clave:'Coord2026*', total:true },
+  administrador: { nombre:'Administrador',      clave:'Admin2026*', total:true }
+};
+
+/* Botones de descarga generales que un rol limitado no debe usar, porque
+   entregan información de tableros a los que no tiene acceso.               */
+const BOTONES_SOLO_ACCESO_TOTAL = ['btnExportar','btnExportarABC','btnExportarCantidadCero'];
+
+let _rolSesion = null;   // id del rol con la sesión abierta
+
+function leerRolGuardado(){
+  try{
+    const id = sessionStorage.getItem(SESION_ROL_KEY);
+    return (id && ROLES_VISOR[id]) ? id : null;
+  }catch(e){ return null; }
+}
+
+function guardarRolSesion(id){
+  try{ sessionStorage.setItem(SESION_ROL_KEY, id); }catch(e){}
+}
+
+function borrarRolSesion(){
+  try{ sessionStorage.removeItem(SESION_ROL_KEY); }catch(e){}
+}
+
+function mostrarErrorLogin(msg){
+  const box = document.getElementById('loginError');
+  if(!box) return;
+  box.textContent = msg || '';
+  box.classList.toggle('show', !!msg);
+}
+
+/* Muestra u oculta pestañas, subvistas y botones según el rol de la sesión. */
+function aplicarPermisos(rolId){
+  const rol = ROLES_VISOR[rolId];
+  if(!rol) return;
+  const total = !!rol.total;
+  const permitidas = total ? null : (rol.vistas || []);
+  const puede = sub => total || permitidas.indexOf(sub) !== -1;
+
+  // Pestañas de resultados
+  document.querySelectorAll('.result-tabs button[data-sub]').forEach(b=>{
+    b.style.display = puede(b.dataset.sub) ? '' : 'none';
+  });
+  // Contenido de cada tablero
+  document.querySelectorAll('.subview').forEach(v=>{
+    const sub = (v.id||'').replace(/^sub-/,'');
+    if(!puede(sub)){ v.classList.remove('active'); v.style.display='none'; }
+    else { v.style.display=''; }
+  });
+
+  // Si la pestaña activa ya no está permitida se pasa a la primera disponible
+  const tabs = Array.from(document.querySelectorAll('.result-tabs button[data-sub]'))
+    .filter(b=>b.style.display!=='none');
+  const activa = tabs.find(b=>b.classList.contains('active'));
+  if(!activa && tabs.length) tabs[0].click();
+
+  // Botones de descarga generales y Reporte Comparativo Periódico
+  BOTONES_SOLO_ACCESO_TOTAL.forEach(id=>{
+    const btn = document.getElementById(id);
+    if(btn){
+      const caja = btn.closest('.field') || btn;
+      caja.style.display = total ? '' : 'none';
+    }
+  });
+  document.querySelectorAll('[data-open-periodico]').forEach(b=>{
+    b.style.display = total ? '' : 'none';
+  });
+
+  // Chip con el rol y botón para salir
+  const chip = document.getElementById('rolChip');
+  const nom  = document.getElementById('rolNombre');
+  const salir= document.getElementById('btnCerrarSesion');
+  if(nom) nom.textContent = rol.nombre;
+  if(chip) chip.style.display = '';
+  if(salir) salir.style.display = '';
+}
+
+/* Espera a que se valide un rol. Si la pestaña ya tenía sesión, sigue directo. */
+function esperarInicioSesion(){
+  return new Promise(resolve=>{
+    const modal = document.getElementById('loginModal');
+    const form  = document.getElementById('loginForm');
+    const selRol= document.getElementById('loginRol');
+    const inCla = document.getElementById('loginClave');
+
+    const abrir = (rolId)=>{
+      _rolSesion = rolId;
+      guardarRolSesion(rolId);
+      if(modal) modal.classList.remove('show');
+      document.body.classList.remove('sesion-bloqueada');
+      aplicarPermisos(rolId);
+      resolve(rolId);
+    };
+
+    const yaAbierta = leerRolGuardado();
+    if(yaAbierta){ abrir(yaAbierta); return; }
+
+    if(!form || !selRol || !inCla){ // sin ventana de acceso no se abre el visor
+      if(modal) modal.classList.add('show');
+      return;
+    }
+
+    mostrarErrorLogin('');
+    setTimeout(()=>{ try{ selRol.focus(); }catch(e){} }, 80);
+
+    form.addEventListener('submit', ev=>{
+      ev.preventDefault();
+      const id = selRol.value;
+      const clave = inCla.value || '';
+      if(!id){ mostrarErrorLogin('Selecciona tu rol para continuar.'); return; }
+      const rol = ROLES_VISOR[id];
+      if(!rol || clave !== rol.clave){
+        mostrarErrorLogin('La clave no corresponde al rol seleccionado.');
+        inCla.value=''; try{ inCla.focus(); }catch(e){}
+        return;
+      }
+      mostrarErrorLogin('');
+      inCla.value='';
+      abrir(id);
+    });
+  });
+}
+
+// Cerrar sesión: borra la sesión de la pestaña y vuelve a pedir rol y clave.
+document.getElementById('btnCerrarSesion')?.addEventListener('click', ()=>{
+  borrarRolSesion();
+  try{ sessionStorage.removeItem('periodico_auth_ok'); }catch(e){}
+  location.reload();
+});
+
+/* =========================================================================
    Init del visor: lee lo que ya está guardado y escucha cambios de la nube.
    ========================================================================= */
 (async function init(){
+  // Primero el inicio de sesión: nada se carga hasta tener un rol válido.
+  await esperarInicioSesion();
   restoreDriveFileLists();
   await refreshStatusFromDB();
   await loadDriveOnlyFromLocal();
@@ -8841,4 +8990,6 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
     await ensureFacturasData();
     if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
   }
+  // Se reaplican los permisos por si algun render volvio a mostrar botones.
+  if(_rolSesion) aplicarPermisos(_rolSesion);
 })();
