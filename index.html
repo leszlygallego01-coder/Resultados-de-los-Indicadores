@@ -101,6 +101,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="field"><label>&nbsp;</label><button class="btn btn-export" id="btnTraerDrive" title="Lee el paquete de resultados directamente de la carpeta de Google Drive">☁️ Traer resultados de la carpeta</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-abc" id="btnExportarABC" title="Ranking de bodegas por nivel de dispensación (mayor a menor), clasificadas A / B / C">📊 Descargar Análisis ABC</button></div>
       <div class="field"><label>&nbsp;</label><button class="btn btn-cero" id="btnExportarCantidadCero" title="Cuántas líneas por Bodega Detalle tienen Cantidad Autorizada = 0">🚫 Descargar Cantidad Autorizada = 0</button></div>
+      <div class="field"><label>&nbsp;</label><button class="btn btn-dia" id="btnExportarDispensasDia" title="Un Excel con tres hojas: cantidad de dispensas y dispensas entregadas, dispensas por día, y medicamentos entregados por día con Homólogo y Descripción DCI">📅 Descargar Dispensas y Medicamentos por Día</button></div>
     </div>
 
     <div class="subfilters" id="subfiltersBar" style="display:none;">
