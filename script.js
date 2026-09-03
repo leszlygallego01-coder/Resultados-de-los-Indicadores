@@ -5099,7 +5099,44 @@ document.getElementById('btnExportarCantidadCero').addEventListener('click', ()=
    filtros de pantalla (incluidos los subfiltros de bodega y zona).
    Una dispensa se considera ENTREGADA cuando TODAS sus líneas vigentes están
    entregadas (Unidades > 0 y Diferencia = 0), igual que en los indicadores.   */
-document.getElementById('btnExportarDispensasDia').addEventListener('click', ()=>{
+const _btnDispDia = document.getElementById('btnExportarDispensasDia');
+if(_btnDispDia) _btnDispDia.addEventListener('click', exportarDispensasYMedicamentosPorDia);
+
+/* Si el index.html quedó en caché (o es una versión anterior) el botón puede no
+   existir todavía: en ese caso se crea aquí mismo dentro de la barra de filtros,
+   con los mismos estilos, para que la descarga siempre esté disponible.        */
+function asegurarBotonDispensasDia(){
+  if(document.getElementById('btnExportarDispensasDia')) return;
+  const barra = document.getElementById('filtersBar');
+  if(!barra) return;
+  const caja = document.createElement('div');
+  caja.className = 'field';
+  const label = document.createElement('label');
+  label.innerHTML = '&nbsp;';
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-dia';
+  btn.id = 'btnExportarDispensasDia';
+  btn.title = 'Un Excel con tres hojas: cantidad de dispensas y dispensas entregadas, dispensas por día, y medicamentos entregados por día con Homólogo y Descripción DCI';
+  btn.textContent = '📅 Descargar Dispensas y Medicamentos por Día';
+  // Estilo en línea de respaldo por si styles.css también viene de caché.
+  btn.style.background = '#0f766e';
+  btn.style.color = '#fff';
+  btn.style.fontWeight = '700';
+  btn.style.borderRadius = '8px';
+  caja.appendChild(label);
+  caja.appendChild(btn);
+  barra.appendChild(caja);
+  btn.addEventListener('click', exportarDispensasYMedicamentosPorDia);
+  // Respeta el control de roles: solo visible con acceso total.
+  if(typeof _rolSesion==='string' && typeof ROLES_VISOR==='object'){
+    const rol = ROLES_VISOR[_rolSesion];
+    if(rol && !rol.total) caja.style.display='none';
+  }
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', asegurarBotonDispensasDia);
+else asegurarBotonDispensasDia();
+
+function exportarDispensasYMedicamentosPorDia(){
  try{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
   const bodegaTexto = getBodegaFiltroTexto();
@@ -5238,7 +5275,7 @@ document.getElementById('btnExportarDispensasDia').addEventListener('click', ()=
   console.error('Error al generar el Excel de dispensas y medicamentos por día:', err);
   showToast('Error al generar el Excel de dispensas y medicamentos por día: '+(err && err.message ? err.message : err), true);
  }
-});
+}
 
 document.getElementById('btnDescargarParetoExistencias').addEventListener('click', ()=>{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
