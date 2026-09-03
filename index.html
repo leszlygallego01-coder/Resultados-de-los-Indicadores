@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260904a">
+<link rel="stylesheet" href="styles.css?v=20260904b">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -202,6 +202,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             </div>
             <div class="corte-card" style="margin-top:14px;">
               <h4>Reasignación mensual de entregas</h4>
+              <p style="margin:0 0 8px;padding:7px 10px;background:#F1F7F5;border-left:3px solid #0f766e;border-radius:6px;color:#0f766e;font-size:11.5px;line-height:1.5;"><strong>Cifras consolidadas y fijas.</strong> Esta tabla siempre se calcula con <strong>toda la información de todos los meses cargados</strong> y con el corte final del mes, sin importar los filtros de mes, fecha, corte, modalidad, EPS o diagnóstico de la barra superior. Así los valores de cada mes no cambian cuando se abre otro mes ni cuando llega un cargue nuevo.</p>
               <p style="margin:0 0 10px;color:var(--ink-soft);font-size:12px;line-height:1.5;">Cuando un pendiente se entrega en un mes posterior, la entrega <strong>cuenta en el mes en que se realizó</strong> y se <strong>descuenta del mes que originó el pendiente</strong>. Así ningún mes queda con una entrega que no le corresponde y el mes de origen deja de arrastrar ese pendiente. Los meses se determinan con la <strong>fecha de dispensación</strong> (mismo eje temporal del resto del visor) y la reasignación solo se aplica cuando el cambio de pendiente a entregado está acreditado: <strong>fecha de dispensación posterior</strong> o, si es la misma fecha, un <strong>cargue posterior</strong>, tomando la dispensa por <strong>Documento + Bodega</strong>.</p>
               <div class="table-wrap" style="max-height:340px;margin-bottom:0;">
                 <table class="data" id="tblSegMeses">
@@ -216,11 +217,13 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <div class="chart-row" id="cmpDispensaRow" style="grid-template-columns:1fr 1fr;display:none;">
           <div class="chart-card">
             <h4>Dispensas · Estado inicial</h4>
+            <p style="margin:0 0 6px;font-size:10.5px;color:#0f766e;">Consolidado fijo: todos los meses cargados</p>
             <svg id="cmpDispensaInicial" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpDispensaInicialLegend"></div>
           </div>
           <div class="chart-card">
             <h4>Dispensas · Estado actual</h4>
+            <p style="margin:0 0 6px;font-size:10.5px;color:#0f766e;">Consolidado fijo: todos los meses cargados</p>
             <svg id="cmpDispensaActual" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpDispensaActualLegend"></div>
           </div>
@@ -300,11 +303,13 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <div class="chart-row" id="cmpLineaRow" style="grid-template-columns:1fr 1fr;display:none;">
           <div class="chart-card">
             <h4>Líneas · Estado inicial</h4>
+            <p style="margin:0 0 6px;font-size:10.5px;color:#0f766e;">Consolidado fijo: todos los meses cargados</p>
             <svg id="cmpLineaInicial" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpLineaInicialLegend"></div>
           </div>
           <div class="chart-card">
             <h4>Líneas · Estado actual</h4>
+            <p style="margin:0 0 6px;font-size:10.5px;color:#0f766e;">Consolidado fijo: todos los meses cargados</p>
             <svg id="cmpLineaActual" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="cmpLineaActualLegend"></div>
           </div>
@@ -820,6 +825,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <!-- ---- SUBVISTA: BASE SUPERVISORES ---- -->
       <div class="subview" id="sub-supervisores">
         <div class="helpbox">Hay <b>un supervisor por zona</b> (11 zonas). Para cada <b>homólogo</b> en cada <b>bodega detalle</b> se estima el <b>consumo promedio mensual</b> con <b>Suavización Exponencial Simple (SES)</b>, eligiendo para cada homólogo el <b>alfa</b> (0,05 a 1,00) que deja el menor error de ajuste <b>MAD</b> sobre su propia historia de cantidades autorizadas (desempate por <b>MAPE</b>), y se compara con la <b>existencia</b> y las <b>unidades pendientes</b>, para saber cuánto se necesita. Al lado se muestran las unidades que la bodega tiene <b>en traslado todavía no recibido</b> (tabla Traslados, por bodega destino, solo lo que está marcado como <b>No Recibido</b>). Con ese resultado se propone un <b>plan de traslados entre bodegas de la misma zona</b>: las que tienen excedente le pasan unidades a las que quedan cortas. Se respetan los filtros de bodega y zona de la barra superior. El buscador de la tabla filtra al mismo tiempo por <b>código de homologación</b>, <b>Descripción DCI</b> y <b>código de artículo</b>. Cuando el código de homologación viene vacío o en basura (por ejemplo <b>0-0-NA</b>, <b>///N</b> o solo ceros), la fila se agrupa por su <b>código de artículo</b> y queda marcada como <b>sin homólogo</b>, para no mezclar medicamentos distintos en una sola fila.</div>
+        <div class="helpbox" style="background:#F1F7F5;border-color:#0f766e;color:#0f766e;"><b>Consumo promedio mes consolidado y fijo.</b> El consumo promedio mensual se calcula siempre con <b>la historia completa de todos los meses cargados</b> en este equipo, sin importar los filtros de mes, fecha, corte, modalidad, EPS o diagnóstico de la barra superior. Los filtros de <b>bodega</b> y <b>zona</b> solo eligen qué filas se muestran, no recalculan el promedio. De esta forma el valor no cambia cuando se agrega un cargue nuevo o se abre un mes distinto.</div>
         <div class="helpbox" id="supDiag" style="display:none;"></div>
         <div class="stat-row" id="statsSup"></div>
 
@@ -1003,6 +1009,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
     <button class="modal-close" id="btnCerrarPeriodico">✕</button>
     <h2>Reporte Comparativo Periódico</h2>
     <p style="font-size:12.5px;color:var(--ink-soft);margin:0;">Compara los cargues acumulativos del Reporte de Dispensación organizados por la <b>fecha de dispensación</b> (eje temporal único), segmentada en 3 cortes del mes: días 1-10, 11-20 y 21-31. Cada corte muestra el estado ACUMULADO hasta ese día, tomando la última versión cargada de cada línea. Se acredita una recuperación (pendiente → entregado y sin soporte → con soporte, por <b>Documento + Bodega</b>) cuando el cumplimiento llega con <b>fecha de dispensación posterior</b> o, si es la misma fecha, en un <b>cargue posterior</b>. <b>Alcance:</b> se cuentan solo las dispensas con <b>Estado Activo</b>; las INACTIVO se excluyen.</p>
+    <p style="font-size:11.5px;color:#0f766e;margin:8px 0 0;padding:7px 10px;background:#F1F7F5;border-left:3px solid #0f766e;border-radius:6px;line-height:1.5;"><b>Reporte consolidado y fijo.</b> Este comparativo siempre parte de <b>toda la historia cargada en este equipo</b> (todos los meses), no solo de los meses abiertos en pantalla, para que sus cifras permanezcan estables cuando llega un cargue nuevo. Los filtros de esta ventana sí se aplican porque los eliges tú.</p>
     <div id="periodicoFilters" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
       <div class="field" style="flex:1;min-width:140px;"><label>Mes</label><select id="pfMes"><option value="">Todos</option></select></div>
       <div class="field" style="flex:1;min-width:140px;"><label>EPS Consolidada</label><select id="pfEpsGrupo"><option value="">Todas</option></select></div>
@@ -1055,6 +1062,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260904a"></script>
+<script src="script.js?v=20260904b"></script>
 </body>
 </html>
