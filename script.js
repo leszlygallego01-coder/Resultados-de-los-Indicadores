@@ -8648,6 +8648,36 @@ function getPeriodicoFilteredRows(){
     return true;
   });
 }
+/* Abreviaturas de mes para los encabezados de corte (Corte Sept, Corte Oct, ...). */
+const MESES_ABREV_CORTE=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sept','Oct','Nov','Dic'];
+function abrevMesKey(key){
+  const m=String(key||'').match(/^(\d{4})-(\d{2})$/);
+  if(!m) return '';
+  return MESES_ABREV_CORTE[(+m[2])-1] || m[2];
+}
+/* Mes que representa cada corte (1, 2 y 3) segun la FECHA DE DISPENSACION de las filas.
+   Se cuenta cuantas filas aporta cada mes dentro del corte y se muestra el mes
+   predominante; si el corte mezcla meses se muestran los dos con mas registros
+   separados por "/" (ej. "Sept/Oct") para no ocultar la mezcla. Devuelve un objeto
+   {1:'Sept', 2:'Oct', 3:''} donde la cadena vacia significa "sin datos en el corte". */
+function mesesPorCorte(rows){
+  const conteo={1:new Map(),2:new Map(),3:new Map()};
+  (rows||[]).forEach(r=>{
+    const c=corteDeDispensacion(r);
+    if(!c) return;
+    const k=mesDeDispensacion(r);
+    if(!k) return;
+    conteo[c].set(k, (conteo[c].get(k)||0)+1);
+  });
+  const out={1:'',2:'',3:''};
+  [1,2,3].forEach(c=>{
+    const ord=[...conteo[c].entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+    if(!ord.length) return;
+    const nombres=ord.slice(0,2).map(e=>abrevMesKey(e[0])).filter(Boolean);
+    out[c]=nombres.join('/');
+  });
+  return out;
+}
 function renderReportePeriodico(){
   const filtered = getPeriodicoFilteredRows();
   const metrics = buildCorteMetrics(filtered);
@@ -8667,6 +8697,10 @@ function renderReportePeriodico(){
   const activoBod = (c, bodega) => { const s=cargueBodega.get(bodega); return !!s && s.has(c) && !fuera(c); };
   const DASH = '—';
   const cortesLabels={1:'Corte 1 (día 1-10)',2:'Corte 2 (día 11-20)',3:'Corte 3 (día 21-31)'};
+  /* Mes al que corresponde cada corte: se lee de la FECHA DE DISPENSACIÓN de las filas
+     que caen en ese corte y se toma el mes con más registros. Si el corte tiene filas de
+     varios meses se muestran los dos primeros (ej. "Corte Sept/Oct"). */
+  const mesCorteRP = mesesPorCorte(baseCortes);
   const labelEnt = periodicoTabActual==='documento' ? 'Entregadas' : periodicoTabActual==='linea' ? 'Entregadas' : 'Con soporte';
   const labelPend = periodicoTabActual==='documento' ? 'Pendientes' : periodicoTabActual==='linea' ? 'Pendientes' : 'Sin soporte';
   const fieldA = periodicoTabActual==='documento' ? 'docsEnt' : periodicoTabActual==='linea' ? 'lineasEnt' : 'eventoCon';
@@ -8859,13 +8893,16 @@ function renderReportePeriodico(){
   });
   filaTotal+='<td>'+fmtInt(tot.recTotal)+'</td></tr>';
 
+  const etiqMesCorte = (c) => mesCorteRP[c]
+    ? '<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Corte '+escHtml(mesCorteRP[c])+'</span>'
+    : '';
   const etiqCorte = (c, txt) => fuera(c)
-    ? '<th colspan="2" style="color:#C3CCD6;">'+txt+' <span style="font-weight:600;">· fuera del corte</span></th>'
+    ? '<th colspan="2" style="color:#C3CCD6;">'+txt+' <span style="font-weight:600;">· fuera del corte</span>'+etiqMesCorte(c)+'</th>'
     : (activo(c) && !tot.rec[c-1])
-      ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin entregas</span></th>'
+      ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin entregas</span>'+etiqMesCorte(c)+'</th>'
       : (activo(c) && !rpCambio[c-1])
-        ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin cambios</span></th>'
-        : '<th colspan="2">'+txt+(activo(c)?'':' <span style="color:#9CA9B6;font-weight:600;">· sin dispensaciones</span>')+'</th>';
+        ? '<th colspan="2" style="color:#9CA9B6;">'+txt+' <span style="font-weight:600;">· sin cambios</span>'+etiqMesCorte(c)+'</th>'
+        : '<th colspan="2">'+txt+(activo(c)?'':' <span style="color:#9CA9B6;font-weight:600;">· sin dispensaciones</span>')+etiqMesCorte(c)+'</th>';
   let ths1='<tr><th rowspan="2">Bodega</th><th rowspan="2">Total</th>'
     +'<th rowspan="2">'+labelEnt+' totales<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Actual / Anterior (dif.)</span></th>'
     +'<th rowspan="2">'+labelPend+' totales<br><span style="font-weight:600;color:#9CA9B6;font-size:10.5px;">Actual / Anterior (dif.)</span></th>'
