@@ -399,6 +399,13 @@ table.data thead th.sortable.sort-active{text-decoration:underline;text-underlin
   white-space:normal;word-break:break-word;overflow-wrap:break-word;line-height:1.3;
 }
 
+/* Base de cuentas: bloque de LINEAS (Lineas, Lin. Entregadas, Lin. Pendientes y
+   % Cumpl. Lineas) resaltado en verde para diferenciarlo del bloque de dispensas. */
+#tblCuentasResp thead th.col-lineas{background:#60BF71;color:#0B3D1C;border-bottom-color:#4EA85F;}
+#tblCuentasResp tbody td.col-lineas{background:#EAF8ED;}
+#tblCuentasResp tbody tr:hover td.col-lineas{background:#DCF2E2;}
+#tblCuentasResp tbody tr.total-row td.col-lineas{background:#CFEFD7;color:#0B3D1C;}
+
 /* Colores de agrupacion en el indicador por linea: Pareto y No Pareto */
 #tblLinea thead th.grp-pareto{background:#2f7d8c;color:#fff;}
 #tblLinea thead th.grp-nopareto{background:#5b7d3a;color:#fff;}
