@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260905f">
+<link rel="stylesheet" href="styles.css?v=20260905h">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -434,56 +434,58 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         </div>
         <p class="seg-desc" id="soporteAlcanceTxt" style="margin:-6px 0 12px;"></p>
 
-        <!-- Dona filtrable por bodega: reparto de las dispensas de evento entregadas
-             entre las que llegaron CON soporte y las que quedaron SIN soporte. -->
-        <div class="chart-row" style="grid-template-columns:1fr;">
-          <div class="chart-card">
+        <div class="stat-row" id="statsSoporte"></div>
+
+        <!-- El anillo filtrable por bodega queda al lado IZQUIERDO de la tabla:
+             reparto de las dispensas de evento entregadas entre las que llegaron
+             CON soporte y las que quedaron SIN soporte. -->
+        <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+          <div class="chart-card" style="flex:0 0 300px;min-width:260px;max-width:100%;margin:0;">
             <h4>% de dispensas de evento entregadas CON y SIN soporte</h4>
             <select id="pieSoporteSelect"></select>
             <svg id="pieSoporte" width="200" height="200" viewBox="0 0 200 200"></svg>
             <div class="legend" id="pieSoporteLegend"></div>
           </div>
-        </div>
-
-        <div class="stat-row" id="statsSoporte"></div>
-
-          <div class="table-wrap" style="margin-bottom:0;">
-          <p class="seg-desc" style="margin-bottom:8px;"><b>Alcance:</b> se cuentan <b>solo las dispensas con Estado Activo</b>; las INACTIVO se excluyen. &nbsp;<b>Orden:</b> usa el filtro de abajo (o haz clic en los encabezados <i>Total</i>, <i>Con soporte</i>, <i>Sin soporte</i>, <i>% con soporte</i>) para ordenar de mayor a menor o de menor a mayor.</p>
-          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
-            <div class="field" style="max-width:210px;margin-bottom:0;">
-              <label>Ordenar por</label>
-              <select id="fSoporteOrdenCol">
-                <option value="ent">Total</option>
-                <option value="entCon">Con soporte</option>
-                <option value="entSin">Sin soporte</option>
-                <option value="efEnt">% con soporte</option>
-              </select>
-            </div>
-            <div class="field" style="max-width:210px;margin-bottom:0;">
-              <label>Dirección</label>
-              <select id="fSoporteOrdenDir">
-                <option value="desc">De mayor a menor</option>
-                <option value="asc">De menor a mayor</option>
-              </select>
+          <div style="flex:1 1 480px;min-width:320px;">
+            <div class="table-wrap" style="margin-bottom:0;">
+              <p class="seg-desc" style="margin-bottom:8px;"><b>Alcance:</b> se cuentan <b>solo las dispensas con Estado Activo</b>; las INACTIVO se excluyen. &nbsp;<b>Orden:</b> usa el filtro de abajo (o haz clic en los encabezados <i>Total</i>, <i>Con soporte</i>, <i>Sin soporte</i>, <i>% con soporte</i>) para ordenar de mayor a menor o de menor a mayor.</p>
+              <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
+                <div class="field" style="max-width:210px;margin-bottom:0;">
+                  <label>Ordenar por</label>
+                  <select id="fSoporteOrdenCol">
+                    <option value="ent">Total</option>
+                    <option value="entCon">Con soporte</option>
+                    <option value="entSin">Sin soporte</option>
+                    <option value="efEnt">% con soporte</option>
+                  </select>
+                </div>
+                <div class="field" style="max-width:210px;margin-bottom:0;">
+                  <label>Dirección</label>
+                  <select id="fSoporteOrdenDir">
+                    <option value="desc">De mayor a menor</option>
+                    <option value="asc">De menor a mayor</option>
+                  </select>
+                </div>
+              </div>
+              <table class="data" id="tblSoporte">
+                <thead>
+                  <tr>
+                    <th rowspan="2">Zona</th><th rowspan="2">Bodega</th>
+                    <th colspan="4">Dispensas entregadas (Evento)</th>
+                  </tr>
+                  <tr class="sub">
+                    <th class="sortable" data-col="ent" title="Clic para ordenar por Total">Total<span class="sort-ind">⇅</span></th>
+                    <th class="sortable" data-col="entCon" title="Clic para ordenar por Con soporte">Con soporte<span class="sort-ind">⇅</span></th>
+                    <th class="sortable" data-col="entSin" title="Clic para ordenar por Sin soporte">Sin soporte<span class="sort-ind">⇅</span></th>
+                    <th class="sortable" data-col="efEnt" title="Clic para ordenar por % con soporte">% con soporte<span class="sort-ind">⇅</span></th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
             </div>
           </div>
-          <table class="data" id="tblSoporte">
-            <thead>
-              <tr>
-                <th rowspan="2">Zona</th><th rowspan="2">Bodega</th>
-                <th colspan="4">Dispensas entregadas (Evento)</th>
-              </tr>
-              <tr class="sub">
-                <th class="sortable" data-col="ent" title="Clic para ordenar por Total">Total<span class="sort-ind">⇅</span></th>
-                <th class="sortable" data-col="entCon" title="Clic para ordenar por Con soporte">Con soporte<span class="sort-ind">⇅</span></th>
-                <th class="sortable" data-col="entSin" title="Clic para ordenar por Sin soporte">Sin soporte<span class="sort-ind">⇅</span></th>
-                <th class="sortable" data-col="efEnt" title="Clic para ordenar por % con soporte">% con soporte<span class="sort-ind">⇅</span></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-          </div>
         </div>
+      </div>
       </div>
 
       <!-- ---- SUBVISTA: DISPENSAS INACTIVAS ---- -->
@@ -943,7 +945,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
     </div>
   </div>
 
-  <footer class="foot">Indicadores de Operaciones · procesamiento 100% local en el navegador · nada se envía a ningún servidor</footer>
+  <footer class="foot">Indicadores de Operaciones · procesamiento 100% local en el navegador · Elaboró Leszly Yulipsa Gallego González</footer>
 </div>
 
 <!-- Inicio de sesion obligatorio: sin rol y clave validos no se muestra el visor -->
@@ -1059,6 +1061,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260905f"></script>
+<script src="script.js?v=20260905h"></script>
 </body>
 </html>
