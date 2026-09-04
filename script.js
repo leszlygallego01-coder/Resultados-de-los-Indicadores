@@ -5875,14 +5875,16 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
   const zona = document.getElementById('fZona').value;
   // Solo la última versión cargada de cada línea (el reporte es acumulativo).
   const _idxUltima = new Set(snapshotUltimaVersion(filteredRowsCache).map(r=>r.idx));
-  const detalle = filteredRowsCache.filter(r=>{
+  const filasDetalle = filteredRowsCache.filter(r=>{
     if(r.versionVigente===false) return false;
     if(!_idxUltima.has(r.idx)) return false;
     if(!esEstadoActivo(r.estadoDispensa)) return false;
     if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
     if(zona && r.zona!==zona) return false;
     return true;
-  }).map(r=>({
+  });
+  const detalle = filasDetalle.map(r=>({
+    'Zona': r.zona||'N/D',
     'Bodega detalle': r.bodegaDetalle,
     'Dispensa': r.documento,
     'Codigo': r.codigoArticulo,
@@ -5896,6 +5898,53 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     'Usuario Creación': r.usuarioCreacion
   }));
   if(!detalle.length){ showToast('No hay líneas para el filtro actual.', true); return; }
+
+  /* ---- Hoja “Dispensas”: una fila por DISPENSA (Documento + Bodega) -------------
+     Cantidad autorizada = suma de las unidades autorizadas de sus líneas activas.
+     Cantidad pendiente  = suma de lo que falta por entregar (|Diferencia| de las
+     líneas pendientes). Si la dispensa tiene más de un usuario de creación se
+     escriben todos separados por “ / ”.                                        */
+  const porDisp=new Map();
+  filasDetalle.forEach(r=>{
+    const doc=String(r.documento||'').trim() || 'SIN DOCUMENTO';
+    const bod=r.bodegaDetalle||'N/D';
+    const k=bod+'||'+doc;
+    if(!porDisp.has(k)) porDisp.set(k, {zona:r.zona||'N/D', bodega:bod, documento:doc,
+      autorizada:0, pendiente:0, entregadas:0, lineas:0, linPend:0, usuarios:new Set(), fecha:null});
+    const g=porDisp.get(k);
+    g.lineas++;
+    g.autorizada += Number(r.cantidadAutorizada)||0;
+    g.entregadas += Number(r.unidades)||0;
+    if(lineaEsPendiente(r)){ g.pendiente += Math.abs(Number(r.diferencia)||0); g.linPend++; }
+    const u=String(r.usuarioCreacion||'').trim();
+    if(u) g.usuarios.add(u);
+    if(r.fecha && (!g.fecha || r.fecha>g.fecha)) g.fecha=r.fecha;
+  });
+  const dispensas=[...porDisp.values()].sort((a,b)=>
+    String(a.zona).localeCompare(String(b.zona),'es') ||
+    String(a.bodega).localeCompare(String(b.bodega),'es') ||
+    String(a.documento).localeCompare(String(b.documento),'es')
+  ).map(g=>({
+    'Zona': g.zona,
+    'Bodega Detalle': g.bodega,
+    'Documento': g.documento,
+    'Fecha de Dispensación': g.fecha ? dateToISO(g.fecha) : '',
+    'Cantidad Autorizada': g.autorizada,
+    'Cantidad Entregada': g.entregadas,
+    'Cantidad Pendiente': g.pendiente,
+    'Líneas': g.lineas,
+    'Líneas pendientes': g.linPend,
+    'Estado de la dispensa': g.linPend ? 'PENDIENTE' : 'ENTREGADA',
+    'Usuario Creación': [...g.usuarios].sort((a,b)=>a.localeCompare(b,'es')).join(' / ') || 'SIN USUARIO'
+  }));
+  const totDisp=dispensas.reduce((a,d)=>({
+    aut:a.aut+d['Cantidad Autorizada'], ent:a.ent+d['Cantidad Entregada'],
+    pen:a.pen+d['Cantidad Pendiente'], lin:a.lin+d['Líneas'], lp:a.lp+d['Líneas pendientes']
+  }), {aut:0, ent:0, pen:0, lin:0, lp:0});
+  dispensas.push({'Zona':'TOTAL','Bodega Detalle':'','Documento':fmtInt(porDisp.size)+' dispensa(s)',
+    'Fecha de Dispensación':'','Cantidad Autorizada':totDisp.aut,'Cantidad Entregada':totDisp.ent,
+    'Cantidad Pendiente':totDisp.pen,'Líneas':totDisp.lin,'Líneas pendientes':totDisp.lp,
+    'Estado de la dispensa':'','Usuario Creación':''});
   // Resumen por bodega con las mismas reglas del Indicador por Línea
   // (Total = líneas activas, Entregadas = Unidades>0 y Diferencia=0, Pendientes = Diferencia<0).
   const porBod=new Map();
@@ -5919,12 +5968,13 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
   const totGen = resumenBod.reduce((a,g)=>({t:a.t+g['Total líneas activas'], e:a.e+g['Líneas entregadas'], p:a.p+g['Líneas pendientes']}), {t:0,e:0,p:0});
   resumenBod.push({'Bodega detalle':'TOTAL','Total líneas activas':totGen.t,'Líneas entregadas':totGen.e,'Líneas pendientes':totGen.p,'% Cumplimiento': totGen.t ? totGen.e/totGen.t : ''});
   const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dispensas), 'Dispensas');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenBod), 'Cumplimiento por Bodega');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle por Bodega');
   const fecha=new Date().toISOString().slice(0,10);
   const sufijo = (bodegaTexto || zona || 'Todas').replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]+/g,'').trim().replace(/\s+/g,'_');
   XLSX.writeFile(wb, 'Detalle_Dispensa_'+sufijo+'_'+fecha+'.xlsx');
-  showToast('Excel de detalle por bodega exportado: '+fmtInt(detalle.length)+' líneas.');
+  showToast('Excel exportado: '+fmtInt(porDisp.size)+' dispensa(s) y '+fmtInt(detalle.length)+' línea(s).');
 });
 
 // ---- Dispensas inactivas por bodega: resumen + detalle (Documento y Usuario Creación) ----
