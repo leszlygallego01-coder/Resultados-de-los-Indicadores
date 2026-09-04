@@ -8815,15 +8815,15 @@ function mesesGenEntPorCorteBodega(rows){
   porBod.forEach((acc,bod)=>{ out.set(bod, _cierraMesesCorte(acc)); });
   return out;
 }
-/* Etiqueta gris que va DEBAJO de la cifra: "Corte Jul / Corte Sept" significa que el
-   pendiente se genero en julio y se entrego en septiembre. Si los dos meses coinciden
-   se escribe una sola vez para no repetir. */
+/* Etiqueta gris que va DEBAJO de la cifra: "Generó Jul / Corte Sept" significa que el
+   pendiente se genero en julio y se entrego (corte) en septiembre. Si los dos meses
+   coinciden se escribe una sola vez para no repetir. */
 function etiqMesGenEnt(par){
   if(!par) return '';
   const gen=par.gen||'', ent=par.ent||'';
   if(!gen && !ent) return '';
   const dos = gen && ent && gen!==ent;
-  const txt = dos ? 'Corte '+gen+' / Corte '+ent : 'Corte '+(gen||ent);
+  const txt = dos ? 'Generó '+gen+' / Corte '+ent : 'Generó y Corte '+(gen||ent);
   const tip = dos
     ? 'Se generó en '+nombreMesAbrev(gen)+' y se entregó en '+nombreMesAbrev(ent)
     : 'Se generó y se entregó en '+nombreMesAbrev(gen||ent);
@@ -8849,7 +8849,7 @@ function renderReportePeriodico(){
   const DASH = '—';
   const cortesLabels={1:'Corte 1 (día 1-10)',2:'Corte 2 (día 11-20)',3:'Corte 3 (día 21-31)'};
   /* Meses que se escriben DEBAJO de la cifra de cada celda con el formato
-     "Corte Jul / Corte Sept": el primero es el mes en que se GENERÓ el pendiente
+     "Generó Jul / Corte Sept": el primero es el mes en que se GENERÓ el pendiente
      (fecha de dispensación) y el segundo el mes en que se ENTREGÓ (cargue que acreditó
      el cumplimiento). mesCorteBodRP lo trae por bodega y mesCorteRP es el respaldo
      general del corte cuando la bodega no aporta fechas propias. */
