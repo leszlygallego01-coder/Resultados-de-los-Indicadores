@@ -101,6 +101,26 @@ header.top{
 }
 .top-status .res-count-chip b{font-family:var(--mono);font-weight:700;color:var(--green-darker);}
 
+/* Fecha y hora en que se trajeron los datos de la carpeta de Drive.
+   .vencido = los datos ya pasaron de 24 horas y hay que volver a cargar. */
+.top-status .data-fecha-chip{
+  margin-left:6px;padding:3px 11px;border-radius:999px;white-space:nowrap;
+  background:#EDF3FA;border:1px solid #C9D8EA;color:#2B4A6F;
+  font-family:var(--body);font-size:12px;font-weight:500;
+}
+.top-status .data-fecha-chip b{font-family:var(--mono);font-weight:700;}
+.top-status .data-fecha-chip.vencido{background:var(--amber-soft);border-color:var(--amber-line);color:#7c5310;}
+
+/* Aviso del cargue diario (informativo / vencido / nueva informacion). */
+.aviso-cargue{
+  display:flex;gap:12px;align-items:flex-start;border-radius:var(--radius);
+  padding:12px 16px;margin-bottom:18px;font-size:12.5px;line-height:1.55;border:1px solid;
+  background:#EDF3FA;border-color:#C9D8EA;color:#2B4A6F;
+}
+.aviso-cargue .pw-icon{font-size:18px;line-height:1;flex-shrink:0;}
+.aviso-cargue.vencido{background:var(--amber-soft);border-color:var(--amber-line);color:#7c5310;}
+.aviso-cargue.nuevo{background:var(--green-soft);border-color:var(--green-line);color:var(--green-darker);}
+
 /* ---------------- avisos y diagnostico ---------------- */
 .persistence-warning{
   display:flex;gap:12px;align-items:flex-start;
