@@ -2719,7 +2719,7 @@ function renderAllTablesFromCache(){
   renderSeguimientoBodega(filteredRowsCache, bodegaSearch, zona);
   renderIndicadorInactivas(rowsVigentes, bodegaSearch, zona);
   if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
-  // Base cuentas: la matriz usa el estado actual y la evolución por cortes el historial.
+  // Base cuentas: la matriz usa el estado actual de las líneas.
   if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
   // Base supervisores: el consumo promedio mes es un CONSOLIDADO de todos los meses,
   // asi que se alimenta de las filas vigentes de TODA la carga, sin filtros de mes,
@@ -7049,7 +7049,7 @@ function cuentaAlcanceTxt(resp){
 function cuentaLiderLabel(nombre){ return nombre; }
 
 // Caches del último cálculo, para que los filtros y la descarga usen lo ya calculado.
-let _cuentasMatriz=[], _cuentasDetalle=[], _cuentasEvol=[], _cuentasCortesAct=[], _cuentasGlobal=null;
+let _cuentasMatriz=[], _cuentasDetalle=[], _cuentasGlobal=null;
 
 function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   const tb=document.querySelector('#tblCuentasResp tbody');
@@ -7059,7 +7059,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
   const base=(rowsVigentes && rowsVigentes.length) ? rowsVigentes : [];
 
   if(!base.length){
-    _cuentasMatriz=[]; _cuentasDetalle=[]; _cuentasEvol=[]; _cuentasGlobal=null;
+    _cuentasMatriz=[]; _cuentasDetalle=[]; _cuentasGlobal=null;
     if(statsEl) statsEl.innerHTML='';
     if(diagEl){ diagEl.style.display=''; diagEl.innerHTML='<b>Sin datos.</b> Carga las tablas y pulsa <b>Calcular indicadores</b> para ver la base de cuentas.'; }
     pintarBaseCuentas();
@@ -7165,39 +7165,7 @@ function renderBaseCuentas(rowsVigentes, bodegaSearch, zona, rowsHist){
     epsSinResp:[...epsSinResp].sort((a,b)=>a.localeCompare(b,'es'))
   };
 
-  /* ---- Evolución por cortes -------------------------------------------------
-     Usa el historial completo de versiones: en cada corte se toma el estado
-     vigente de la línea al cierre de ese corte. Un corte sin dispensaciones
-     queda en “—” para no repetir la cifra del corte anterior.               */
-  const hist=soloActivas((rowsHist && rowsHist.length ? rowsHist : base)).filter(enFiltro);
-  const activos=cortesConCargue(hist);
-  _cuentasCortesAct=[1,2,3].map(c=>corteVigenteHasta(activos, c));
-  const porCorte={};
-  const yaCalculado=new Map();
-  _cuentasCortesAct.forEach(cEff=>{
-    if(!cEff || yaCalculado.has(cEff)) return;
-    const snap=snapshotHastaCorte(hist, cEff);
-    const m=new Map();
-    LIDERES_CUENTA.forEach(resp=>m.set(resp.nombre, {lineas:0, ent:0, pen:0}));
-    snap.forEach(r=>{
-      const entregada = r.lineaPendiente==='NO';
-      cuentaResponsablesDeLinea(r).forEach(resp=>{
-        const g=m.get(resp.nombre);
-        g.lineas++; if(entregada) g.ent++; else g.pen++;
-      });
-    });
-    yaCalculado.set(cEff, m);
-  });
-  [1,2,3].forEach((c,i)=>{ porCorte[c]=yaCalculado.get(_cuentasCortesAct[i]) || null; });
-  _cuentasEvol=LIDERES_CUENTA.map(resp=>({
-    nombre:resp.nombre, cargo:resp.cargo,
-    cortes:[1,2,3].map(c=>{
-      const m=porCorte[c];
-      if(!m) return null;
-      const g=m.get(resp.nombre);
-      return {lineas:g.lineas, ent:g.ent, pen:g.pen, cumpl: g.lineas ? g.ent/g.lineas : null};
-    })
-  }));
+  // (La evolución por cortes se retiró de esta pestaña por no ser necesaria.)
 
   if(diagEl){
     const avisos=[];
@@ -7251,20 +7219,17 @@ function _cuentasFilaVisible(t, f){
 
 function pintarBaseCuentas(){
   const tb=document.querySelector('#tblCuentasResp tbody');
-  const tbCor=document.querySelector('#tblCuentasCortes tbody');
   if(!tb) return;
   const statsEl=document.getElementById('statsCuentas');
   const f=_cuentasFiltrosActuales();
 
   if(!_cuentasMatriz.length){
     tb.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
-    if(tbCor) tbCor.innerHTML='<tr><td colspan="12" class="txt" style="text-align:center;color:#9CA9B6;">No hay datos calculados.</td></tr>';
     if(statsEl) statsEl.innerHTML='';
     return;
   }
 
   const matriz=_cuentasMatriz.filter(t=>_cuentasFilaVisible(t, f));
-  const nombresVis=new Set(matriz.map(t=>t.nombre));
 
   // ---- KPIs ----
   const G=_cuentasGlobal || {lineasTotales:0, lineasAsignadas:0, ent:0, pen:0, undPend:0, sinResp:0, dispensas:0, dispEnt:0, dispPen:0, cumplDisp:null};
@@ -7321,22 +7286,6 @@ function pintarBaseCuentas(){
 
   // ---- Detalle por líder y EPS ----
   // (La tabla en pantalla se retiró; el desglose por EPS sigue disponible en el Excel.)
-
-  // ---- Evolución por cortes ----
-  if(tbCor){
-    const evol=_cuentasEvol.filter(e=>nombresVis.has(e.nombre));
-    const celdas=(c)=> c===null
-      ? '<td>—</td><td>—</td><td>—</td>'
-      : '<td>'+fmtInt(c.ent)+'</td><td class="'+(c.pen?'pct-bad':'')+'">'+fmtInt(c.pen)+'</td>'+
-        '<td class="'+effClass(c.cumpl)+'">'+fmtPct(c.cumpl)+'</td>';
-    let hc=evol.map(e=>
-      '<tr><td class="txt"><b>'+escHtml(cuentaLiderLabel(e.nombre))+'</b></td>'+
-      celdas(e.cortes[0])+celdas(e.cortes[1])+celdas(e.cortes[2])+
-      '<td>'+(e.cortes[2] && e.cortes[0] ? fmtInt((e.cortes[0].pen||0)-(e.cortes[2].pen||0)) : '—')+'</td></tr>'
-    ).join('');
-    if(!evol.length) hc='<tr><td colspan="11" class="txt" style="text-align:center;color:#9CA9B6;">No hay evolución para los filtros elegidos.</td></tr>';
-    tbCor.innerHTML=hc;
-  }
 }
 
 (function initBaseCuentas(){
@@ -7366,21 +7315,11 @@ function pintarBaseCuentas(){
       '% Cumplimiento':d.cumpl===null?'':+(d.cumpl*100).toFixed(1),
       'Unidades pendientes':d.undPend
     }));
-    const val=(c,campo)=> c===null ? '' : c[campo];
-    const pct=(c)=> (c===null || c.cumpl===null) ? '' : +(c.cumpl*100).toFixed(1);
-    const hojaEvol=_cuentasEvol.filter(e=>nombresVis.has(e.nombre)).map(e=>({
-      'Lider':cuentaLiderLabel(e.nombre),
-      'Entregadas Corte 1':val(e.cortes[0],'ent'), 'Pendientes Corte 1':val(e.cortes[0],'pen'), '% Cumpl. Corte 1':pct(e.cortes[0]),
-      'Entregadas Corte 2':val(e.cortes[1],'ent'), 'Pendientes Corte 2':val(e.cortes[1],'pen'), '% Cumpl. Corte 2':pct(e.cortes[1]),
-      'Entregadas Corte 3':val(e.cortes[2],'ent'), 'Pendientes Corte 3':val(e.cortes[2],'pen'), '% Cumpl. Corte 3':pct(e.cortes[2]),
-      'Pendientes recuperados (C1 a C3)':(e.cortes[0] && e.cortes[2]) ? (e.cortes[0].pen-e.cortes[2].pen) : ''
-    }));
     if(!hojaMatriz.length){ showToast('No hay líderes para los filtros elegidos.', true); return; }
     const fecha=new Date().toISOString().slice(0,10);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaMatriz), 'BASE CUENTAS');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet), 'DETALLE POR EPS');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaEvol), 'EVOLUCION POR CORTES');
     XLSX.writeFile(wb, 'Base_Cuentas_Responsables_'+fecha+'.xlsx');
     showToast('Excel exportado: '+fmtInt(hojaMatriz.length)+' cuentas y '+fmtInt(hojaDet.length)+' filas de detalle.');
   });
