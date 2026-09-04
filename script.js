@@ -3667,20 +3667,16 @@ function resolverBodegaReporte(punto, bodegas, cache){
   return r;
 }
 
-/* Descripción tal como viene en el Reporte de Dispensación, por código de artículo.
-   Se usa como respaldo cuando el código no está homologado y por eso no tiene
-   Descripción DCI en la tabla Homólogo. */
-function mapaDescripcionReporte(){
-  const m=new Map();
-  (filteredRowsCache||[]).forEach(r=>{
-    const c=normValue(r.codigoArticulo);
-    if(!c || m.has(c)) return;
-    const d=String(r.descripcionReporte||'').trim();
-    if(d) m.set(c, d);
-  });
-  return m;
+/* ¿El código de homologación viene realmente vacío? Además de la celda en blanco, la
+   tabla Homólogo trae marcadores que significan "no homologado", como 0/0/0/N, ///N,
+   //0/N o 0-0-NA: solo ceros, barras, guiones y letras N / NA, sin código real. */
+function homologoSinValor(h){
+  const t=String(h||'').trim().toUpperCase();
+  if(!t) return true;
+  const partes=t.split(/[\/\-.,;:|\s]+/).filter(x=>x!=='');
+  if(!partes.length) return true;
+  return partes.every(p=> p==='0' || p==='N' || p==='NA' || p==='NO' || p==='ND' || p==='NULL' || p==='SIN');
 }
-
 /* Descripción tal como viene en el Reporte de Dispensación, por código de artículo.
    Se usa como respaldo cuando el código no está homologado y por eso no tiene
    Descripción DCI en la tabla Homólogo. */
@@ -3810,7 +3806,7 @@ function renderFacturasDetalle(filas){
      Reporte de Dispensación (y en último caso la de la factura). */
   const descRep=mapaDescripcionReporte();
   lista.forEach(o=>{
-    o.homologoTxt = (o.homologo && o.homologo!==o.codigo) ? o.homologo : 'SIN HOMÓLOGO';
+    o.homologoTxt = (o.homologo && o.homologo!==o.codigo && !homologoSinValor(o.homologo)) ? o.homologo : 'SIN HOMÓLOGO';
     o.descripcionMostrar = o.descripcionDci || descRep.get(o.codigo) || String(o.descripcion||'').trim() || '—';
   });
 
@@ -3859,7 +3855,7 @@ function renderFacturasDetalle(filas){
     const detalle=_facturasDetalleCache.map(o=>({
       'Factura': o.factura,
       'Código': o.codigo,
-      'Código de Homologación': o.homologoTxt || ((o.homologo && o.homologo!==o.codigo) ? o.homologo : 'SIN HOMÓLOGO'),
+      'Código de Homologación': o.homologoTxt || ((o.homologo && o.homologo!==o.codigo && !homologoSinValor(o.homologo)) ? o.homologo : 'SIN HOMÓLOGO'),
       'Descripción DCI': (o.descripcionMostrar && o.descripcionMostrar!=='—') ? o.descripcionMostrar : (o.descripcionDci||''),
       'Descripción': o.descripcion||'',
       'Cantidad': o.cantidad,
@@ -3886,7 +3882,7 @@ function renderFacturasDetalle(filas){
     const detalle=_facturasSinBodegaCache.map(o=>({
       'Punto de Venta (factura)': o.punto,
       'Código': o.codigo,
-      'Código de Homologación': o.homologo || 'SIN HOMÓLOGO',
+      'Código de Homologación': homologoSinValor(o.homologo) ? 'SIN HOMÓLOGO' : o.homologo,
       'Descripción': o.descripcion||'',
       'Cantidad Facturada': o.cantidad,
       'Facturas': o.facturas
