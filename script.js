@@ -3667,6 +3667,34 @@ function resolverBodegaReporte(punto, bodegas, cache){
   return r;
 }
 
+/* Descripción tal como viene en el Reporte de Dispensación, por código de artículo.
+   Se usa como respaldo cuando el código no está homologado y por eso no tiene
+   Descripción DCI en la tabla Homólogo. */
+function mapaDescripcionReporte(){
+  const m=new Map();
+  (filteredRowsCache||[]).forEach(r=>{
+    const c=normValue(r.codigoArticulo);
+    if(!c || m.has(c)) return;
+    const d=String(r.descripcionReporte||'').trim();
+    if(d) m.set(c, d);
+  });
+  return m;
+}
+
+/* Descripción tal como viene en el Reporte de Dispensación, por código de artículo.
+   Se usa como respaldo cuando el código no está homologado y por eso no tiene
+   Descripción DCI en la tabla Homólogo. */
+function mapaDescripcionReporte(){
+  const m=new Map();
+  (filteredRowsCache||[]).forEach(r=>{
+    const c=normValue(r.codigoArticulo);
+    if(!c || m.has(c)) return;
+    const d=String(r.descripcionReporte||'').trim();
+    if(d) m.set(c, d);
+  });
+  return m;
+}
+
 function renderFacturasDetalle(filas){
   const tb=document.querySelector('#tblFacturasDetalle tbody');
   if(!tb) return;
@@ -3769,14 +3797,22 @@ function renderFacturasDetalle(filas){
   const btnSB=document.getElementById('btnDescargarPuntosSinBodega');
   if(btnSB) btnSB.style.display = sinBodegaLista.length ? '' : 'none';
 
-  lista.forEach(o=>{ o.pctSubsanar = pctSubsanarVal(o.pendiente, o.cantidad); });
-  lista.sort((a,b)=>
+  lista.forEach(o=>{ o.pctSubsanar = pctSubsanarVal(o.pendiente, o.cantidad); });  lista.sort((a,b)=>
     (b.pendiente-a.pendiente) ||
     a.punto.localeCompare(b.punto,'es') ||
     a.factura.localeCompare(b.factura,'es') ||
     a.codigo.localeCompare(b.codigo,'es')
   );
   _facturasDetalleCache=lista;
+
+  /* Códigos sin homologar: la celda de Código de Homologación dice SIN HOMÓLOGO y,
+     cuando no hay Descripción DCI, se muestra la descripción tal como viene en el
+     Reporte de Dispensación (y en último caso la de la factura). */
+  const descRep=mapaDescripcionReporte();
+  lista.forEach(o=>{
+    o.homologoTxt = (o.homologo && o.homologo!==o.codigo) ? o.homologo : 'SIN HOMÓLOGO';
+    o.descripcionMostrar = o.descripcionDci || descRep.get(o.codigo) || String(o.descripcion||'').trim() || '—';
+  });
 
   if(diagEl){
     let t='';
@@ -3791,8 +3827,8 @@ function renderFacturasDetalle(filas){
   let h=visibles.map(o=>
     '<tr><td class="txt">'+escHtml(o.factura)+'</td>'+
     '<td class="txt">'+escHtml(o.codigo)+'</td>'+
-    '<td class="txt">'+escHtml(o.homologo && o.homologo!==o.codigo ? o.homologo : '—')+'</td>'+
-    '<td class="txt">'+escHtml(o.descripcionDci || '—')+'</td>'+
+    '<td class="txt">'+escHtml(o.homologoTxt)+'</td>'+
+    '<td class="txt">'+escHtml(o.descripcionMostrar)+'</td>'+
     '<td>'+fmtInt(o.cantidad)+'</td>'+
     '<td class="txt">'+escHtml(o.punto)+'</td>'+
     '<td><b>'+fmtInt(o.pendiente)+'</b></td>'+
@@ -3823,8 +3859,8 @@ function renderFacturasDetalle(filas){
     const detalle=_facturasDetalleCache.map(o=>({
       'Factura': o.factura,
       'Código': o.codigo,
-      'Código de Homologación': (o.homologo && o.homologo!==o.codigo) ? o.homologo : '',
-      'Descripción DCI': o.descripcionDci||'',
+      'Código de Homologación': o.homologoTxt || ((o.homologo && o.homologo!==o.codigo) ? o.homologo : 'SIN HOMÓLOGO'),
+      'Descripción DCI': (o.descripcionMostrar && o.descripcionMostrar!=='—') ? o.descripcionMostrar : (o.descripcionDci||''),
       'Descripción': o.descripcion||'',
       'Cantidad': o.cantidad,
       'Punto de Venta': o.punto,
@@ -3850,7 +3886,7 @@ function renderFacturasDetalle(filas){
     const detalle=_facturasSinBodegaCache.map(o=>({
       'Punto de Venta (factura)': o.punto,
       'Código': o.codigo,
-      'Código de Homologación': o.homologo||'',
+      'Código de Homologación': o.homologo || 'SIN HOMÓLOGO',
       'Descripción': o.descripcion||'',
       'Cantidad Facturada': o.cantidad,
       'Facturas': o.facturas
