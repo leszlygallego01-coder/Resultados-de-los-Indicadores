@@ -976,7 +976,8 @@ function renderFechaDatos(){
 
   const fechaTxt = info ? pqFechaCorta(info.iso) : '';
   const recordatorio='El administrador publica un paquete <b>nuevo cada día</b> en la carpeta '
-    +'<b>Resultados indicadores</b>, por eso el cargue debe hacerse a diario.';
+    +'<b>Resultados indicadores</b>, por eso el cargue debe hacerse a diario'
+    +(BORRADO_ESTRICTO_24H ? ' y los datos se <b>borran solos al cumplir '+HORAS_VIGENCIA_DATOS+' horas</b>.' : '.');
 
   if(_pqAvisoNuevo){
     aviso.classList.add('nuevo');
@@ -1037,8 +1038,56 @@ function pqAvisarDatosVencidos(){
   showToast('Los datos en pantalla son del '+pqFechaCorta(info.iso)+' ('+pqTextoHace(info.horas)+'): trae de nuevo el paquete de la carpeta Resultados indicadores.', true);
 }
 // El texto “hace X” se refresca solo, y cada 15 minutos se revisa la carpeta.
-setInterval(()=>{ try{ renderFechaDatos(); }catch(e){} }, 60000);
+setInterval(()=>{
+  try{
+    renderFechaDatos();
+    // Con la página abierta también se vigila el cumplimiento de las 24 horas.
+    pqAplicarBorradoEstricto().then(borro=>{
+      if(borro){ try{ showEmptyResults(); updateTopStatus(); renderFechaDatos(); }catch(e){} }
+    }).catch(()=>{});
+  }catch(e){}
+}, 60000);
 setInterval(()=>{ try{ pqRevisarCarpetaNueva(); }catch(e){} }, 15*60000);
+
+/* -------------------------------------------------------------------------
+   BORRADO ESTRICTO A LAS 24 HORAS
+   Los datos del paquete son temporales. Cuando el paquete guardado en este
+   navegador cumple 24 horas se BORRA por completo (tablas locales, memoria y la
+   marca del paquete) y el tablero queda vacío hasta que se traiga uno nuevo de
+   la carpeta “Resultados indicadores”. Así nadie consulta ni exporta cifras
+   viejas por descuido. El borrado es solo de ESTE navegador: no toca los
+   archivos de la carpeta ni los datos del administrador.
+   ------------------------------------------------------------------------- */
+const BORRADO_ESTRICTO_24H = true;
+
+/* Borra todo lo que el visor guarda en este navegador. */
+async function pqBorrarDatosLocales(){
+  const keys=Object.keys(state.loaded||{});
+  for(let i=0;i<keys.length;i++){
+    const k=keys[i];
+    try{ memoryStore.delete(k); }catch(e){}
+    try{ await localDeleteRecord(k); }catch(e){}
+    delete state.loaded[k];
+  }
+  ['inventario_data','inventario_drive_files','reporte_drive_files',PAQUETE_META_KEY]
+    .forEach(n=>{ try{ localStorage.removeItem(n); }catch(e){} });
+  state.loaded={};
+  filteredRowsCache=[];
+}
+/* Aplica la regla de las 24 horas. Devuelve true si borró los datos. */
+async function pqAplicarBorradoEstricto(){
+  if(!BORRADO_ESTRICTO_24H) return false;
+  if(!Object.keys(state.loaded||{}).length) return false;
+  const info=pqFechaDatos();
+  if(!info || info.horas<HORAS_VIGENCIA_DATOS) return false;
+  const fechaTxt=pqFechaCorta(info.iso);
+  await pqBorrarDatosLocales();
+  _pqAvisoVencidoMostrado=true;
+  try{ renderFechaDatos(); }catch(e){}
+  showToast('Los datos del '+fechaTxt+' cumplieron '+HORAS_VIGENCIA_DATOS
+    +' horas y se borraron de este navegador. Trae de nuevo el paquete de la carpeta “Resultados indicadores” para volver a ver el tablero.', true);
+  return true;
+}
 
 // Las fechas viajan marcadas dentro del paquete; se devuelven como objetos Date.
 function backupDecodeRows(rows){
@@ -9741,6 +9790,9 @@ document.getElementById('btnCerrarSesion')?.addEventListener('click', ()=>{
   // Si este navegador ya abrio un paquete del panel, se recupera tal cual.
   const hayPaquete = await paqueteCargarGuardado();
   if(hayPaquete){ try{ stopFirestoreListener(); }catch(e){} }
+  // Borrado estricto: si lo guardado ya cumplió 24 horas se elimina ANTES de
+  // pintar o calcular cualquier cifra.
+  try{ await pqAplicarBorradoEstricto(); }catch(e){ console.warn(e); }
   updateTopStatus();
   if(!hayPaquete) startFirestoreListener();
   showEmptyResults();
