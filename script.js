@@ -61,6 +61,18 @@ function corregirEps(epsRaw){
   return original;
 }
 
+/* Departamento tal como viene en la tabla Bodega y Zona. Se aceptan varias formas de
+   nombrar el campo (departamento, DEPARTAMENTO, depto, dpto) para que el visor funcione
+   tanto con paquetes nuevos como con archivos guardados antes de este cambio. */
+function valorDepartamentoFila(r){
+  if(!r) return '';
+  const c=[r.departamento, r.DEPARTAMENTO, r.Departamento, r.depto, r.DEPTO, r.dpto, r.DPTO];
+  for(let i=0;i<c.length;i++){
+    const v=String(c[i]===undefined||c[i]===null?'':c[i]).trim();
+    if(v) return v;
+  }
+  return '';
+}
 const DATASETS = [
   {
     key: 'reporte', tabla: 'Tabla_1', title: 'Reporte de Dispensación', required: true, accumulate: true,
@@ -98,9 +110,14 @@ const DATASETS = [
   },
   {
     key: 'bodegas', tabla: 'Tabla_5', title: 'Bodega y Zona', required: true,
-    desc: 'Catálogo de bodegas con su zona asociada.',
-    cols: ['Bodega','Zona'],
-    fields: { bodega: ['BODEGA'], zona: ['ZONA'] }
+    desc: 'Catálogo de bodegas con su zona y su departamento asociados.',
+    cols: ['Bodega','Zona','Departamento'],
+    fields: {
+      bodega: ['BODEGA'],
+      zona: ['ZONA'],
+      // Departamento de la bodega: alimenta el filtro global de Departamento del visor.
+      departamento: ['DEPARTAMENTO','DEPARTAMENTO BODEGA','DEPTO','DPTO','DEPARTAMENTO/ZONA']
+    }
   },
   {
     key: 'agotados', tabla: 'Tabla_7', title: 'Estado de la Molécula', required: true,
@@ -1633,6 +1650,37 @@ function exportarInforme(nombreBase, hojas){
    Filtro de Bodega del visor: lista desplegable + búsqueda por texto.
    La lista tiene prioridad; si no hay bodega elegida se usa el texto escrito.
    ========================================================================= */
+/* =========================================================================
+   Filtro global de DEPARTAMENTO (columna Departamento de la tabla Bodega y Zona)
+   -------------------------------------------------------------------------
+   Es un filtro estructural: se aplica en el ORIGEN de la información, de modo que
+   TODAS las secciones del visor (indicadores, seguimiento, reporte comparativo,
+   cohortes, base de cuentas, base de supervisores, traslados, facturas e inventario
+   físico) quedan recortadas al departamento elegido sin tener que tocar cada vista.
+   ========================================================================= */
+function getDepartamentoFiltro(){
+  const el=document.getElementById('fDepartamento');
+  return el ? el.value : '';
+}
+// Departamento de una bodega por su nombre (para las secciones que no traen el campo).
+function deptoDeBodega(nombre){
+  const m=(typeof state!=='undefined' && state) ? state.bodegaDepto : null;
+  if(!m) return 'N/D';
+  return m.get(normValue(nombre)) || 'N/D';
+}
+// ¿La bodega indicada pertenece al departamento filtrado? Sin filtro, siempre sí.
+function bodegaEnDepartamento(nombre){
+  const d=getDepartamentoFiltro();
+  return !d || deptoDeBodega(nombre)===d;
+}
+/* Filas base de las descargas: si todavia no se han aplicado filtros se usan las filas
+   procesadas, pero SIEMPRE recortadas al departamento elegido. */
+function filasBaseExport(){
+  if(typeof filteredRowsCache!=='undefined' && filteredRowsCache && filteredRowsCache.length) return filteredRowsCache;
+  const base=(typeof state!=='undefined' && state && state.processed && state.processed.rows) ? state.processed.rows : [];
+  const d=getDepartamentoFiltro();
+  return d ? base.filter(r=>(r.departamento||'N/D')===d) : base;
+}
 function getBodegaFiltro(){
   const sel=document.getElementById('fBodega');
   if(sel && sel.value) return normValue(sel.value);
@@ -1695,12 +1743,19 @@ async function calcularIndicadores(){
       if(cod && !codigoToDescripcionDci.has(cod)) codigoToDescripcionDci.set(cod, String(r.descripcionDci||'').trim());
     });
 
-    // ---- Tabla_5 Bodega y Zona ----
+    // ---- Tabla_5 Bodega y Zona (incluye el DEPARTAMENTO de la bodega) ----
     const bodegaToZona=new Map();
+    const bodegaToDepto=new Map();
     (byKey.bodegas||[]).forEach(r=>{
       const b=normValue(r.bodega);
-      if(b && !bodegaToZona.has(b)) bodegaToZona.set(b, String(r.zona||'').trim() || 'N/D');
+      if(!b) return;
+      if(!bodegaToZona.has(b)) bodegaToZona.set(b, String(r.zona||'').trim() || 'N/D');
+      if(!bodegaToDepto.has(b)) bodegaToDepto.set(b, valorDepartamentoFila(r) || 'N/D');
     });
+    /* Mapa bodega -> departamento disponible para todo el visor: lo usan las secciones
+       que arman sus propias filas (traslados, facturas, inventario físico) para poder
+       respetar el filtro global de Departamento. */
+    state.bodegaDepto=bodegaToDepto;
 
     // ---- Tabla_7 Estado de la Molécula ----
     const agotadoMap=new Map();
@@ -1791,6 +1846,8 @@ async function calcularIndicadores(){
         estadoDispensa, usuarioCreacion, codigoCie10,
         unidades, cantidadAutorizada, diferencia, lineaPendiente, noMedicamento, bodegaDetalle, bodegaNorm,
         zona: bodegaToZona.get(bodegaNorm) || 'N/D',
+        // Departamento de la bodega (tabla Bodega y Zona): base del filtro global.
+        departamento: bodegaToDepto.get(bodegaNorm) || 'N/D',
         existenciaPunto, existenciaBodega, sePuedeSubsanarPunto, sePuedeSubsanarBodega, tieneSoportes,
         fechaCargue, fechaSoporte, secCargue, secSoporte
       };
@@ -1900,6 +1957,9 @@ async function calcularIndicadores(){
     const epsGrupos=Array.from(new Set(rows.map(r=>r.epsGrupo).filter(Boolean))).sort();
     const cie10List=Array.from(new Set(rows.map(r=>r.codigoCie10).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
     const zonas=Array.from(new Set(rows.map(r=>r.zona).filter(Boolean))).sort();
+    /* Departamentos presentes en la información cargada (columna Departamento de la tabla
+       Bodega y Zona). Alimentan el filtro global de Departamento. */
+    const departamentos=Array.from(new Set(rows.map(r=>r.departamento).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
     const fechas=rows.map(r=>r.fecha).filter(Boolean);
     // Se recorre con un bucle en vez de Math.min(...fechas): con cientos de miles de filas
     // acumuladas el operador de propagacion desborda la pila ("Maximum call stack size exceeded").
@@ -1960,7 +2020,9 @@ async function calcularIndicadores(){
         moleculaPareto: p,
         // Zona de la bodega DESTINO (tabla Bodega y Zona). Permite agrupar y filtrar
         // los traslados recibidos por zona.
-        zonaDestino: bodegaToZona.get(normValue(r.bodegaDestino)) || 'N/D'
+        zonaDestino: bodegaToZona.get(normValue(r.bodegaDestino)) || 'N/D',
+        // Departamento de la bodega DESTINO: permite aplicar el filtro global de Departamento.
+        departamentoDestino: bodegaToDepto.get(normValue(r.bodegaDestino)) || 'N/D'
       };
     });
     const trasladosOrigenes = Array.from(new Set(trasladosRows.map(r=>r.bodegaOrigen).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
@@ -1987,7 +2049,7 @@ async function calcularIndicadores(){
     });
     const facturasPuntos = Array.from(new Set(facturasRows.map(r=>r.puntoVenta).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
 
-    state.processed={rows, rowsConsolidado, contratos, epsList, epsGrupos, cie10List, zonas, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
+    state.processed={rows, rowsConsolidado, contratos, epsList, epsGrupos, cie10List, zonas, departamentos, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
     populateFilters();
     populateTrasladosFilters();
     populateFacturasFilters();
@@ -2016,6 +2078,19 @@ function populateFilters(){
   selE.innerHTML='<option value="">Todos</option>'+p.epsList.map(c=>`<option value="${c}">${c}</option>`).join('');
   selEG.innerHTML='<option value="">Todas</option>'+p.epsGrupos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selZ.innerHTML='<option value="">Todas las zonas</option>'+p.zonas.map(z=>`<option value="${z}">${z}</option>`).join('');
+  // Filtro global de Departamento: opciones tomadas de la columna Departamento del catálogo.
+  const selD=document.getElementById('fDepartamento');
+  if(selD){
+    const prevD=selD.value;
+    const lista=p.departamentos||[];
+    /* Si el catálogo no trae la columna Departamento (o viene vacía) todas las bodegas
+       quedan en "N/D": en ese caso el filtro no aporta nada y se oculta. */
+    const hayDepto = lista.some(d=>d && d!=='N/D');
+    const wrap=document.getElementById('fDepartamentoWrap');
+    if(wrap) wrap.style.display = hayDepto ? '' : 'none';
+    selD.innerHTML='<option value="">Todos los departamentos</option>'+(hayDepto?lista:[]).map(d=>`<option value="${escHtml(d)}">${escHtml(d)}</option>`).join('');
+    selD.value = (hayDepto && lista.indexOf(prevD)>=0) ? prevD : '';
+  }
   // Filtro por mes: se arman las opciones con los meses realmente presentes en el reporte.
   const selM=document.getElementById('fMes');
   if(selM){
@@ -2027,10 +2102,48 @@ function populateFilters(){
     selM.value = meses.indexOf(prevMes)>=0 ? prevMes : '';
   }
   poblarSelectBodegas(p.rows);
+  // Las listas de zona y bodega se ajustan al departamento elegido.
+  ajustarZonaYBodegaPorDepartamento();
   if(p.minFecha) document.getElementById('fFechaDesde').value=dateToISO(p.minFecha);
   if(p.maxFecha) document.getElementById('fFechaHasta').value=dateToISO(p.maxFecha);
 }
 document.getElementById('btnAplicarFiltro').addEventListener('click', aplicarFiltrosYRenderizar);
+/* Al elegir un departamento las listas de ZONA y BODEGA se limitan a las bodegas de ese
+   departamento: así no se puede combinar un departamento con una zona que no le pertenece.
+   Si la zona o la bodega que estaban elegidas no existen en el departamento, se limpian. */
+function ajustarZonaYBodegaPorDepartamento(){
+  const p=state.processed; if(!p) return;
+  const depto=getDepartamentoFiltro();
+  const base=depto ? p.rows.filter(r=>(r.departamento||'N/D')===depto) : p.rows;
+  const selZ=document.getElementById('fZona');
+  if(selZ){
+    const prev=selZ.value;
+    const zonas=Array.from(new Set(base.map(r=>r.zona).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
+    selZ.innerHTML='<option value="">Todas las zonas</option>'+zonas.map(z=>`<option value="${escHtml(z)}">${escHtml(z)}</option>`).join('');
+    selZ.value = zonas.indexOf(prev)>=0 ? prev : '';
+  }
+  poblarSelectBodegas(base);
+}
+/* El filtro de Departamento se aplica en el origen de los datos, por lo que al cambiarlo
+   se repintan TODAS las secciones: las que dependen de los filtros, el consolidado, los
+   traslados, las facturas y el inventario físico. */
+(function initFiltroDepartamento(){
+  const sel=document.getElementById('fDepartamento');
+  if(!sel) return;
+  sel.addEventListener('change', ()=>{
+    ajustarZonaYBodegaPorDepartamento();
+    if(typeof populateTrasladosFilters==='function') populateTrasladosFilters();
+    if(typeof populateFacturasFilters==='function') populateFacturasFilters();
+    aplicarFiltrosYRenderizar();
+    if(typeof renderIndicadorTraslados==='function') renderIndicadorTraslados();
+    if(typeof refrescarInvFisico==='function') refrescarInvFisico(true);
+    const modal=document.getElementById('periodicModal');
+    if(modal && modal.classList.contains('show') && typeof renderReportePeriodico==='function'){
+      if(typeof populatePeriodicoFilters==='function') populatePeriodicoFilters();
+      renderReportePeriodico();
+    }
+  });
+})();
 // Corte global: define hasta qué corte del mes se considera la información cargada.
 // Afecta las columnas de totales, el gráfico de cumplimiento y el Reporte Comparativo.
 function getCorteGlobal(){
@@ -2118,6 +2231,8 @@ document.getElementById('btnLimpiarFiltro').addEventListener('click', ()=>{
   document.getElementById('fContrato').value=''; document.getElementById('fEps').value=''; document.getElementById('fEpsGrupo').value=''; limpiarCie10();
   const selMesLimpiar=document.getElementById('fMes'); if(selMesLimpiar) selMesLimpiar.value='';
   document.getElementById('fBodegaSearch').value=''; document.getElementById('fBodega').value=''; document.getElementById('fZona').value='';
+  const selDepto=document.getElementById('fDepartamento');
+  if(selDepto){ selDepto.value=''; ajustarZonaYBodegaPorDepartamento(); }
   aplicarFiltrosYRenderizar();
 });
 document.getElementById('fBodegaSearch').addEventListener('input', renderAllTablesFromCache);
@@ -2147,11 +2262,23 @@ let filteredRowsCache=[];
    (el comparativo necesita la primera y la ultima version de cada linea) y
    filasConsolidadoVigentes() solo la ultima version de cada linea.          */
 const CORTE_CONSOLIDADO = 3;   // los consolidados siempre usan el corte final
+/* Caché del consolidado ya recortado por departamento: el filtro se aplica también a los
+   consolidados (Reporte Comparativo, Reasignación mensual y consumo promedio de
+   supervisores) y esas vistas piden las filas muchas veces por render. */
+let _consolidadoDeptoCache={base:null, depto:null, rows:null};
+function _recorteDepartamento(base){
+  const depto=getDepartamentoFiltro();
+  if(!depto) return base;
+  if(_consolidadoDeptoCache.base===base && _consolidadoDeptoCache.depto===depto) return _consolidadoDeptoCache.rows;
+  const rows=base.filter(r=>(r.departamento||'N/D')===depto);
+  _consolidadoDeptoCache={base, depto, rows};
+  return rows;
+}
 function filasConsolidado(){
   const p = (typeof state!=='undefined' && state) ? state.processed : null;
   if(!p) return [];
-  if(p.rowsConsolidado && p.rowsConsolidado.length) return p.rowsConsolidado;
-  return (p.rows && p.rows.length) ? p.rows : [];
+  if(p.rowsConsolidado && p.rowsConsolidado.length) return _recorteDepartamento(p.rowsConsolidado);
+  return (p.rows && p.rows.length) ? _recorteDepartamento(p.rows) : [];
 }
 function filasConsolidadoVigentes(){
   return filasConsolidado().filter(r=>r.versionVigente!==false);
@@ -2169,8 +2296,11 @@ function aplicarFiltrosYRenderizar(){
   const selMes=document.getElementById('fMes');
   const mesSel=selMes? selMes.value : '';
   const cie10Sel=cie10Seleccionados;
+  // Departamento (tabla Bodega y Zona): recorta la base para TODAS las secciones.
+  const depto=getDepartamentoFiltro();
 
   filteredRowsCache = p.rows.filter(r=>{
+    if(depto && (r.departamento||'N/D')!==depto) return false;
     if(mesSel && mesKey(r.fecha)!==mesSel) return false;
     if(desde && r.fecha && r.fecha<desde) return false;
     if(hasta && r.fecha && r.fecha>hasta) return false;
@@ -2805,20 +2935,34 @@ function renderIndicadorInactivas(rowsAll, bodegaSearch, zona){
    ========================================================================= */
 let _trasladosUsuarioCache=[];
 
+/* Traslados que quedan dentro del filtro global de Departamento (por la bodega DESTINO).
+   Todas las vistas de traslados parten de aquí, así el filtro de departamento también
+   aplica en esta sección. */
+function trasladosDelDepartamento(){
+  const p=state.processed;
+  const all=(p && p.traslados) ? p.traslados : [];
+  const depto=getDepartamentoFiltro();
+  return depto ? all.filter(r=>(r.departamentoDestino||'N/D')===depto) : all;
+}
+
 function populateTrasladosFilters(){
   const p=state.processed; if(!p) return;
   const selO=document.getElementById('fTrasladoOrigen');
   const selD=document.getElementById('fTrasladoDestino');
   const selZ=document.getElementById('fTrasladoZona');
+  // Las listas se arman solo con los traslados del departamento filtrado.
+  const delDepto=trasladosDelDepartamento();
+  const zonasDepto=Array.from(new Set(delDepto.filter(r=>r.bodegaDestino).map(r=>r.zonaDestino))).sort((a,b)=>a.localeCompare(b,'es'));
+  const origenesDepto=Array.from(new Set(delDepto.map(r=>r.bodegaOrigen).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
   if(selZ){
     const prev=selZ.value||'';
-    const ops=p.trasladosZonas||[];
+    const ops=zonasDepto;
     selZ.innerHTML='<option value="">Todas las zonas</option>'+ops.map(o=>'<option value="'+escHtml(o)+'">'+escHtml(o)+'</option>').join('');
     selZ.value = ops.includes(prev) ? prev : '';
   }
   if(selO){
     const prev=selO.value||'';
-    const ops=p.trasladosOrigenes||[];
+    const ops=origenesDepto;
     selO.innerHTML='<option value="">Todas las bodegas origen</option>'+ops.map(o=>'<option value="'+escHtml(o)+'">'+escHtml(o)+'</option>').join('');
     selO.value = ops.includes(prev) ? prev : '';
   }
@@ -2834,9 +2978,10 @@ function fillTrasladoDestinos(){
   const selD=document.getElementById('fTrasladoDestino'); if(!selD) return;
   const zona=(document.getElementById('fTrasladoZona')||{}).value||'';
   const prev=selD.value||'';
-  let ops=p.trasladosDestinos||[];
+  const delDepto=trasladosDelDepartamento();
+  let ops=Array.from(new Set(delDepto.map(r=>r.bodegaDestino).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
   if(zona){
-    const permitidas=new Set((p.traslados||[]).filter(r=>r.zonaDestino===zona).map(r=>r.bodegaDestino));
+    const permitidas=new Set(delDepto.filter(r=>r.zonaDestino===zona).map(r=>r.bodegaDestino));
     ops=ops.filter(o=>permitidas.has(o));
   }
   selD.innerHTML='<option value="">Todas las bodegas destino</option>'+ops.map(o=>'<option value="'+escHtml(o)+'">'+escHtml(o)+'</option>').join('');
@@ -2847,7 +2992,7 @@ function renderIndicadorTraslados(){
   const tb=document.querySelector('#tblTrasladosUsuario tbody');
   if(!tb) return;
   const p=state.processed;
-  const all=(p && p.traslados) ? p.traslados : [];
+  const all=trasladosDelDepartamento();
   const statsEl=document.getElementById('statsTraslados');
   const diagEl=document.getElementById('trasladosDiag');
 
@@ -3071,8 +3216,18 @@ async function ensureFacturasData(){
 }
 function getFacturasRows(){
   const p=state.processed;
-  if(p && p.facturas && p.facturas.length) return p.facturas;
-  return _facturasStandalone;
+  const base=(p && p.facturas && p.facturas.length) ? p.facturas : _facturasStandalone;
+  return facturasDelDepartamento(base);
+}
+/* Facturas del departamento filtrado: el punto de venta se cruza con el catálogo Bodega y
+   Zona para saber su departamento. Si NINGUN punto de venta está en el catálogo (los
+   nombres no coinciden) no se filtra, para no dejar la sección vacía sin explicación. */
+function facturasDelDepartamento(base){
+  const depto=getDepartamentoFiltro();
+  if(!depto || !base || !base.length) return base||[];
+  const conDepto=base.filter(r=>deptoDeBodega(r.puntoVenta)!=='N/D');
+  if(!conDepto.length) return base;
+  return base.filter(r=>deptoDeBodega(r.puntoVenta)===depto);
 }
 
 function populateFacturasFilters(){
@@ -3080,7 +3235,8 @@ function populateFacturasFilters(){
   const sel=document.getElementById('fFacturaPunto');
   if(sel){
     const prev=sel.value||'';
-    const ops=p.facturasPuntos||[];
+    // La lista de puntos de venta se limita al departamento filtrado.
+    const ops=Array.from(new Set(getFacturasRows().map(r=>r.puntoVenta).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
     sel.innerHTML='<option value="">Todos los puntos de venta</option>'+ops.map(o=>'<option value="'+escHtml(o)+'">'+escHtml(o)+'</option>').join('');
     sel.value = ops.includes(prev) ? prev : '';
   }
@@ -5035,9 +5191,7 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
 document.getElementById('btnExportarABC').addEventListener('click', ()=>{
  try{
   // Si aún no se han aplicado filtros, se usan directamente las filas procesadas.
-  let baseRows = (filteredRowsCache && filteredRowsCache.length)
-    ? filteredRowsCache
-    : ((state && state.processed && state.processed.rows) ? state.processed.rows : []);
+  let baseRows = filasBaseExport();
   if(!baseRows.length){ showToast('Primero pulsa "Calcular indicadores" para tener datos del Análisis ABC.', true); return; }
   if(typeof XLSX==='undefined'){ showToast('No se pudo cargar la librería de Excel. Revisa tu conexión a internet y recarga.', true); return; }
   const bodegaSearch = getBodegaFiltro();
@@ -5140,9 +5294,7 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
    El Excel trae dos hojas de resumen y una de detalle línea por línea.          */
 document.getElementById('btnExportarCantidadCero').addEventListener('click', ()=>{
  try{
-  let baseRows = (filteredRowsCache && filteredRowsCache.length)
-    ? filteredRowsCache
-    : ((state && state.processed && state.processed.rows) ? state.processed.rows : []);
+  let baseRows = filasBaseExport();
   if(!baseRows.length){ showToast('Primero pulsa "Calcular indicadores" para tener datos.', true); return; }
   if(typeof XLSX==='undefined'){ showToast('No se pudo cargar la librería de Excel. Revisa tu conexión a internet y recarga.', true); return; }
   const bodegaSearch = getBodegaFiltro();
@@ -5757,7 +5909,8 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
   if(!btn) return;
   btn.addEventListener('click', ()=>{
     const p=state.processed;
-    const all=(p && p.traslados) ? p.traslados : [];
+    // Se respeta el filtro global de Departamento (bodega destino), igual que en pantalla.
+    const all=trasladosDelDepartamento();
     if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
 
     const zona=(document.getElementById('fTrasladoZona')||{}).value||'';
@@ -5819,7 +5972,8 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
   if(!btn) return;
   btn.addEventListener('click', ()=>{
     const p=state.processed;
-    const all=(p && p.traslados) ? p.traslados : [];
+    // Se respeta el filtro global de Departamento (bodega destino), igual que en pantalla.
+    const all=trasladosDelDepartamento();
     if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
 
     const origen=(document.getElementById('fTrasladoOrigen')||{}).value||'';
@@ -5916,9 +6070,12 @@ async function ensureInvSistemaData(force){
   });
   const recB=await idbGet('bodegas');
   const zonaMap=new Map();
+  const deptoMap=new Map();
   ((recB && recB.rows)?recB.rows:[]).forEach(r=>{
     const b=normValue(r.bodega);
-    if(b && !zonaMap.has(b)) zonaMap.set(b, String(r.zona||'').trim() || 'N/D');
+    if(!b) return;
+    if(!zonaMap.has(b)) zonaMap.set(b, String(r.zona||'').trim() || 'N/D');
+    if(!deptoMap.has(b)) deptoMap.set(b, valorDepartamentoFila(r) || 'N/D');
   });
   // Un mismo código puede venir varias veces (lotes / vencimientos): se suman las unidades.
   const sistema=new Map();
@@ -5931,7 +6088,7 @@ async function ensureInvSistemaData(force){
     if(!sistema.has(k)) sistema.set(k, {bodega: bodega || 'SIN BODEGA', bodegaNorm:bn, codigo:cod, unidades:0});
     sistema.get(k).unidades += toNumber(r.unidades);
   });
-  _invSistemaCache={ sistema, descMap, zonaMap, filas:rowsI.length, fileName:(recI && recI.fileName) || '' };
+  _invSistemaCache={ sistema, descMap, zonaMap, deptoMap, filas:rowsI.length, fileName:(recI && recI.fileName) || '' };
   return _invSistemaCache;
 }
 
@@ -5963,6 +6120,10 @@ function construirComparativoInvFisico(){
   const sistema=cache ? cache.sistema : new Map();
   const descMap=cache ? cache.descMap : new Map();
   const zonaMap=cache ? cache.zonaMap : new Map();
+  const deptoMap=(cache && cache.deptoMap) ? cache.deptoMap : new Map();
+  // Filtro global de Departamento: solo se comparan las bodegas de ese departamento.
+  const deptoSel=getDepartamentoFiltro();
+  const enDepto=(bn)=> !deptoSel || (deptoMap.get(bn) || 'N/D')===deptoSel;
   // El comparativo se limita a las bodegas que vienen en el conteo físico:
   // así no aparecen como "faltantes" bodegas que simplemente no se contaron.
   const bodegasFisico=new Map();   // bodegaNorm -> nombre visible
@@ -5970,6 +6131,7 @@ function construirComparativoInvFisico(){
   const descFisico=new Map();
   _invFisicoRows.forEach(r=>{
     if(!r.codigo) return;
+    if(!enDepto(r.bodegaNorm)) return;
     if(!bodegasFisico.has(r.bodegaNorm)) bodegasFisico.set(r.bodegaNorm, r.bodega);
     const k=r.bodegaNorm+'|'+r.codigo;
     fisico.set(k, (fisico.get(k)||0) + r.unidades);
@@ -8614,7 +8776,12 @@ function populatePeriodicoFilters(){
   }
   selEG.innerHTML='<option value="">Todas</option>'+p.epsGrupos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selM.innerHTML='<option value="">Todas</option>'+p.contratos.map(c=>`<option value="${c}">${c}</option>`).join('');
-  selZ.innerHTML='<option value="">Todas</option>'+p.zonas.map(z=>`<option value="${z}">${z}</option>`).join('');
+  /* Las zonas de esta ventana salen del consolidado ya recortado por el filtro global de
+     Departamento, para no ofrecer zonas que no pertenecen al departamento elegido. */
+  const zonasRP=Array.from(new Set(filasRP.map(r=>r.zona).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
+  const prevZ=selZ.value||'';
+  selZ.innerHTML='<option value="">Todas</option>'+zonasRP.map(z=>`<option value="${escHtml(z)}">${escHtml(z)}</option>`).join('');
+  selZ.value = zonasRP.indexOf(prevZ)>=0 ? prevZ : '';
   // Solo bodegas con dispensas activas: las INACTIVO no entran en este reporte.
   const bodegas=[...new Set(soloActivas(filasRP).map(r=>r.bodegaDetalle).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
   selB.innerHTML='<option value="">Todas</option>'+bodegas.map(b=>`<option value="${b}">${b}</option>`).join('');
