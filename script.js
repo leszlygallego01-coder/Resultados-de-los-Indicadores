@@ -821,6 +821,7 @@ function updateTopStatus(){
     const totalRows=Object.values(state.loaded).reduce((a,b)=>a+b.rowCount,0);
     txt.textContent=n+' fuente(s) cargadas · '+fmtInt(totalRows)+' filas en total'+modo;
   }
+  try{ renderFechaDatos(); }catch(e){}
 }
 function renderDiagPanel(diag){
   const el=document.getElementById('diagPanel');
@@ -904,6 +905,140 @@ async function loadDriveOnlyFromLocal() {
    ========================================================================= */
 const PAQUETE_APP_ID = 'medisfarma-paquete';
 const PAQUETE_META_KEY = 'medisfarma_paquete_meta'; // recuerda el ultimo paquete abierto
+
+/* -------------------------------------------------------------------------
+   Fecha de los datos y aviso del cargue diario
+   El administrador publica un paquete NUEVO en la carpeta “Resultados
+   indicadores” todos los dias, asi que el cargue hay que repetirlo a diario.
+   Aqui se muestra la fecha/hora del paquete que se esta viendo, se avisa
+   cuando ya paso de 24 horas y, si la carpeta tiene un archivo mas reciente,
+   se avisa que hay informacion nueva.
+   ------------------------------------------------------------------------- */
+const HORAS_VIGENCIA_DATOS = 24;                        // vigencia del cargue
+let _pqDriveModifiedPend = '';   // fecha del archivo de la carpeta que se esta abriendo
+let _pqAvisoNuevo = '';          // fecha del paquete mas reciente detectado en la carpeta
+let _pqAvisoVencidoMostrado = false;
+
+function pqMetaActual(){
+  try{ return JSON.parse(localStorage.getItem(PAQUETE_META_KEY)||'null'); }catch(e){ return null; }
+}
+/* Devuelve la fecha del paquete que se esta viendo: primero la fecha en que el
+   administrador lo genero y, si no viene, la fecha en que se trajo o la de las
+   tablas guardadas. */
+function pqFechaDatos(){
+  const meta=pqMetaActual();
+  let iso=(meta && (meta.generadoEn || meta.abiertoEn)) || '';
+  if(!iso){
+    const isos=Object.values(state.loaded||{}).map(d=>String((d&&d.updatedAt)||'')).filter(Boolean).sort();
+    iso = isos.length ? isos[isos.length-1] : '';
+  }
+  const d = iso ? new Date(iso) : null;
+  if(!d || isNaN(d.getTime())) return null;
+  return {
+    iso, fecha:d,
+    generadoEn:(meta && meta.generadoEn)||'',
+    abiertoEn:(meta && meta.abiertoEn)||'',
+    horas:(Date.now()-d.getTime())/3600000
+  };
+}
+// “hace 3 h 20 min” en texto corto.
+function pqTextoHace(horas){
+  if(!(horas>=0)) return '';
+  if(horas<1) return 'hace '+Math.max(1,Math.round(horas*60))+' min';
+  if(horas<48) return 'hace '+Math.floor(horas)+' h '+Math.round((horas-Math.floor(horas))*60)+' min';
+  return 'hace '+Math.floor(horas/24)+' dia(s)';
+}
+/* Pinta el chip con la fecha de los datos y el aviso del cargue diario. */
+function renderFechaDatos(){
+  const chip=document.getElementById('dataFechaChip');
+  const chipTxt=document.getElementById('dataFechaTxt');
+  const aviso=document.getElementById('avisoCargueDiario');
+  const avisoTxt=document.getElementById('avisoCargueTxt');
+  const avisoIcon=document.getElementById('avisoCargueIcon');
+  const info=pqFechaDatos();
+  const hayDatos=Object.keys(state.loaded||{}).length>0;
+
+  if(chip && chipTxt){
+    if(info){
+      chip.style.display='';
+      chipTxt.textContent=pqFechaCorta(info.iso)+' · '+pqTextoHace(info.horas);
+      chip.classList.toggle('vencido', info.horas>=HORAS_VIGENCIA_DATOS);
+      chip.title='Los resultados que ves se trajeron de la carpeta “Resultados indicadores”.'
+        + (info.generadoEn ? '\nPaquete generado: '+pqFechaCorta(info.generadoEn) : '')
+        + (info.abiertoEn ? '\nTraído a este navegador: '+pqFechaCorta(info.abiertoEn) : '');
+    }else{ chip.style.display='none'; }
+  }
+
+  if(!aviso || !avisoTxt) return;
+  if(!hayDatos){ aviso.style.display='none'; return; }
+  aviso.style.display='flex';
+  aviso.classList.remove('vencido','nuevo');
+
+  const fechaTxt = info ? pqFechaCorta(info.iso) : '';
+  const recordatorio='El administrador publica un paquete <b>nuevo cada día</b> en la carpeta '
+    +'<b>Resultados indicadores</b>, por eso el cargue debe hacerse a diario.';
+
+  if(_pqAvisoNuevo){
+    aviso.classList.add('nuevo');
+    if(avisoIcon) avisoIcon.textContent='⬇';
+    avisoTxt.innerHTML='<b>La carpeta Resultados indicadores tiene información nueva</b> '
+      +'(paquete del '+escHtml(pqFechaCorta(_pqAvisoNuevo))+'). '
+      +'Estás viendo el del '+escHtml(fechaTxt)+'. Vuelve a traer el paquete para actualizar el tablero.';
+    return;
+  }
+  if(info && info.horas>=HORAS_VIGENCIA_DATOS){
+    aviso.classList.add('vencido');
+    if(avisoIcon) avisoIcon.textContent='⚠';
+    avisoTxt.innerHTML='<b>Estos datos ya tienen más de '+HORAS_VIGENCIA_DATOS+' horas</b> '
+      +'(paquete del '+escHtml(fechaTxt)+', '+escHtml(pqTextoHace(info.horas))+'). '
+      +recordatorio+' Vuelve a traer el paquete de la carpeta antes de sacar conclusiones o exportar informes.';
+    return;
+  }
+  if(avisoIcon) avisoIcon.textContent='ℹ';
+  avisoTxt.innerHTML='Estás viendo el paquete del <b>'+escHtml(fechaTxt||'—')+'</b>'
+    +(info?' ('+escHtml(pqTextoHace(info.horas))+')':'')+'. '+recordatorio;
+}
+/* Revisa en silencio si la carpeta ya tiene un paquete mas reciente. Solo se
+   hace con un permiso de Google vigente: nunca abre ventanas ni molesta al
+   usuario si la sesion de Drive todavia no esta autorizada. */
+async function pqRevisarCarpetaNueva(){
+  try{
+    if(!_pqToken || (Date.now()-_pqTokenAt) > 45*60*1000) return;
+    const info=pqFechaDatos();
+    if(!info) return;
+    const q="'"+DRIVE_FOLDER_PAQUETE+"' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'";
+    const url='https://www.googleapis.com/drive/v3/files?q='+encodeURIComponent(q)
+      + '&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=5'
+      + '&supportsAllDrives=true&includeItemsFromAllDrives=true';
+    const lista=await (await pqDriveFetch(url, _pqToken)).json();
+    const archivos=(lista.files||[]);
+    if(!archivos.length) return;
+    const masNuevo=archivos.map(a=>String(a.modifiedTime||'')).filter(Boolean).sort().pop();
+    if(!masNuevo) return;
+    const meta=pqMetaActual();
+    const yaVisto=(meta && meta.driveModifiedTime) || info.iso;
+    if(new Date(masNuevo).getTime() > new Date(yaVisto).getTime()+60000){
+      if(_pqAvisoNuevo!==masNuevo){
+        _pqAvisoNuevo=masNuevo;
+        showToast('La carpeta Resultados indicadores tiene información nueva (paquete del '+pqFechaCorta(masNuevo)+'). Vuelve a traerlo para actualizar el tablero.');
+      }
+      renderFechaDatos();
+    }
+  }catch(e){ /* si Drive no responde, el aviso simplemente no aparece */ }
+}
+/* Al abrir la pagina con datos vencidos se muestra un recordatorio para obligar
+   al cargue diario, sin borrar nada de lo que ya estaba cargado. */
+function pqAvisarDatosVencidos(){
+  if(_pqAvisoVencidoMostrado) return;
+  const info=pqFechaDatos();
+  if(!info || info.horas<HORAS_VIGENCIA_DATOS) return;
+  if(!Object.keys(state.loaded||{}).length) return;
+  _pqAvisoVencidoMostrado=true;
+  showToast('Los datos en pantalla son del '+pqFechaCorta(info.iso)+' ('+pqTextoHace(info.horas)+'): trae de nuevo el paquete de la carpeta Resultados indicadores.', true);
+}
+// El texto “hace X” se refresca solo, y cada 15 minutos se revisa la carpeta.
+setInterval(()=>{ try{ renderFechaDatos(); }catch(e){} }, 60000);
+setInterval(()=>{ try{ pqRevisarCarpetaNueva(); }catch(e){} }, 15*60000);
 
 // Las fechas viajan marcadas dentro del paquete; se devuelven como objetos Date.
 function backupDecodeRows(rows){
@@ -1252,11 +1387,14 @@ async function paqueteAplicarBackup(backup){
     try{
       localStorage.setItem(PAQUETE_META_KEY, JSON.stringify({
         generadoEn: backup.generadoEn||'', abiertoEn: new Date().toISOString(),
+        driveModifiedTime: _pqDriveModifiedPend||'',
         periodo: backup.periodo||'',
         fuentes: backup.datasets.length, totalFilas: backup.totalFilas||0,
         keys: backup.datasets.map(d=>d.key)
       }));
     }catch(e){ /* ignorar */ }
+    // El paquete recien traído ya es el mas reciente: se apaga el aviso de “informacion nueva”.
+    _pqAvisoNuevo=''; _pqAvisoVencidoMostrado=false; _pqDriveModifiedPend='';
     if(backup.driveFiles){
       try{
         if(backup.driveFiles.inventario) localStorage.setItem('inventario_drive_files', JSON.stringify(backup.driveFiles.inventario));
@@ -1546,6 +1684,9 @@ async function traerPaqueteDeCarpetaDrive(){
       if(!escogidos) return;
       botones.forEach(b=>{ b.disabled=true; b.textContent='Descargando…'; });
     }
+    // Se recuerda la fecha del archivo mas reciente de la carpeta para poder avisar
+    // despues cuando el administrador publique uno nuevo.
+    _pqDriveModifiedPend=escogidos.map(a=>String(a.modifiedTime||'')).filter(Boolean).sort().pop()||'';
     let pass=null;
     if(escogidos.length>1){
       pass=prompt('Contrasena de los paquetes (la misma para todos los meses):');
@@ -9534,4 +9675,7 @@ document.getElementById('btnCerrarSesion')?.addEventListener('click', ()=>{
   }
   // Se reaplican los permisos por si algun render volvio a mostrar botones.
   if(_rolSesion) aplicarPermisos(_rolSesion);
+  // Recordatorio del cargue diario: si el paquete en pantalla ya paso de 24 horas
+  // se avisa para que se traiga de nuevo el de la carpeta.
+  try{ renderFechaDatos(); pqAvisarDatosVencidos(); }catch(e){}
 })();
