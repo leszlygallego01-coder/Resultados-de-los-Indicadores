@@ -3020,9 +3020,13 @@ function renderIndicadorTraslados(){
     return true;
   });
 
-  // El anillo de recepcion usa las MISMAS filas filtradas (zona, origen y destino),
-  // por eso cambia junto con los selectores de esta seccion.
-  renderDonutTrasladosRecibidos(filas);
+  // Filas visibles: se aplican TODOS los filtros de la sección, incluida la búsqueda
+  // por usuario, para que el anillo y los indicadores coincidan con la tabla.
+  const filasVis = busca ? filas.filter(r=>normValue(r.usuario||'SIN USUARIO').includes(busca)) : filas;
+
+  // El anillo de recepcion usa las MISMAS filas visibles (zona, origen, destino y
+  // usuario), por eso cambia junto con los filtros de esta seccion.
+  renderDonutTrasladosRecibidos(filasVis);
 
   // Traslados ÚNICOS por usuario: se agrupa por número de Traslado (si viene vacío se
   // usa una clave por fila para no perder el registro). Un traslado puede contener
@@ -3047,17 +3051,18 @@ function renderIndicadorTraslados(){
   })).sort((a,b)=> (b.cant-a.cant) || a.usuario.localeCompare(b.usuario,'es'));
 
   const totalTraslados=listaFull.reduce((a,u)=>a+u.cant,0);
-  const trasladosUnicosGlobal=new Set(filas.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size;
-  const sinClasificar=filas.filter(r=>r.moleculaPareto==='N/D').length;
-  const fechas=filas.map(r=>r.fecha).filter(Boolean).sort((a,b)=>a-b);
+  const trasladosUnicosGlobal=new Set(filasVis.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size;
+  const sinClasificar=filasVis.filter(r=>r.moleculaPareto==='N/D').length;
+  const fechas=filasVis.map(r=>r.fecha).filter(Boolean).sort((a,b)=>a-b);
+  const usuariosVis=new Set(filasVis.map(r=>r.usuario||'SIN USUARIO')).size;
 
   if(statsEl){
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Traslados únicos</div><div class="value">'+fmtInt(trasladosUnicosGlobal)+'</div>'+
-      '<div class="sub">'+fmtInt(filas.length)+' líneas de artículo</div></div>'+
-      '<div class="stat"><div class="label">Usuarios que trasladaron</div><div class="value">'+fmtInt(listaFull.length)+'</div></div>'+
-      '<div class="stat"><div class="label">Líneas Pareto</div><div class="value">'+fmtInt(filas.filter(r=>r.moleculaPareto==='PARETO').length)+'</div></div>'+
-      '<div class="stat"><div class="label">Líneas No Pareto</div><div class="value">'+fmtInt(filas.filter(r=>r.moleculaPareto==='NO PARETO').length)+'</div></div>'+
+      '<div class="sub">'+fmtInt(filasVis.length)+' líneas de artículo</div></div>'+
+      '<div class="stat"><div class="label">Usuarios que trasladaron</div><div class="value">'+fmtInt(usuariosVis)+'</div></div>'+
+      '<div class="stat"><div class="label">Líneas Pareto</div><div class="value">'+fmtInt(filasVis.filter(r=>r.moleculaPareto==='PARETO').length)+'</div></div>'+
+      '<div class="stat"><div class="label">Líneas No Pareto</div><div class="value">'+fmtInt(filasVis.filter(r=>r.moleculaPareto==='NO PARETO').length)+'</div></div>'+
       '<div class="stat"><div class="label">Líneas no homologadas</div><div class="value">'+fmtInt(sinClasificar)+'</div></div>'+
       '<div class="stat"><div class="label">Rango de fechas</div><div class="value" style="font-size:16px;">'+
         (fechas.length ? escHtml(dateToISO(fechas[0])+' → '+dateToISO(fechas[fechas.length-1])) : '—')+'</div></div>';
@@ -3066,7 +3071,7 @@ function renderIndicadorTraslados(){
   if(diagEl){
     if(sinClasificar>0){
       diagEl.style.display='';
-      diagEl.innerHTML='<b>Nota:</b> '+fmtInt(sinClasificar)+' de '+fmtInt(filas.length)+' líneas tienen un <b>Codigo</b> que no se encontró en la tabla Homólogo, por lo que no se pueden clasificar como Pareto o No Pareto. Esas líneas sí cuentan en el total de traslados del usuario.';
+      diagEl.innerHTML='<b>Nota:</b> '+fmtInt(sinClasificar)+' de '+fmtInt(filasVis.length)+' líneas tienen un <b>Codigo</b> que no se encontró en la tabla Homólogo, por lo que no se pueden clasificar como Pareto o No Pareto. Esas líneas sí cuentan en el total de traslados del usuario.';
     } else {
       diagEl.style.display='none'; diagEl.innerHTML='';
     }
