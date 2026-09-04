@@ -8655,56 +8655,73 @@ function abrevMesKey(key){
   if(!m) return '';
   return MESES_ABREV_CORTE[(+m[2])-1] || m[2];
 }
-/* Mes que representa cada corte (1, 2 y 3) segun la FECHA DE DISPENSACION de las filas.
-   Se cuenta cuantas filas aporta cada mes dentro del corte y se muestra el mes
-   predominante; si el corte mezcla meses se muestran los dos con mas registros
-   separados por "/" (ej. "Sept/Oct") para no ocultar la mezcla. Devuelve un objeto
-   {1:'Sept', 2:'Oct', 3:''} donde la cadena vacia significa "sin datos en el corte". */
-function mesesPorCorte(rows){
-  const conteo={1:new Map(),2:new Map(),3:new Map()};
-  (rows||[]).forEach(r=>{
-    const c=corteDeDispensacion(r);
-    if(!c) return;
-    const k=mesDeDispensacion(r);
-    if(!k) return;
-    conteo[c].set(k, (conteo[c].get(k)||0)+1);
-  });
-  const out={1:'',2:'',3:''};
-  [1,2,3].forEach(c=>{
-    const ord=[...conteo[c].entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
-    if(!ord.length) return;
-    const nombres=ord.slice(0,2).map(e=>abrevMesKey(e[0])).filter(Boolean);
-    out[c]=nombres.join('/');
-  });
+/* Nombre completo del mes a partir de su abreviatura (para los textos de ayuda). */
+const MESES_NOMBRE_CORTE=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+function nombreMesAbrev(ab){
+  const i=MESES_ABREV_CORTE.indexOf(ab);
+  return i<0 ? ab : MESES_NOMBRE_CORTE[i];
+}
+/* MES DE GENERACION y MES DE ENTREGA de cada corte (1, 2 y 3):
+   - GENERACION -> mes de la FECHA DE DISPENSACION: cuando nacio el pendiente.
+   - ENTREGA    -> mes del CARGUE en el que la linea volvio a subirse ya cumplida.
+   El corte se toma del CARGUE (con la fecha de dispensacion como respaldo), igual que
+   las cifras de la tabla. De cada eje se muestra el mes predominante del corte.
+   Devuelve {1:{gen:'Jul',ent:'Sept'}, 2:{...}, 3:{...}}; cadena vacia = sin dato. */
+function _accMesesCorte(){
+  return {1:{gen:new Map(),ent:new Map()},2:{gen:new Map(),ent:new Map()},3:{gen:new Map(),ent:new Map()}};
+}
+function _sumaMesCorte(mapa, clave){
+  if(clave) mapa.set(clave, (mapa.get(clave)||0)+1);
+}
+function _mesPredominante(mapa){
+  const ord=[...mapa.entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+  return ord.length ? abrevMesKey(ord[0][0]) : '';
+}
+function _cierraMesesCorte(acc){
+  const out={};
+  [1,2,3].forEach(c=>{ out[c]={gen:_mesPredominante(acc[c].gen), ent:_mesPredominante(acc[c].ent)}; });
   return out;
 }
-/* Igual que mesesPorCorte pero separado por BODEGA: devuelve
-   Map(bodega -> {1:'Sept',2:'Oct',3:''}). Sirve para escribir el mes debajo de la cifra
-   de cada celda, porque una bodega puede haber dispensado en un mes distinto al
-   predominante del corte. */
-function mesesPorCorteBodega(rows){
+function mesesGenEntPorCorte(rows){
+  const acc=_accMesesCorte();
+  (rows||[]).forEach(r=>{
+    const c=corteDeCargue(r);
+    if(!c || !acc[c]) return;
+    _sumaMesCorte(acc[c].gen, mesDeDispensacion(r));
+    _sumaMesCorte(acc[c].ent, mesDeCargue(r) || mesDeDispensacion(r));
+  });
+  return _cierraMesesCorte(acc);
+}
+/* Igual que mesesGenEntPorCorte pero separado por BODEGA: una bodega puede haber
+   dispensado o entregado en meses distintos a los predominantes del corte. */
+function mesesGenEntPorCorteBodega(rows){
   const porBod=new Map();
   (rows||[]).forEach(r=>{
-    const c=corteDeDispensacion(r);
+    const c=corteDeCargue(r);
     if(!c) return;
-    const k=mesDeDispensacion(r);
-    if(!k) return;
     const bod=r.bodegaDetalle;
-    if(!porBod.has(bod)) porBod.set(bod, {1:new Map(),2:new Map(),3:new Map()});
-    const m=porBod.get(bod)[c];
-    m.set(k, (m.get(k)||0)+1);
+    if(!porBod.has(bod)) porBod.set(bod, _accMesesCorte());
+    const acc=porBod.get(bod);
+    _sumaMesCorte(acc[c].gen, mesDeDispensacion(r));
+    _sumaMesCorte(acc[c].ent, mesDeCargue(r) || mesDeDispensacion(r));
   });
   const out=new Map();
-  porBod.forEach((conteo, bod)=>{
-    const res={1:'',2:'',3:''};
-    [1,2,3].forEach(c=>{
-      const ord=[...conteo[c].entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
-      if(!ord.length) return;
-      res[c]=ord.slice(0,2).map(e=>abrevMesKey(e[0])).filter(Boolean).join('/');
-    });
-    out.set(bod, res);
-  });
+  porBod.forEach((acc,bod)=>{ out.set(bod, _cierraMesesCorte(acc)); });
   return out;
+}
+/* Etiqueta gris que va DEBAJO de la cifra: "Corte Jul / Corte Sept" significa que el
+   pendiente se genero en julio y se entrego en septiembre. Si los dos meses coinciden
+   se escribe una sola vez para no repetir. */
+function etiqMesGenEnt(par){
+  if(!par) return '';
+  const gen=par.gen||'', ent=par.ent||'';
+  if(!gen && !ent) return '';
+  const dos = gen && ent && gen!==ent;
+  const txt = dos ? 'Corte '+gen+' / Corte '+ent : 'Corte '+(gen||ent);
+  const tip = dos
+    ? 'Se generó en '+nombreMesAbrev(gen)+' y se entregó en '+nombreMesAbrev(ent)
+    : 'Se generó y se entregó en '+nombreMesAbrev(gen||ent);
+  return '<span class="corte-mes" title="'+escHtml(tip)+'">'+escHtml(txt)+'</span>';
 }
 function renderReportePeriodico(){
   const filtered = getPeriodicoFilteredRows();
@@ -8725,17 +8742,17 @@ function renderReportePeriodico(){
   const activoBod = (c, bodega) => { const s=cargueBodega.get(bodega); return !!s && s.has(c) && !fuera(c); };
   const DASH = '—';
   const cortesLabels={1:'Corte 1 (día 1-10)',2:'Corte 2 (día 11-20)',3:'Corte 3 (día 21-31)'};
-  /* Mes al que corresponde cada corte, para escribirlo DEBAJO de la cifra de cada celda
-     (ej. "Corte Sept"). Se lee de la FECHA DE DISPENSACIÓN: mesCorteBodRP tiene el mes por
-     bodega y corte, y mesCorteRP el mes general del corte como respaldo cuando la bodega
-     no aporta fechas propias. */
-  const mesCorteRP = mesesPorCorte(baseCortes);
-  const mesCorteBodRP = mesesPorCorteBodega(baseCortes);
-  /* Etiqueta gris con el mes del corte, en una segunda línea bajo el número. */
+  /* Meses que se escriben DEBAJO de la cifra de cada celda con el formato
+     "Corte Jul / Corte Sept": el primero es el mes en que se GENERÓ el pendiente
+     (fecha de dispensación) y el segundo el mes en que se ENTREGÓ (cargue que acreditó
+     el cumplimiento). mesCorteBodRP lo trae por bodega y mesCorteRP es el respaldo
+     general del corte cuando la bodega no aporta fechas propias. */
+  const mesCorteRP = mesesGenEntPorCorte(baseCortes);
+  const mesCorteBodRP = mesesGenEntPorCorteBodega(baseCortes);
   const etiqMesCelda = (bodega, c) => {
     const porBod = mesCorteBodRP.get(bodega);
-    const mes = (porBod && porBod[c]) || mesCorteRP[c] || '';
-    return mes ? '<span class="corte-mes">Corte '+escHtml(mes)+'</span>' : '';
+    const par = porBod && porBod[c] && (porBod[c].gen || porBod[c].ent) ? porBod[c] : mesCorteRP[c];
+    return etiqMesGenEnt(par);
   };
   const labelEnt = periodicoTabActual==='documento' ? 'Entregadas' : periodicoTabActual==='linea' ? 'Entregadas' : 'Con soporte';
   const labelPend = periodicoTabActual==='documento' ? 'Pendientes' : periodicoTabActual==='linea' ? 'Pendientes' : 'Sin soporte';
@@ -8926,7 +8943,7 @@ function renderReportePeriodico(){
     if(!activo(i+1)){ filaTotal+=tdSinCargue+tdSinCargue; return; }
     if(!tot.rec[i]){ filaTotal+=tdSinEntregaTot+tdSinEntregaTot; return; }
     if(!rpCambio[i]){ filaTotal+=tdSinCambioRP+tdSinCambioRP; return; }
-    const mesTot = mesCorteRP[i+1] ? '<span class="corte-mes">Corte '+escHtml(mesCorteRP[i+1])+'</span>' : '';
+    const mesTot = etiqMesGenEnt(mesCorteRP[i+1]);
     filaTotal+='<td>'+fmtInt(tot.c[i].ent)+mesTot+'</td><td>'+fmtInt(tot.c[i].pend)+mesTot+'</td>';
   });
   filaTotal+='<td>'+fmtInt(tot.recTotal)+'</td></tr>';
