@@ -1933,6 +1933,27 @@ async function calcularIndicadores(){
        aplicarlo DOS veces con exactamente las mismas reglas:
          - a los meses abiertos en pantalla (indicadores del periodo)
          - a la historia consolidada completa (vistas de cifras fijas)          */
+    /* ---- Archivo de origen de cada línea (¿en qué Reporte de Dispensación se cargó?) ----
+       Los cargues nuevos guardan el nombre del archivo en la propia fila. Para los datos
+       ya acumulados que no lo traen, se reconstruye con la lista de cargues (batches):
+       cada cargue que aportó filas nuevas dejó un número consecutivo, así que los números
+       consecutivos presentes en los datos, en orden, corresponden a esos cargues en orden. */
+    const _batchesRep = (state.loaded && state.loaded.reporte && state.loaded.reporte.batches) || [];
+    const _secsRep = [...new Set(reporteRaw.map(r=>Number(r&&r._secCargue)||0).filter(n=>n>0))].sort((a,b)=>a-b);
+    const _secAArchivo = new Map();
+    // Si el cargue registró su propio consecutivo, se usa ese dato (mapeo exacto).
+    _batchesRep.forEach(b=>{ if(b && b.fileName && Number(b.secCargue)>0) _secAArchivo.set(Number(b.secCargue), String(b.fileName)); });
+    _secsRep.forEach((sec,i)=>{
+      if(_secAArchivo.has(sec)) return;
+      const b=_batchesRep[i];
+      if(b && b.fileName) _secAArchivo.set(sec, String(b.fileName));
+    });
+    function archivoDeCargue(r){
+      const propio=String((r && r._archivoCargue) || '').trim();
+      if(propio) return propio;
+      return _secAArchivo.get(Number(r && r._secCargue)||0) || '';
+    }
+
     function enriquecerFilasReporte(reporteRaw){
     const rows=reporteRaw.map((r,idx)=>{
       const codigoArticulo=normValue(r.codigoArticulo);
@@ -1973,6 +1994,8 @@ async function calcularIndicadores(){
       // del archivo: así dos cargues del mismo día siguen distinguiéndose entre sí.
       const secCargue=Number(r._secCargue)||0;
       const secSoporte=Number(r._secSoporte)||0;
+      // Nombre del archivo del Reporte de Dispensación en el que entró la línea.
+      const archivoCargue=archivoDeCargue(r);
       const documento=String(r.documento||'').trim();
       const contrato=normValue(r.contrato);
       const eps=corregirEps(r.eps);
@@ -1990,7 +2013,7 @@ async function calcularIndicadores(){
         // Departamento de la bodega (tabla Bodega y Zona): base del filtro global.
         departamento: bodegaToDepto.get(bodegaNorm) || 'N/D',
         existenciaPunto, existenciaBodega, sePuedeSubsanarPunto, sePuedeSubsanarBodega, tieneSoportes,
-        fechaCargue, fechaSoporte, secCargue, secSoporte
+        fechaCargue, fechaSoporte, secCargue, secSoporte, archivoCargue
       };
     });
 
@@ -5895,7 +5918,9 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     // Mismo criterio del Indicador por Línea: ENTREGADA (Unidades>0 y Diferencia=0),
     // PENDIENTE (Diferencia<0) y OTRA para el resto de casos.
     'Estado de la línea': lineaEsEntregada(r) ? 'ENTREGADA' : (lineaEsPendiente(r) ? 'PENDIENTE' : 'OTRA'),
-    'Usuario Creación': r.usuarioCreacion
+    'Usuario Creación': r.usuarioCreacion,
+    // Archivo del Reporte de Dispensación en el que se cargó la línea.
+    'Reporte de Dispensación (archivo)': r.archivoCargue || 'SIN DATO'
   }));
   if(!detalle.length){ showToast('No hay líneas para el filtro actual.', true); return; }
 
@@ -5910,7 +5935,7 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     const bod=r.bodegaDetalle||'N/D';
     const k=bod+'||'+doc;
     if(!porDisp.has(k)) porDisp.set(k, {zona:r.zona||'N/D', bodega:bod, documento:doc,
-      autorizada:0, pendiente:0, entregadas:0, lineas:0, linPend:0, usuarios:new Set(), fecha:null});
+      autorizada:0, pendiente:0, entregadas:0, lineas:0, linPend:0, usuarios:new Set(), archivos:new Set(), fecha:null});
     const g=porDisp.get(k);
     g.lineas++;
     g.autorizada += Number(r.cantidadAutorizada)||0;
@@ -5918,6 +5943,8 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     if(lineaEsPendiente(r)){ g.pendiente += Math.abs(Number(r.diferencia)||0); g.linPend++; }
     const u=String(r.usuarioCreacion||'').trim();
     if(u) g.usuarios.add(u);
+    const arch=String(r.archivoCargue||'').trim();
+    if(arch) g.archivos.add(arch);
     if(r.fecha && (!g.fecha || r.fecha>g.fecha)) g.fecha=r.fecha;
   });
   const dispensas=[...porDisp.values()].sort((a,b)=>
@@ -5935,7 +5962,9 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
     'Líneas': g.lineas,
     'Líneas pendientes': g.linPend,
     'Estado de la dispensa': g.linPend ? 'PENDIENTE' : 'ENTREGADA',
-    'Usuario Creación': [...g.usuarios].sort((a,b)=>a.localeCompare(b,'es')).join(' / ') || 'SIN USUARIO'
+    'Usuario Creación': [...g.usuarios].sort((a,b)=>a.localeCompare(b,'es')).join(' / ') || 'SIN USUARIO',
+    // Archivo (o archivos) del Reporte de Dispensación donde se cargó la dispensa.
+    'Reporte de Dispensación (archivo)': [...g.archivos].sort((a,b)=>a.localeCompare(b,'es')).join(' / ') || 'SIN DATO'
   }));
   const totDisp=dispensas.reduce((a,d)=>({
     aut:a.aut+d['Cantidad Autorizada'], ent:a.ent+d['Cantidad Entregada'],
@@ -5944,7 +5973,7 @@ document.getElementById('btnDescargarDetalleBodega').addEventListener('click', (
   dispensas.push({'Zona':'TOTAL','Bodega Detalle':'','Documento':fmtInt(porDisp.size)+' dispensa(s)',
     'Fecha de Dispensación':'','Cantidad Autorizada':totDisp.aut,'Cantidad Entregada':totDisp.ent,
     'Cantidad Pendiente':totDisp.pen,'Líneas':totDisp.lin,'Líneas pendientes':totDisp.lp,
-    'Estado de la dispensa':'','Usuario Creación':''});
+    'Estado de la dispensa':'','Usuario Creación':'','Reporte de Dispensación (archivo)':''});
   // Resumen por bodega con las mismas reglas del Indicador por Línea
   // (Total = líneas activas, Entregadas = Unidades>0 y Diferencia=0, Pendientes = Diferencia<0).
   const porBod=new Map();
