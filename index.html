@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260904g">
+<link rel="stylesheet" href="styles.css?v=20260904h">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -930,30 +930,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           </div>
         </div>
 
-        <div class="seguimiento-section">
-          <h3>📈 Evolución por cortes</h3>
-          <p class="seg-desc">Cómo avanzó cada líder corte a corte. Los cortes se arman con la <b>fecha de dispensación</b> y en cada uno se toma el estado vigente al cierre de ese corte; un corte sin dispensaciones queda en <b>—</b> para no repetir la cifra anterior.</p>
-          <div class="table-wrap">
-            <table class="data" id="tblCuentasCortes">
-              <thead>
-                <tr>
-                  <th rowspan="2">Líder</th>
-                  <th colspan="3">Corte 1 (días 1-10)</th>
-                  <th colspan="3">Corte 2 (días 11-20)</th>
-                  <th colspan="3">Corte 3 (días 21-31)</th>
-                  <th rowspan="2">Pendientes recuperados (C1 → C3)</th>
-                </tr>
-                <tr>
-                  <th>Entregadas</th><th>Pendientes</th><th>% Cumpl.</th>
-                  <th>Entregadas</th><th>Pendientes</th><th>% Cumpl.</th>
-                  <th>Entregadas</th><th>Pendientes</th><th>% Cumpl.</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
       </div>
 
     </div>
@@ -1075,6 +1051,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260904g"></script>
+<script src="script.js?v=20260904h"></script>
 </body>
 </html>
