@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260904j">
+<link rel="stylesheet" href="styles.css?v=20260905a">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -49,6 +49,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <span class="dot" id="dbDot"></span>
       <span id="dbStatusText">Sin datos guardados en este navegador</span>
       <span class="res-count-chip">Registros en pantalla: <b id="resCount">—</b></span>
+      <span class="data-fecha-chip" id="dataFechaChip" style="display:none;" title="Fecha y hora en que se trajeron los resultados de la carpeta de Google Drive">Datos del <b id="dataFechaTxt">—</b></span>
       <span class="rol-chip" id="rolChip" style="display:none;">Rol: <b id="rolNombre">—</b></span>
       <button type="button" class="btn-salir" id="btnCerrarSesion" style="display:none;" title="Salir y volver a pedir el rol y la clave">Cerrar sesión</button>
     </div>
@@ -63,6 +64,13 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       pero las tablas que se guardan en la nube no se sincronizarán y se perderán al recargar la página.
       <b>Inventario del Punto</b> y <b>Reporte de Dispensación</b> no se ven afectados: se leen de Google Drive y quedan guardados en este navegador.
     </div>
+  </div>
+
+  <!-- Aviso del cargue diario: recuerda que el administrador publica información nueva cada
+       día y avisa cuando los datos en pantalla ya pasaron de 24 horas. -->
+  <div class="aviso-cargue" id="avisoCargueDiario" style="display:none;">
+    <span class="pw-icon" id="avisoCargueIcon">ℹ</span>
+    <div id="avisoCargueTxt"></div>
   </div>
 
   <div class="view active" id="view-resultados">
@@ -1051,6 +1059,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260904j"></script>
+<script src="script.js?v=20260905a"></script>
 </body>
 </html>
