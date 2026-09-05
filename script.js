@@ -77,7 +77,7 @@ const DATASETS = [
   {
     key: 'reporte', tabla: 'Tabla_1', title: 'Reporte de Dispensación', required: true, accumulate: true,
     desc: 'Base transaccional principal. Cargue diario: cada archivo que subas se ACUMULA con lo ya guardado (no lo reemplaza); las filas repetidas se descartan automáticamente. Esta tarjeta ya NO acepta cargue manual: sus datos provienen exclusivamente de la carpeta de Google Drive.',
-    cols: ['Documento','Fecha de Dispensación','EPS','Contrato','Código de Articulo','Descripción','Unidades','Cantidad Autorizada','Diferencia','Bodega Detalle','Soporte','Estado','Usuario Creación','DESCRIPCION CIE 10'],
+    cols: ['Documento','Fecha de Dispensación','EPS','Contrato','Código de Articulo','Descripción','Unidades','Cantidad Autorizada','Diferencia','Lote','Fecha de Vencimiento','Bodega Detalle','Soporte','Estado','Usuario Creación','DESCRIPCION CIE 10'],
     fields: {
       documento: ['DOCUMENTO'],
       codigoCie10: ['DESCRIPCION CIE 10','DESCRIPCIÓN CIE 10','DESCRIPCION CIE10','DESCRIPCIÓN CIE10','DESCRIPCION CIE-10','DESCRIPCION DIAGNOSTICO','DIAGNOSTICO','DIAGNÓSTICO','CODIGO CIE 10','CODIGO CIE10','CODIGO CIE-10','CÓDIGO CIE 10','CIE 10','CIE10','CIE-10'],
@@ -89,10 +89,13 @@ const DATASETS = [
       codigoArticulo: ['CODIGO DE ARTICULO','CODIGO ARTICULO','CODIGO ARTICLE','CODIGO','COD ARTICULO','COD. ARTICULO','COD ARTICLE','ID ARTICULO'],
       descripcion: ['DESCRIPCION','DESCRIPCIÓN'],
       unidades: ['UNIDADES'],
-      fechaVencimiento: ['FECHA DE VENCIMIENTO'],
       cantidadAutorizada: ['CANTIDAD AUTORIZADA'],
       diferencia: ['DIFERENCIA'],
       bodegaDetalle: ['BODEGA DETALLE'],
+      // Lote y vencimiento del medicamento dispensado. En el archivo van justo
+      // después de la columna Diferencia y alimentan la Trazabilidad de Lotes.
+      lote: ['LOTE','NUMERO LOTE','NUMERO DE LOTE','NÚMERO LOTE','NRO LOTE','NO LOTE','N LOTE','LOTE ARTICULO','LOTE MEDICAMENTO','LOTE DESPACHADO','LOTE ENVIADO','LOTE RECIBIDO'],
+      fechaVencimiento: ['FECHA DE VENCIMIENTO','FECHA VENCIMIENTO','FECHA DE VENCIMIENTO LOTE','FECHA VTO','FECHA VTO.','VENCIMIENTO','FECHA VENC.','FEC VENCIMIENTO'],
       soportes: ['SOPORTE','SOPORTES']
     }
   },
@@ -145,7 +148,7 @@ const DATASETS = [
   {
     key: 'traslados', tabla: 'Tabla_8', title: 'Traslados', required: false,
     desc: 'Traslados entre bodegas realizados por cada usuario. Los datos provienen exclusivamente de la carpeta de Google Drive y se reemplazan por completo en cada sincronización. El Codigo se cruza con la tabla Homólogo para saber si la molécula es Pareto o No Pareto.',
-    cols: ['Traslado','Fecha','Bodega Origen','Bodega Destino','Codigo','Descripcion','Cantidad','Recibido','Usuario'],
+    cols: ['Traslado','Fecha','Bodega Origen','Bodega Destino','Codigo','Descripcion','Cantidad','Lote','Fecha de Vencimiento','Recibido','Usuario'],
     fields: {
       traslado: ['TRASLADO','NRO TRASLADO','NUMERO TRASLADO','NÚMERO TRASLADO','No TRASLADO','DOCUMENTO TRASLADO','DOCUMENTO','CONSECUTIVO'],
       fecha: ['FECHA','FECHA TRASLADO','FECHA DE TRASLADO','FECHA DEL TRASLADO'],
@@ -154,6 +157,10 @@ const DATASETS = [
       codigo: ['CODIGO','CÓDIGO','CODIGO ARTICULO','CODIGO DE ARTICULO','COD ARTICULO','COD. ARTICULO'],
       descripcion: ['DESCRIPCION','DESCRIPCIÓN','DESCRIPCION ARTICULO','DESCRIPCIÓN ARTICULO','ARTICULO','NOMBRE ARTICULO','PRODUCTO'],
       cantidad: ['CANTIDAD','CANTIDAD TRASLADADA','UNIDADES','CANT','CANT.'],
+      // Lote y vencimiento del medicamento enviado/recibido entre bodegas:
+      // es la llave que permite seguir el lote hasta la dispensa subsanada.
+      lote: ['LOTE','NUMERO LOTE','NUMERO DE LOTE','NÚMERO LOTE','NRO LOTE','NO LOTE','N LOTE','LOTE ARTICULO','LOTE MEDICAMENTO','LOTE DESPACHADO','LOTE ENVIADO','LOTE RECIBIDO'],
+      fechaVencimiento: ['FECHA DE VENCIMIENTO','FECHA VENCIMIENTO','FECHA DE VENCIMIENTO LOTE','FECHA VTO','FECHA VTO.','VENCIMIENTO','FECHA VENC.','FEC VENCIMIENTO'],
       // Estado de recepción del traslado: 'Recibido' o 'No Recibido'. En la Base
       // Supervisores solo se cuentan como pendientes las líneas NO recibidas.
       recibido: ['RECIBIDO','RECIBIDA','ESTADO RECIBIDO','ESTADO DEL TRASLADO','ESTADO TRASLADO','ESTADO','RECEPCION','RECEPCIÓN'],
@@ -2052,11 +2059,14 @@ async function calcularIndicadores(){
       const fecha=toDateSafe(r.fechaDispensacion);
       const estadoDispensa=normValue(r.estadoDispensa);
       const usuarioCreacion=String(r.usuarioCreacion||'').trim();
+      // Lote y vencimiento del medicamento dispensado (Trazabilidad de Lotes).
+      const lote=String(r.lote||'').trim().toUpperCase();
+      const fechaVencimiento=toDateSafe(r.fechaVencimiento);
       const codigoCie10=String(r.codigoCie10||'').trim().toUpperCase();
       return {
         idx, documento, fecha, eps, epsGrupo, contrato, codigoArticulo, homologo, moleculaPareto, descripcionDci, estado,
         descripcionReporte, enHomologos,
-        estadoDispensa, usuarioCreacion, codigoCie10,
+        estadoDispensa, usuarioCreacion, codigoCie10, lote, fechaVencimiento,
         unidades, cantidadAutorizada, diferencia, lineaPendiente, noMedicamento, bodegaDetalle, bodegaNorm,
         zona: bodegaToZona.get(bodegaNorm) || 'N/D',
         // Departamento de la bodega (tabla Bodega y Zona): base del filtro global.
@@ -2220,6 +2230,9 @@ async function calcularIndicadores(){
         codigo,
         descripcion: String(r.descripcion||'').trim() || (codigoToDescripcionDci.get(codigo) || ''),
         cantidad: toNumber(r.cantidad),
+        // Lote y vencimiento del medicamento trasladado: llave de la Trazabilidad de Lotes.
+        lote: String(r.lote||'').trim().toUpperCase(),
+        fechaVencimiento: toDateSafe(r.fechaVencimiento),
         // Texto original de la columna "Recibido" y bandera derivada: si el valor
         // empieza por "N" (No Recibido / NO RECIBIDA) la línea sigue pendiente.
         recibido: String(r.recibido||'').trim(),
@@ -2262,6 +2275,7 @@ async function calcularIndicadores(){
     });
     const facturasPuntos = Array.from(new Set(facturasRows.map(r=>r.puntoVenta).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
 
+    _trazaListasListas=false;   // datos nuevos: se vuelven a llenar los filtros de la Trazabilidad
     state.processed={rows, rowsConsolidado, contratos, epsList, epsGrupos, cie10List, zonas, departamentos, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
     populateFilters();
     populateTrasladosFilters();
@@ -2349,6 +2363,8 @@ function ajustarZonaYBodegaPorDepartamento(){
     if(typeof populateFacturasFilters==='function') populateFacturasFilters();
     aplicarFiltrosYRenderizar();
     if(typeof renderIndicadorTraslados==='function') renderIndicadorTraslados();
+    // La Trazabilidad de Lotes también depende del Departamento: se recarga su lista de lotes.
+    if(typeof renderTrazabilidad==='function'){ _trazaListasListas=false; renderTrazabilidad(); }
     if(typeof refrescarInvFisico==='function') refrescarInvFisico(true);
     const modal=document.getElementById('periodicModal');
     if(modal && modal.classList.contains('show') && typeof renderReportePeriodico==='function'){
@@ -8405,6 +8421,7 @@ document.querySelectorAll('.result-tabs button').forEach(b=>{
       if(typeof ensureFacturasData==='function') ensureFacturasData().then(()=>renderInfoPorFactura());
     }
     if(b.dataset.sub==='traslados' && typeof renderIndicadorTraslados==='function') renderIndicadorTraslados();
+    if(b.dataset.sub==='trazabilidad' && typeof renderTrazabilidad==='function') renderTrazabilidad();
     if(b.dataset.sub==='invfisico' && typeof refrescarInvFisico==='function') refrescarInvFisico(true);
     if(b.dataset.sub==='cuentas' && typeof pintarBaseCuentas==='function') pintarBaseCuentas();
     if(b.dataset.sub==='supervisores' && typeof pintarBaseSupervisores==='function') pintarBaseSupervisores();
@@ -9674,6 +9691,14 @@ const SESION_ROL_KEY = 'visor_sesion_rol';
 
 /* Definición de roles: clave de acceso y qué tableros puede ver cada uno.
    'total:true' significa acceso completo a todo el visor.                   */
+/* Tableros de acceso reservado, incluso para roles con acceso total.
+   La Trazabilidad de Lotes y Traslados solo la ven Coordinador Bodega,
+   Gerencia y Administrador (queda oculta para Supervisor y Director Operativo). */
+const VISTAS_RESTRINGIDAS = { trazabilidad: ['coordinador','gerencia','administrador'] };
+function trazabilidadPermitida(){
+  return VISTAS_RESTRINGIDAS.trazabilidad.indexOf(String(_rolSesion||'')) >= 0;
+}
+
 const ROLES_VISOR = {
   supervisor:    { nombre:'Supervisor',        clave:'Sup2026*',   total:false,
                    vistas:['dispensa','linea','soporte','supervisores'] },
@@ -9717,7 +9742,11 @@ function aplicarPermisos(rolId){
   if(!rol) return;
   const total = !!rol.total;
   const permitidas = total ? null : (rol.vistas || []);
-  const puede = sub => total || permitidas.indexOf(sub) !== -1;
+  const puede = sub => {
+    const reservada = VISTAS_RESTRINGIDAS[sub];
+    if(reservada) return reservada.indexOf(rolId) !== -1;   // tablero reservado a ciertos roles
+    return total || permitidas.indexOf(sub) !== -1;
+  };
 
   // Pestañas de resultados
   document.querySelectorAll('.result-tabs button[data-sub]').forEach(b=>{
@@ -9744,6 +9773,8 @@ function aplicarPermisos(rolId){
       caja.style.display = total ? '' : 'none';
     }
   });
+  const btnTraza = document.getElementById('btnExportarTrazabilidad');
+  if(btnTraza) btnTraza.style.display = (VISTAS_RESTRINGIDAS.trazabilidad.indexOf(rolId) !== -1) ? '' : 'none';
   document.querySelectorAll('[data-open-periodico]').forEach(b=>{
     b.style.display = total ? '' : 'none';
   });
@@ -9841,4 +9872,251 @@ document.getElementById('btnCerrarSesion')?.addEventListener('click', ()=>{
   // Recordatorio del cargue diario: si el paquete en pantalla ya paso de 24 horas
   // se avisa para que se traiga de nuevo el de la carpeta.
   try{ renderFechaDatos(); pqAvisarDatosVencidos(); }catch(e){}
+})();
+
+/* =========================================================================
+   TRAZABILIDAD DE LOTES Y TRASLADOS
+   Relaciona cada movimiento de traslado (con su Lote y su Fecha de Vencimiento)
+   con las dispensas que quedaron ENTREGADAS / SUBSANADAS usando ese mismo lote.
+   Llave de cruce: Bodega Detalle + Codigo / Molecula (Homologo) + Lote.
+   Condicion de subsanacion: la linea del Reporte de Dispensacion esta entregada
+   (Diferencia = 0 y Unidades > 0) y su fecha es igual o posterior a la del
+   traslado de ese mismo lote.
+   Seccion reservada a Coordinador Bodega, Gerencia y Administrador.
+   ========================================================================= */
+var _trazaFilasCache = [];      // filas que se ven en la tabla (y que se exportan)
+var _trazaListasListas = false; // los selectores de lote y bodega ya se llenaron
+
+/* Clave de cruce normalizada. El homologo se usa cuando existe; si el codigo no
+   esta homologado se cruza por el propio codigo para no perder el movimiento. */
+function trazaClave(bodega, homologo, lote){
+  return normValue(bodega)+'||'+normValue(homologo)+'||'+normValue(lote);
+}
+/* Lineas entregadas del Reporte de Dispensacion agrupadas por esa clave. */
+function trazaDispensasEntregadas(){
+  const m = new Map();
+  const filas = (state.processed && state.processed.rows) ? state.processed.rows : [];
+  const idxUltima = new Set(snapshotUltimaVersion(filas).map(r=>r.idx));
+  filas.forEach(r=>{
+    if(r.versionVigente===false) return;
+    if(!idxUltima.has(r.idx)) return;
+    if(!esEstadoActivo(r.estadoDispensa)) return;
+    if(!lineaEsEntregada(r)) return;          // Diferencia = 0 y Unidades > 0
+    if(!r.lote) return;                        // sin lote no hay trazabilidad
+    const k = trazaClave(r.bodegaDetalle, r.homologo || r.codigoArticulo, r.lote);
+    if(!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  });
+  return m;
+}
+/* Arma las filas de la trazabilidad: un traslado puede haber subsanado varias
+   dispensas, por eso se devuelve una fila por dispensa entregada encontrada. */
+function trazaConstruirFilas(){
+  const res = { filas:[], traslados:0, conLote:0, sinLote:0, hayTraslados:false, hayLoteTraslado:false, hayLoteReporte:false };
+  const tras = (state.processed && state.processed.traslados) ? state.processed.traslados : [];
+  if(!tras.length) return res;
+  res.hayTraslados = true;
+  const entregadas = trazaDispensasEntregadas();
+  res.hayLoteReporte = entregadas.size > 0;
+  const deptoFiltro = (document.getElementById('fDepartamento')||{}).value || '';
+
+  tras.forEach(t=>{
+    // La bodega que recibe el lote es la que despues dispensa: Bodega Destino.
+    const bodega = t.bodegaDestino || t.bodegaOrigen || '';
+    if(deptoFiltro && t.departamentoDestino && t.departamentoDestino!==deptoFiltro) return;
+    res.traslados++;
+    if(!t.lote){ res.sinLote++; return; }
+    res.hayLoteTraslado = true;
+    res.conLote++;
+    const homologo = t.homologo || t.codigo || '';
+    const k = trazaClave(bodega, homologo, t.lote);
+    const posibles = (entregadas.get(k) || []).filter(r=>{
+      // Solo cuenta la entrega hecha en la fecha del traslado o despues.
+      if(!t.fecha) return true;
+      return r.fecha ? r.fecha.getTime() >= t.fecha.getTime() : false;
+    });
+    const base = {
+      traslado: t.traslado || 'SIN N\u00daMERO',
+      fechaTraslado: t.fecha || null,
+      bodega: bodega || 'N/D',
+      zona: t.zonaDestino || 'N/D',
+      codigo: t.codigo || '',
+      homologo: homologo,
+      descripcion: t.descripcion || '',
+      lote: t.lote,
+      vencimiento: t.fechaVencimiento || null,
+      cantidadTraslado: toNumber(t.cantidad),
+      recibido: t.estadoRecibido || t.recibido || ''
+    };
+    if(!posibles.length){
+      res.filas.push(Object.assign({}, base, { documento:'', fechaEntrega:null, cantidad:0, subsanada:false }));
+      return;
+    }
+    // Una fila por dispensa (Documento) subsanada con ese lote.
+    const porDoc = new Map();
+    posibles.forEach(r=>{
+      const doc = String(r.documento||'').trim() || 'SIN DOCUMENTO';
+      if(!porDoc.has(doc)) porDoc.set(doc, { doc, cantidad:0, fecha:null, vence:null });
+      const g = porDoc.get(doc);
+      g.cantidad += toNumber(r.unidades);
+      if(r.fecha && (!g.fecha || r.fecha < g.fecha)) g.fecha = r.fecha;
+      if(r.fechaVencimiento && !g.vence) g.vence = r.fechaVencimiento;
+    });
+    [...porDoc.values()].forEach(g=>{
+      res.filas.push(Object.assign({}, base, {
+        documento: g.doc,
+        fechaEntrega: g.fecha,
+        // Si el traslado no trae vencimiento se usa el de la dispensa.
+        vencimiento: base.vencimiento || g.vence || null,
+        cantidad: g.cantidad,
+        subsanada: true
+      }));
+    });
+  });
+
+  res.filas.sort((a,b)=>
+    ((b.fechaTraslado?b.fechaTraslado.getTime():0) - (a.fechaTraslado?a.fechaTraslado.getTime():0)) ||
+    String(a.bodega).localeCompare(String(b.bodega),'es') ||
+    String(a.lote).localeCompare(String(b.lote),'es')
+  );
+  return res;
+}
+/* Llena los selectores de Lote y Bodega Detalle con lo que traen los traslados. */
+function trazaLlenarFiltros(filas){
+  const selL = document.getElementById('fTrazaLote');
+  const selB = document.getElementById('fTrazaBodega');
+  if(!selL || !selB) return;
+  const lotes = [...new Set(filas.map(f=>f.lote).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const bodegas = [...new Set(filas.map(f=>f.bodega).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const anterior = { lote:selL.value, bodega:selB.value };
+  selL.innerHTML = '<option value="">Todos los lotes</option>' + lotes.map(l=>'<option>'+escHtml(l)+'</option>').join('');
+  selB.innerHTML = '<option value="">Todas las bodegas</option>' + bodegas.map(b=>'<option>'+escHtml(b)+'</option>').join('');
+  if(anterior.lote && lotes.indexOf(anterior.lote)>=0) selL.value = anterior.lote;
+  if(anterior.bodega && bodegas.indexOf(anterior.bodega)>=0) selB.value = anterior.bodega;
+  _trazaListasListas = true;
+}
+/* Pinta la seccion completa: tarjetas, tabla y aviso de datos faltantes. */
+function renderTrazabilidad(){
+  const tb = document.querySelector('#tblTrazabilidad tbody');
+  if(!tb) return;
+  const diag = document.getElementById('trazaDiag');
+  const stats = document.getElementById('statsTrazabilidad');
+  const vaciar = (msg)=>{
+    tb.innerHTML = '<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">'+escHtml(msg)+'</td></tr>';
+    _trazaFilasCache = [];
+    if(stats) stats.innerHTML = '';
+  };
+  const info = trazaConstruirFilas();
+  if(!info.hayTraslados){
+    if(diag){ diag.style.display=''; diag.innerHTML = '<b>Sin traslados cargados.</b> Carga la tarjeta <b>Traslados</b> en el panel de cargue para ver la trazabilidad por lote.'; }
+    vaciar('No hay traslados cargados.');
+    return;
+  }
+  if(!_trazaListasListas) trazaLlenarFiltros(info.filas);
+
+  const lote = (document.getElementById('fTrazaLote')||{}).value || '';
+  const bodega = (document.getElementById('fTrazaBodega')||{}).value || '';
+  const desdeStr = (document.getElementById('fTrazaDesde')||{}).value || '';
+  const hastaStr = (document.getElementById('fTrazaHasta')||{}).value || '';
+  const solo = (document.getElementById('fTrazaSolo')||{}).value || 'todos';
+  const desde = desdeStr ? new Date(desdeStr+'T00:00:00Z') : null;
+  const hasta = hastaStr ? new Date(hastaStr+'T23:59:59Z') : null;
+
+  const filas = info.filas.filter(f=>{
+    if(lote && f.lote!==lote) return false;
+    if(bodega && f.bodega!==bodega) return false;
+    if(desde && (!f.fechaTraslado || f.fechaTraslado < desde)) return false;
+    if(hasta && (!f.fechaTraslado || f.fechaTraslado > hasta)) return false;
+    if(solo==='con' && !f.subsanada) return false;
+    if(solo==='sin' && f.subsanada) return false;
+    return true;
+  });
+  _trazaFilasCache = filas;
+
+  if(diag){
+    let t = '';
+    if(!info.hayLoteTraslado) t = '<b>Los traslados cargados no traen la columna Lote.</b> Vuelve a sincronizar la tarjeta <b>Traslados</b> con el archivo que incluya <b>Lote</b> y <b>Fecha de Vencimiento</b>.';
+    else if(!info.hayLoteReporte) t = '<b>El Reporte de Dispensaci\u00f3n cargado no trae la columna Lote</b> en sus l\u00edneas entregadas, as\u00ed que no se puede confirmar cu\u00e1l dispensa se subsan\u00f3 con cada lote. Vuelve a cargar el reporte con las columnas <b>Lote</b> y <b>Fecha de Vencimiento</b> (van despu\u00e9s de Diferencia).';
+    else if(info.sinLote) t = '<b>Nota:</b> '+fmtInt(info.sinLote)+' movimiento(s) de traslado no traen lote y quedan por fuera del cruce.';
+    diag.innerHTML = t;
+    diag.style.display = t ? '' : 'none';
+  }
+
+  const subsanadas = filas.filter(f=>f.subsanada);
+  const docs = new Set(subsanadas.map(f=>f.bodega+'||'+f.documento));
+  const lotesVis = new Set(filas.map(f=>f.lote));
+  const unidades = subsanadas.reduce((a,f)=>a+toNumber(f.cantidad),0);
+  if(stats){
+    stats.innerHTML =
+      '<div class="stat"><div class="label">Movimientos con lote</div><div class="value">'+fmtInt(filas.length)+'</div>'+
+      '<div class="sub">Filas de trazabilidad con los filtros actuales</div></div>'+
+      '<div class="stat"><div class="label">Lotes distintos</div><div class="value">'+fmtInt(lotesVis.size)+'</div></div>'+
+      '<div class="stat"><div class="label">Dispensas subsanadas</div><div class="value">'+fmtInt(docs.size)+'</div>'+
+      '<div class="sub">Documentos entregados con el lote trasladado</div></div>'+
+      '<div class="stat"><div class="label">Unidades entregadas</div><div class="value">'+fmtInt(unidades)+'</div></div>';
+  }
+
+  if(!filas.length){ vaciar('No hay movimientos de traslado para los filtros seleccionados.'); return; }
+
+  const MAX = 1500;
+  const visibles = filas.slice(0, MAX);
+  let h = visibles.map(f=>
+    '<tr><td class="txt">'+escHtml(f.traslado)+'</td>'+
+    '<td class="txt">'+escHtml(f.fechaTraslado?dateToISO(f.fechaTraslado):'\u2014')+'</td>'+
+    '<td class="txt">'+escHtml(f.bodega)+'</td>'+
+    '<td class="txt">'+escHtml(f.homologo || f.codigo || '\u2014')+'</td>'+
+    '<td class="txt">'+escHtml(f.lote)+'</td>'+
+    '<td class="txt">'+escHtml(f.vencimiento?dateToISO(f.vencimiento):'\u2014')+'</td>'+
+    '<td class="txt">'+escHtml(f.subsanada ? f.documento : 'SIN DISPENSA SUBSANADA')+'</td>'+
+    '<td class="txt">'+escHtml(f.fechaEntrega?dateToISO(f.fechaEntrega):'\u2014')+'</td>'+
+    '<td>'+(f.subsanada?fmtInt(f.cantidad):'0')+'</td></tr>'
+  ).join('');
+  h += '<tr class="total-row"><td class="txt">TOTAL ('+fmtInt(filas.length)+' filas)</td><td>\u2014</td><td>\u2014</td><td>\u2014</td>'+
+       '<td>'+fmtInt(lotesVis.size)+' lote(s)</td><td>\u2014</td><td>'+fmtInt(docs.size)+' dispensa(s)</td><td>\u2014</td>'+
+       '<td>'+fmtInt(unidades)+'</td></tr>';
+  if(filas.length>MAX){
+    h += '<tr><td colspan="9" class="txt" style="text-align:center;color:#9CA9B6;">Se muestran las primeras '+fmtInt(MAX)+' filas de '+fmtInt(filas.length)+'. Descarga el Excel para ver el detalle completo.</td></tr>';
+  }
+  tb.innerHTML = h;
+}
+/* Filtros y boton de exportacion de la seccion. */
+(function(){
+  ['fTrazaLote','fTrazaBodega','fTrazaDesde','fTrazaHasta','fTrazaSolo'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', renderTrazabilidad);
+  });
+  const limpiar = document.getElementById('btnTrazaLimpiar');
+  if(limpiar) limpiar.addEventListener('click', ()=>{
+    ['fTrazaLote','fTrazaBodega','fTrazaDesde','fTrazaHasta'].forEach(id=>{
+      const el = document.getElementById(id); if(el) el.value='';
+    });
+    const s = document.getElementById('fTrazaSolo'); if(s) s.value='todos';
+    renderTrazabilidad();
+  });
+  const btn = document.getElementById('btnExportarTrazabilidad');
+  if(btn) btn.addEventListener('click', ()=>{
+    // La descarga tambien queda reservada a los roles autorizados.
+    if(!trazabilidadPermitida()){ showToast('Tu perfil no tiene acceso a la Trazabilidad de Lotes y Traslados.', true); return; }
+    if(!_trazaFilasCache.length){ showToast('No hay trazabilidad para exportar con los filtros actuales.', true); return; }
+    const detalle = _trazaFilasCache.map(f=>({
+      'N\u00famero / ID de Traslado': f.traslado,
+      'Fecha del Traslado': f.fechaTraslado ? dateToISO(f.fechaTraslado) : '',
+      'Bodega Detalle': f.bodega,
+      'Zona': f.zona,
+      'C\u00f3digo': f.codigo,
+      'C\u00f3digo / Mol\u00e9cula (Hom\u00f3logo)': f.homologo || f.codigo,
+      'Descripci\u00f3n': f.descripcion,
+      'Lote': f.lote,
+      'Fecha de Vencimiento': f.vencimiento ? dateToISO(f.vencimiento) : '',
+      'Cantidad Trasladada': f.cantidadTraslado,
+      'Estado del Traslado': f.recibido,
+      'Dispensa Subsanada (Documento)': f.subsanada ? f.documento : 'SIN DISPENSA SUBSANADA',
+      'Fecha de Entrega de la Dispensa': f.fechaEntrega ? dateToISO(f.fechaEntrega) : '',
+      'Cantidad Subsanada / Entregada': f.subsanada ? f.cantidad : 0
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Trazabilidad de lotes');
+    XLSX.writeFile(wb, 'Trazabilidad_Lotes_Traslados_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(detalle.length)+' fila(s) de trazabilidad por lote.');
+  });
 })();
