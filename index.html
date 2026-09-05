@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" crossorigin>
-<link rel="stylesheet" href="styles.css?v=20260905h">
+<link rel="stylesheet" href="styles.css?v=20260905i">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <!-- Firebase SDK (compat) -->
@@ -153,6 +153,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <button data-sub="soporte">Indicador soporte evento</button>
         <button data-sub="inactivas">Información de Dispensas Inactivas</button>
         <button data-sub="traslados">Indicador de Traslados Realizados</button>
+        <button data-sub="trazabilidad">Trazabilidad de Lotes y Traslados</button>
         <button data-sub="facturas">Información por factura</button>
         <button data-sub="invfisico">Comparativo Inventario Sistema vs. Físico</button>
         <button data-sub="cohortes">Indicador e Informe de Cohortes</button>
@@ -486,6 +487,66 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
           </div>
         </div>
       </div>
+      </div>
+
+      <!-- ---- SUBVISTA: TRAZABILIDAD DE LOTES Y TRASLADOS ---- -->
+      <!-- Seccion reservada para Coordinador Bodega, Gerencia y Administrador. -->
+      <div class="subview" id="sub-trazabilidad">
+        <div class="helpbox">Cruce del <b>Lote</b> trasladado entre bodegas con las <b>dispensas que quedaron entregadas o subsanadas con ese mismo lote</b>. Llave de cruce: <b>Bodega Detalle + Código / Molécula (Homólogo) + Lote</b>. Solo se toman las líneas del Reporte de Dispensación <b>entregadas</b> (Diferencia = 0 y Unidades &gt; 0) con <b>fecha igual o posterior</b> a la del traslado de ese lote.</div>
+        <div class="helpbox" id="trazaDiag" style="display:none;"></div>
+
+        <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-export" id="btnExportarTrazabilidad" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Exportar Trazabilidad (Excel)</button>
+        </div>
+
+        <div class="stat-row" id="statsTrazabilidad"></div>
+
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+          <div class="field" style="max-width:230px;margin-bottom:0;">
+            <label>Lote</label>
+            <select id="fTrazaLote"><option value="">Todos los lotes</option></select>
+          </div>
+          <div class="field" style="max-width:280px;margin-bottom:0;">
+            <label>Bodega Detalle</label>
+            <select id="fTrazaBodega"><option value="">Todas las bodegas</option></select>
+          </div>
+          <div class="field" style="max-width:180px;margin-bottom:0;">
+            <label>Traslados desde</label>
+            <input type="date" id="fTrazaDesde">
+          </div>
+          <div class="field" style="max-width:180px;margin-bottom:0;">
+            <label>Traslados hasta</label>
+            <input type="date" id="fTrazaHasta">
+          </div>
+          <div class="field" style="max-width:220px;margin-bottom:0;">
+            <label>Mostrar</label>
+            <select id="fTrazaSolo">
+              <option value="todos">Todos los traslados</option>
+              <option value="con">Solo con dispensa subsanada</option>
+              <option value="sin">Solo sin dispensa subsanada</option>
+            </select>
+          </div>
+          <button class="btn btn-ghost" id="btnTrazaLimpiar">Limpiar filtros</button>
+        </div>
+
+        <div class="table-wrap" style="margin-bottom:0;">
+          <table class="data" id="tblTrazabilidad">
+            <thead>
+              <tr>
+                <th>Número / ID de Traslado</th>
+                <th>Fecha del Traslado</th>
+                <th>Bodega Detalle</th>
+                <th>Código / Molécula (Homólogo)</th>
+                <th>Lote</th>
+                <th>Fecha de Vencimiento</th>
+                <th>Dispensa Subsanada (Documento)</th>
+                <th>Fecha de Entrega de la Dispensa</th>
+                <th>Cantidad Subsanada / Entregada</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
       <!-- ---- SUBVISTA: DISPENSAS INACTIVAS ---- -->
@@ -1061,6 +1122,6 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="script.js?v=20260905h"></script>
+<script src="script.js?v=20260905i"></script>
 </body>
 </html>
