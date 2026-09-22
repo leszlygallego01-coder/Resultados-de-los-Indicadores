@@ -168,7 +168,10 @@ const DATASETS = [
       // Estado de recepción del traslado: 'Recibido' o 'No Recibido'. En la Base
       // Supervisores solo se cuentan como pendientes las líneas NO recibidas.
       recibido: ['RECIBIDO','RECIBIDA','ESTADO RECIBIDO','ESTADO DEL TRASLADO','ESTADO TRASLADO','ESTADO','RECEPCION','RECEPCIÓN'],
-      usuario: ['USUARIO','USUARIO CREACION','USUARIO CREACIÓN','USUARIO QUE REALIZA','USUARIO TRASLADO','RESPONSABLE']
+      usuario: ['USUARIO','USUARIO CREACION','USUARIO CREACIÓN','USUARIO QUE REALIZA','USUARIO TRASLADO','RESPONSABLE'],
+      // Observaciones / notas del traslado (opcional): se muestran en la descarga
+      // de "Traslados no recibidos" si la fuente las trae.
+      observaciones: ['OBSERVACIONES','OBSERVACION','OBSERVACIÓN','OBS','NOTA','NOTAS','COMENTARIO','COMENTARIOS','DETALLE']
     }
   },
   {
@@ -2289,6 +2292,8 @@ async function calcularIndicadores(){
         // Texto original de la columna "Recibido" y bandera derivada: si el valor
         // empieza por "N" (No Recibido / NO RECIBIDA) la línea sigue pendiente.
         recibido: String(r.recibido||'').trim(),
+        // Observaciones/notas del traslado (opcional, puede venir vacío).
+        observaciones: String(r.observaciones||'').trim(),
         // Estado normalizado: 'RECIBIDO', 'PENDIENTE' o '' (sin dato).
         estadoRecibido: estadoTraslado(r.recibido),
         noRecibido: esTrasladoNoRecibido(r.recibido),
@@ -6385,32 +6390,49 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     if(!filas.length){ showToast('No hay traslados para los filtros actuales.', true); return; }
 
     // Agrupa por Zona + Bodega Destino contando números de traslado sin repetir.
+    // Además, se lleva la cuenta a nivel de LÍNEA (total y no recibidas) para los
+    // tres indicadores nuevos: Traslados totales, Traslados no recibidos y % de no
+    // recibidos. La recepción se marca por línea, por eso el porcentaje se calcula
+    // sobre las líneas (misma base que el anillo de recepción de la pantalla).
     const grupos=new Map();
     filas.forEach((r,i)=>{
       const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
       const zn=r.zonaDestino||'N/D';
       const k=zn+'||'+bd;
-      if(!grupos.has(k)) grupos.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
+      if(!grupos.has(k)) grupos.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0, lineasNoRec:0});
       const g=grupos.get(k);
       g.ids.add(r.traslado ? 'T:'+r.traslado : 'F:'+i);
       g.lineas++;
+      const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
+      if(est==='PENDIENTE') g.lineasNoRec++;
     });
 
-    const lista=[...grupos.values()].map(g=>({zona:g.zona, bodega:g.bodega, cant:g.ids.size, lineas:g.lineas}))
+    const lista=[...grupos.values()].map(g=>({zona:g.zona, bodega:g.bodega, cant:g.ids.size, lineas:g.lineas, lineasNoRec:g.lineasNoRec}))
       .sort((a,b)=> a.zona.localeCompare(b.zona,'es') || (b.cant-a.cant) || a.bodega.localeCompare(b.bodega,'es'));
     const total=lista.reduce((a,g)=>a+g.cant,0);
+    const totalLineas=lista.reduce((a,g)=>a+g.lineas,0);
+    const totalNoRec=lista.reduce((a,g)=>a+g.lineasNoRec,0);
 
     const hoja=lista.map(g=>({
       'Zona': g.zona,
       'Bodega Destino': g.bodega,
       'Traslados realizados': g.cant,
       'Líneas de artículo': g.lineas,
+      // Traslados totales = total de líneas asignadas a la bodega destino.
+      'Traslados totales': g.lineas,
+      // Traslados no recibidos = líneas que siguen en estado "No Recibido".
+      'Traslados no recibidos': g.lineasNoRec,
+      // % de no recibidos = no recibidos / totales.
+      '% de no recibidos': g.lineas ? g.lineasNoRec/g.lineas : 0,
       '% del total': total ? g.cant/total : 0
     }));
     hoja.push({
       'Zona': '', 'Bodega Destino': 'TOTAL ('+lista.length+(lista.length===1?' bodega)':' bodegas)'),
       'Traslados realizados': total,
-      'Líneas de artículo': lista.reduce((a,g)=>a+g.lineas,0),
+      'Líneas de artículo': totalLineas,
+      'Traslados totales': totalLineas,
+      'Traslados no recibidos': totalNoRec,
+      '% de no recibidos': totalLineas ? totalNoRec/totalLineas : 0,
       '% del total': total ? 1 : 0
     });
 
@@ -6419,7 +6441,94 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     const fecha=new Date().toISOString().slice(0,10);
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_por_Bodega_Destino'+suf+'_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(lista.length)+' bodegas destino, '+fmtInt(total)+' traslados.');
+    showToast('Excel exportado: '+fmtInt(lista.length)+' bodegas destino, '+fmtInt(total)+' traslados, '+fmtInt(totalNoRec)+' líneas no recibidas.');
+  });
+})();
+
+/* Descarga el DETALLE a nivel de línea de los traslados que siguen en estado
+   "No Recibido" (pendientes de recepción en la bodega destino). Respeta los mismos
+   filtros de la sección (departamento global, zona, bodega origen, bodega destino y
+   búsqueda por usuario), igual que la tabla y el anillo en pantalla. */
+(function(){
+  const btn=document.getElementById('btnDescargarTrasladosNoRec');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    // Se respeta el filtro global de Departamento (bodega destino), igual que en pantalla.
+    const all=trasladosDelDepartamento();
+    if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
+
+    const origen=(document.getElementById('fTrasladoOrigen')||{}).value||'';
+    const destino=(document.getElementById('fTrasladoDestino')||{}).value||'';
+    const zona=(document.getElementById('fTrasladoZona')||{}).value||'';
+    const busca=normValue((document.getElementById('fTrasladoUsuario')||{}).value||'');
+
+    // Filtros de la barra del módulo + condición de estado "No Recibido".
+    const filas=all.filter(r=>{
+      if(zona && r.zonaDestino!==zona) return false;
+      if(origen && r.bodegaOrigen!==origen) return false;
+      if(destino && r.bodegaDestino!==destino) return false;
+      if(busca && !normValue(r.usuario).includes(busca)) return false;
+      const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
+      return est==='PENDIENTE';
+    });
+
+    if(!filas.length){ showToast('No hay traslados no recibidos para los filtros actuales.', true); return; }
+
+    // Detalle línea a línea con las columnas de la fuente.
+    const detalle=filas
+      .sort((a,b)=> String(a.zonaDestino).localeCompare(String(b.zonaDestino),'es')
+        || String(a.bodegaDestino).localeCompare(String(b.bodegaDestino),'es')
+        || String(a.traslado).localeCompare(String(b.traslado),'es'))
+      .map(r=>({
+        'Zona': r.zonaDestino||'N/D',
+        'Traslado': r.traslado||'',
+        'Fecha': r.fecha ? dateToISO(r.fecha) : '',
+        'Bodega Origen': r.bodegaOrigen||'',
+        'Bodega Destino': r.bodegaDestino||'',
+        'Recibido': r.recibido || 'No Recibido',
+        'Codigo': r.codigo||'',
+        'Descripcion': r.descripcion||'',
+        'Unidades': r.cantidad||0,
+        'Usuario': r.usuario||'',
+        'Lote': r.lote||'',
+        'Fecha Vencimiento Lote': r.fechaVencimiento ? dateToISO(r.fechaVencimiento) : '',
+        'Observaciones': r.observaciones||''
+      }));
+
+    // Resumen por bodega destino: cuántas líneas no recibidas concentra cada una.
+    const porBodega=new Map();
+    filas.forEach((r,i)=>{
+      const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
+      const zn=r.zonaDestino||'N/D';
+      const k=zn+'||'+bd;
+      if(!porBodega.has(k)) porBodega.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
+      const g=porBodega.get(k);
+      g.ids.add(r.traslado ? 'T:'+r.traslado : 'F:'+i);
+      g.lineas++;
+    });
+    const resumen=[...porBodega.values()]
+      .sort((a,b)=> a.zona.localeCompare(b.zona,'es') || (b.lineas-a.lineas) || a.bodega.localeCompare(b.bodega,'es'))
+      .map(g=>({
+        'Zona': g.zona,
+        'Bodega Destino': g.bodega,
+        'Traslados no recibidos (únicos)': g.ids.size,
+        'Líneas no recibidas': g.lineas
+      }));
+    resumen.push({
+      'Zona': '', 'Bodega Destino': 'TOTAL ('+resumen.length+(resumen.length===1?' bodega)':' bodegas)'),
+      'Traslados no recibidos (únicos)': new Set(filas.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size,
+      'Líneas no recibidas': filas.length
+    });
+
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Traslados no recibidos');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Resumen por Bodega');
+    const fecha=new Date().toISOString().slice(0,10);
+    const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
+    XLSX.writeFile(wb, 'Traslados_No_Recibidos'+suf+'_'+fecha+'.xlsx');
+
+    const sinObs=detalle.every(d=>!d['Observaciones']);
+    showToast('Excel exportado: '+fmtInt(detalle.length)+' líneas no recibidas.'+(sinObs?' (La fuente no trae columna Observaciones.)':''));
   });
 })();
 
