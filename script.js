@@ -2579,11 +2579,65 @@ function _recorteDepartamento(base){
 function filasConsolidado(){
   const p = (typeof state!=='undefined' && state) ? state.processed : null;
   if(!p) return [];
-  if(p.rowsConsolidado && p.rowsConsolidado.length) return _recorteDepartamento(p.rowsConsolidado);
-  return (p.rows && p.rows.length) ? _recorteDepartamento(p.rows) : [];
+  const base = (p.rowsConsolidado && p.rowsConsolidado.length) ? p.rowsConsolidado
+             : ((p.rows && p.rows.length) ? p.rows : []);
+  if(!base.length) return [];
+  // 1) Recorte por VENTANA DE FECHAS de la cabecera (FECHA DESDE / HASTA): así un cargue
+  //    acotado a un rango NO arrastra meses anteriores. 2) Recorte por Departamento / Id
+  //    Contrato. Con la ventana por defecto (min–max de la data) no se descarta nada.
+  return _recorteDepartamento(_recorteVentana(base));
 }
 function filasConsolidadoVigentes(){
   return filasConsolidado().filter(r=>r.versionVigente!==false);
+}
+
+/* Ventana de fechas activa en la CABECERA (FECHA DESDE / FECHA HASTA). Los consolidados
+   (Reporte Comparativo, Reasignación mensual de entregas y Comparativo por bodega) se
+   recortan a esta ventana usando la FECHA ORIGEN de dispensación (inmutable) de cada
+   línea, de modo que al procesar un nuevo cargue acotado a un rango los meses fuera de
+   la ventana (p. ej. cargues anteriores acumulados) dejen de sumar en las cifras. Se usa
+   la fecha origen —no la de cada versión— para que todas las versiones de una misma línea
+   entren o salgan juntas y no se rompa el historial de versiones. Con la ventana por
+   defecto (todo el rango de la data) no se descarta ninguna fila. */
+function _ventanaFechasCabecera(){
+  const dEl=document.getElementById('fFechaDesde');
+  const hEl=document.getElementById('fFechaHasta');
+  const desdeStr=dEl?dEl.value:''; const hastaStr=hEl?hEl.value:'';
+  return {
+    desde: desdeStr ? new Date(desdeStr+'T00:00:00Z') : null,
+    hasta: hastaStr ? new Date(hastaStr+'T23:59:59Z') : null
+  };
+}
+/* Fecha ORIGEN de dispensación (inmutable) de una fila del consolidado, como Date. */
+function _fechaOrigenRow(r){
+  const o = r && r._fechaOrigenDisp;
+  if(o){
+    if(o instanceof Date) return isNaN(o) ? null : o;
+    const d = new Date(String(o).slice(0,10)+'T12:00:00Z');
+    if(!isNaN(d)) return d;
+  }
+  if(r && r.fecha instanceof Date) return isNaN(r.fecha) ? null : r.fecha;
+  if(r && r.fecha){ const d=new Date(r.fecha); return isNaN(d) ? null : d; }
+  return null;
+}
+let _consolidadoVentanaCache={base:null, desde:null, hasta:null, rows:null};
+function _recorteVentana(base){
+  const {desde,hasta}=_ventanaFechasCabecera();
+  if(!desde && !hasta) return base;
+  const dk = desde ? desde.getTime() : 0;
+  const hk = hasta ? hasta.getTime() : 0;
+  if(_consolidadoVentanaCache.base===base && _consolidadoVentanaCache.desde===dk && _consolidadoVentanaCache.hasta===hk){
+    return _consolidadoVentanaCache.rows;
+  }
+  const rows=base.filter(r=>{
+    const d=_fechaOrigenRow(r);
+    if(!d) return true;                 // sin fecha origen: se conserva (no romper la base)
+    if(desde && d<desde) return false;
+    if(hasta && d>hasta) return false;
+    return true;
+  });
+  _consolidadoVentanaCache={base, desde:dk, hasta:hk, rows};
+  return rows;
 }
 
 function aplicarFiltrosYRenderizar(){
@@ -2852,9 +2906,11 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   bHtml += '</tr>';
   document.getElementById('tblSeguimientoBody').innerHTML = bHtml;
 
-  // La Reasignación mensual de entregas es un CONSOLIDADO: siempre se calcula con
-  // toda la información cargada y el corte final, para que las cifras de cada mes
-  // queden fijas y no cambien al mover los filtros o al agregar cargues.
+  // La Reasignación mensual de entregas es un CONSOLIDADO: se calcula con el corte final
+  // para que las cifras de cada mes queden fijas y no cambien con los filtros de pantalla
+  // (contrato, EPS, zona, etc.). ÚNICA excepción: respeta la VENTANA DE FECHAS de la
+  // cabecera (FECHA DESDE/HASTA), de modo que un cargue acotado a un rango no arrastre
+  // meses fuera de ese rango. filasConsolidado() ya aplica ese recorte por fecha origen.
   renderSegMeses(filasConsolidado(), CORTE_CONSOLIDADO);
 }
 
@@ -3017,9 +3073,10 @@ function renderAllTablesFromCache(){
   renderIndicadorDispensa(rowsVigentes, bodegaSearch, zona);
   renderIndicadorLinea(rowsVigentes, bodegaSearch, zona);
   renderIndicadorSoporteEvento(rowsVigentes.filter(r=>r.contrato==='EVENTO'), bodegaSearch, zona);
-  // El Reporte Comparativo es un CONSOLIDADO: se calcula sobre toda la información
-  // cargada (todos los meses, sin filtros de pantalla) para que sus cifras queden
-  // fijas y no se muevan con cada cargue nuevo.
+  // El Reporte Comparativo es un CONSOLIDADO: se calcula con el corte final y sin los
+  // filtros de pantalla (contrato, EPS, zona…) para que sus cifras queden fijas. ÚNICA
+  // excepción: respeta la VENTANA DE FECHAS de la cabecera (FECHA DESDE/HASTA), de modo
+  // que un cargue acotado a un rango no arrastre meses fuera de ese rango.
   renderComparativos(filasConsolidado());
   // El seguimiento por corte sí sigue los filtros: necesita el historial completo de
   // versiones y toma la versión vigente al cierre de cada corte.
@@ -3418,23 +3475,50 @@ function renderIndicadorTraslados(){
   tb.innerHTML=h;
 }
 
+/* ---- Recepcion a NIVEL DE DOCUMENTO (traslado unico) ------------------------
+   El campo Traslado es el ID unico de la operacion y contiene varias LINEAS. Para
+   que los tableros y descargas guarden relacion con "Traslados realizados"
+   (COUNT DISTINCT Traslado), la recepcion se evalua por DOCUMENTO, no por linea:
+     - un documento cuenta como NO RECIBIDO si al menos una de sus lineas sigue
+       pendiente ("No Recibido"),
+     - se cuenta como RECIBIDO si ninguna linea esta pendiente y al menos una trae
+       estado reconocible "Recibido",
+     - queda "sin estado" solo si ninguna de sus lineas trae estado reconocible.
+   Las lineas con traslado vacio se tratan como un documento propio (clave por fila)
+   para no perderlas. Devuelve el conteo de DOCUMENTOS por categoria.            */
+function contarDocsRecepcion(filas){
+  const docs=new Map();
+  (filas||[]).forEach((t,i)=>{
+    const id = t.traslado ? ('T:'+t.traslado) : ('F:'+i);
+    if(!docs.has(id)) docs.set(id, {tienePend:false, tieneRec:false, tieneEstado:false});
+    const d=docs.get(id);
+    const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
+    if(est==='PENDIENTE'){ d.tienePend=true; d.tieneEstado=true; }
+    else if(est==='RECIBIDO'){ d.tieneRec=true; d.tieneEstado=true; }
+  });
+  let rec=0, noRec=0, sinEstado=0;
+  docs.forEach(d=>{
+    if(!d.tieneEstado) sinEstado++;
+    else if(d.tienePend) noRec++;   // basta una linea pendiente para que el documento este "No Recibido"
+    else rec++;
+  });
+  return {rec, noRec, sinEstado, total:rec+noRec, docsTotales:docs.size};
+}
+
 /* ---- Anillo: % de traslados recibidos vs no recibidos ----------------------
-   Se cuenta por LINEA de la tabla Traslados y solo con las lineas que traen un
-   estado reconocible en la columna "Recibido"; las lineas sin estado se informan
-   aparte en la leyenda para no inflar ninguno de los dos porcentajes.
+   Se cuenta por DOCUMENTO UNICO de traslado (COUNT DISTINCT Traslado), NO por
+   linea, para que el % y los totales concuerden con la columna "Traslados
+   realizados" de la tabla. Un documento con al menos una linea pendiente cuenta
+   como "No Recibido". Los documentos sin ningun estado reconocible se informan
+   aparte y no inflan ninguno de los dos porcentajes.
    Recibe las filas YA filtradas por zona / bodega origen / bodega destino, de modo
    que el anillo se mueve con los filtros de la seccion.                        */
 function renderDonutTrasladosRecibidos(filas){
   const svg=document.getElementById('donutTrasladosRecibidos');
   const leg=document.getElementById('donutTrasladosRecibidosLegend');
   if(!svg && !leg) return;
-  let rec=0, noRec=0, sinEstado=0;
-  (filas||[]).forEach(t=>{
-    const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
-    if(est==='RECIBIDO') rec++;
-    else if(est==='PENDIENTE') noRec++;
-    else sinEstado++;
-  });
+  const c=contarDocsRecepcion(filas);
+  const rec=c.rec, noRec=c.noRec, sinEstado=c.sinEstado;
   const base=rec+noRec;
   const pctRec = base ? rec/base : null;
   const pctNo  = base ? noRec/base : null;
@@ -3450,9 +3534,9 @@ function renderDonutTrasladosRecibidos(filas){
     leg.innerHTML =
       '<div class="item"><span class="sw" style="background:#1E8F5E;"></span>Recibidos<span class="val">'+fmtPct(pctRec)+'</span></div>'+
       '<div class="item"><span class="sw" style="background:#D98A2B;"></span>No recibidos<span class="val">'+fmtPct(pctNo)+'</span></div>'+
-      '<div class="item" style="color:#5C6C7E;font-size:11px;">Base: '+fmtInt(base)+' línea(s) con estado'+
+      '<div class="item" style="color:#5C6C7E;font-size:11px;">Base: '+fmtInt(base)+' traslado(s) con estado'+
         (sinEstado ? ' · '+fmtInt(sinEstado)+' sin estado (no se cuentan)' : '')+'</div>'+
-      '<div class="item" style="color:#5C6C7E;font-size:11px;">'+fmtInt(rec)+' recibidas · '+fmtInt(noRec)+' en camino</div>';
+      '<div class="item" style="color:#5C6C7E;font-size:11px;">'+fmtInt(rec)+' recibidos · '+fmtInt(noRec)+' en camino (documentos únicos)</div>';
   }
 }
 
@@ -6389,50 +6473,53 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     });
     if(!filas.length){ showToast('No hay traslados para los filtros actuales.', true); return; }
 
-    // Agrupa por Zona + Bodega Destino contando números de traslado sin repetir.
-    // Además, se lleva la cuenta a nivel de LÍNEA (total y no recibidas) para los
-    // tres indicadores nuevos: Traslados totales, Traslados no recibidos y % de no
-    // recibidos. La recepción se marca por línea, por eso el porcentaje se calcula
-    // sobre las líneas (misma base que el anillo de recepción de la pantalla).
+    // Agrupa por Zona + Bodega Destino. El conteo de TRASLADOS se hace por DOCUMENTO
+    // UNICO (COUNT DISTINCT Traslado), no por linea, para no duplicar el total al
+    // sumar las lineas de cada traslado. Se guardan las filas del grupo para evaluar
+    // la recepcion a nivel de documento (un documento con al menos una linea
+    // pendiente cuenta como "No Recibido").
     const grupos=new Map();
     filas.forEach((r,i)=>{
       const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
       const zn=r.zonaDestino||'N/D';
       const k=zn+'||'+bd;
-      if(!grupos.has(k)) grupos.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0, lineasNoRec:0});
+      if(!grupos.has(k)) grupos.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0, filas:[]});
       const g=grupos.get(k);
       g.ids.add(r.traslado ? 'T:'+r.traslado : 'F:'+i);
       g.lineas++;
-      const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
-      if(est==='PENDIENTE') g.lineasNoRec++;
+      g.filas.push(r);
     });
 
-    const lista=[...grupos.values()].map(g=>({zona:g.zona, bodega:g.bodega, cant:g.ids.size, lineas:g.lineas, lineasNoRec:g.lineasNoRec}))
-      .sort((a,b)=> a.zona.localeCompare(b.zona,'es') || (b.cant-a.cant) || a.bodega.localeCompare(b.bodega,'es'));
+    const lista=[...grupos.values()].map(g=>{
+      const c=contarDocsRecepcion(g.filas);       // recepcion por DOCUMENTO unico
+      return {zona:g.zona, bodega:g.bodega, cant:g.ids.size, lineas:g.lineas,
+              docsNoRec:c.noRec, docsRec:c.rec, docsSinEstado:c.sinEstado};
+    }).sort((a,b)=> a.zona.localeCompare(b.zona,'es') || (b.cant-a.cant) || a.bodega.localeCompare(b.bodega,'es'));
     const total=lista.reduce((a,g)=>a+g.cant,0);
     const totalLineas=lista.reduce((a,g)=>a+g.lineas,0);
-    const totalNoRec=lista.reduce((a,g)=>a+g.lineasNoRec,0);
+    const totalNoRec=lista.reduce((a,g)=>a+g.docsNoRec,0);
 
     const hoja=lista.map(g=>({
       'Zona': g.zona,
       'Bodega Destino': g.bodega,
       'Traslados realizados': g.cant,
       'Líneas de artículo': g.lineas,
-      // Traslados totales = total de líneas asignadas a la bodega destino.
-      'Traslados totales': g.lineas,
-      // Traslados no recibidos = líneas que siguen en estado "No Recibido".
-      'Traslados no recibidos': g.lineasNoRec,
-      // % de no recibidos = no recibidos / totales.
-      '% de no recibidos': g.lineas ? g.lineasNoRec/g.lineas : 0,
+      // Traslados totales = documentos únicos de traslado (COUNT DISTINCT), igual
+      // que "Traslados realizados": no se suman las líneas individuales.
+      'Traslados totales': g.cant,
+      // Traslados no recibidos = documentos únicos con al menos una línea pendiente.
+      'Traslados no recibidos': g.docsNoRec,
+      // % de no recibidos = documentos no recibidos / documentos totales.
+      '% de no recibidos': g.cant ? g.docsNoRec/g.cant : 0,
       '% del total': total ? g.cant/total : 0
     }));
     hoja.push({
       'Zona': '', 'Bodega Destino': 'TOTAL ('+lista.length+(lista.length===1?' bodega)':' bodegas)'),
       'Traslados realizados': total,
       'Líneas de artículo': totalLineas,
-      'Traslados totales': totalLineas,
+      'Traslados totales': total,
       'Traslados no recibidos': totalNoRec,
-      '% de no recibidos': totalLineas ? totalNoRec/totalLineas : 0,
+      '% de no recibidos': total ? totalNoRec/total : 0,
       '% del total': total ? 1 : 0
     });
 
@@ -6441,7 +6528,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     const fecha=new Date().toISOString().slice(0,10);
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_por_Bodega_Destino'+suf+'_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(lista.length)+' bodegas destino, '+fmtInt(total)+' traslados, '+fmtInt(totalNoRec)+' líneas no recibidas.');
+    showToast('Excel exportado: '+fmtInt(lista.length)+' bodegas destino, '+fmtInt(total)+' traslados, '+fmtInt(totalNoRec)+' no recibidos (documentos únicos).');
   });
 })();
 
@@ -6528,7 +6615,8 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     XLSX.writeFile(wb, 'Traslados_No_Recibidos'+suf+'_'+fecha+'.xlsx');
 
     const sinObs=detalle.every(d=>!d['Observaciones']);
-    showToast('Excel exportado: '+fmtInt(detalle.length)+' líneas no recibidas.'+(sinObs?' (La fuente no trae columna Observaciones.)':''));
+    const docsUnicos=new Set(filas.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size;
+    showToast('Excel exportado: '+fmtInt(docsUnicos)+' traslados no recibidos (documentos únicos) · '+fmtInt(detalle.length)+' líneas de detalle.'+(sinObs?' (La fuente no trae columna Observaciones.)':''));
   });
 })();
 
@@ -6560,6 +6648,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     if(!filas.length){ showToast('No hay líneas no homologadas para los filtros actuales.', true); return; }
 
     const detalle=filas.map(r=>({
+      'Traslado': r.traslado||'',
       'Codigo': r.codigo,
       'Bodega Origen': r.bodegaOrigen,
       'Bodega Destino': r.bodegaDestino,
@@ -6569,19 +6658,23 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     }));
 
     const porCodigo=new Map();
-    filas.forEach(r=>{
-      if(!porCodigo.has(r.codigo)) porCodigo.set(r.codigo, {codigo:r.codigo, descripcion:r.descripcion||'', lineas:0, cantidad:0, usuarios:new Set()});
+    filas.forEach((r,i)=>{
+      if(!porCodigo.has(r.codigo)) porCodigo.set(r.codigo, {codigo:r.codigo, descripcion:r.descripcion||'', lineas:0, cantidad:0, usuarios:new Set(), traslados:new Set()});
       const g=porCodigo.get(r.codigo);
       g.lineas++; g.cantidad+=(r.cantidad||0); g.usuarios.add(r.usuario);
+      g.traslados.add(r.traslado ? 'T:'+r.traslado : 'F:'+i);
       if(!g.descripcion && r.descripcion) g.descripcion=r.descripcion;
     });
     const resumenCod=[...porCodigo.values()].sort((a,b)=> (b.lineas-a.lineas) || String(a.codigo).localeCompare(String(b.codigo),'es')).map(g=>({
       'Codigo': g.codigo,
       'Descripcion': g.descripcion,
+      'Traslados únicos': g.traslados.size,
       'Líneas no homologadas': g.lineas,
       'Cantidad total': g.cantidad,
       'Usuarios distintos': g.usuarios.size
     }));
+    // Documentos únicos de traslado (COUNT DISTINCT) que contienen líneas no homologadas.
+    const trasladosUnicos=new Set(filas.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size;
 
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Líneas no homologadas');
@@ -6590,7 +6683,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     XLSX.writeFile(wb, 'Traslados_Lineas_No_Homologadas_'+fecha+'.xlsx');
 
     const sinDesc=detalle.every(d=>!d['Descripcion']);
-    showToast('Excel exportado: '+fmtInt(detalle.length)+' líneas no homologadas.'+(sinDesc?' Sincroniza de nuevo la tarjeta Traslados para traer Descripcion y Cantidad.':''));
+    showToast('Excel exportado: '+fmtInt(detalle.length)+' líneas no homologadas en '+fmtInt(trasladosUnicos)+' traslados únicos.'+(sinDesc?' Sincroniza de nuevo la tarjeta Traslados para traer Descripcion y Cantidad.':''));
   });
 })();
 
@@ -9285,7 +9378,8 @@ function populatePeriodicoFilters(){
   const selB=document.getElementById('pfBodega');
   // Filtro por mes: se arman las opciones con los meses (fecha de dispensación) presentes
   // en el histórico activo, ordenados cronológicamente.
-  // Meses del consolidado: la ventana siempre ofrece todos los meses de la historia.
+  // Meses del consolidado: dentro de la VENTANA DE FECHAS de la cabecera (FECHA
+  // DESDE/HASTA). Con la ventana por defecto (todo el rango) aparecen todos los meses.
   const filasRP = filasConsolidado();
   const selMes=document.getElementById('pfMes');
   if(selMes){
@@ -9318,10 +9412,11 @@ function populatePeriodicoFilters(){
    igual que en los indicadores de la pantalla principal, para que las cifras del
    Reporte Comparativo Periódico coincidan con el Indicador Soporte Evento.        */
 function getPeriodicoFilteredRows(){
-  /* El Reporte Comparativo es un CONSOLIDADO: siempre parte de toda la historia
-     cargada, no solo de los meses abiertos en pantalla, para que sus cifras no
-     cambien cuando se agrega un cargue o se abre otro mes. Los filtros propios
-     de esta ventana sí se respetan porque los elige el usuario.               */
+  /* El Reporte Comparativo es un CONSOLIDADO: parte de la historia cargada con el corte
+     final y sin los filtros de pantalla, para que sus cifras no cambien al abrir otro
+     mes. ÚNICA excepción: respeta la VENTANA DE FECHAS de la cabecera (FECHA DESDE/HASTA),
+     así un cargue acotado a un rango no arrastra meses fuera de él. Los filtros propios de
+     esta ventana sí se respetan porque los elige el usuario.                     */
   const allRows = soloActivas(filasConsolidado());
   const selMes=document.getElementById('pfMes');
   const fMesRP = selMes ? selMes.value : '';
