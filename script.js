@@ -4579,9 +4579,14 @@ function descargarImagenTopBodegasDispensa(modo){
   /* Solo bodegas con dispensas activas: sin dispensas no hay indicador comparable.
      Ademas se dejan fuera de los dos Top 20 las zonas que no son puntos de venta
      operativos: "CERRADA" (puntos cerrados), "BODEGA" y "BODEGA VIRTUAL"
-     (centros de acopio y bodegas logisticas). Al excluirlas antes de ordenar, el
-     listado siempre completa 20 bodegas detalle operativas. */
-  const base = tabla.filter(t => (t.dispensas||0) > 0 && !zonaNoOperativaDispensa(t.zona));
+     (centros de acopio y bodegas logisticas). Tambien se excluyen las filas cuya
+     BODEGA DETALLE viene en blanco (sin nombre de punto), porque no identifican una
+     bodega real. Al excluirlas antes de ordenar, el listado siempre completa 20
+     bodegas detalle operativas. */
+  const base = tabla.filter(t => (t.dispensas||0) > 0
+                              && !zonaNoOperativaDispensa(t.zona)
+                              && String(t.bodega||'').trim() !== ''
+                              && normValue(t.bodega) !== 'N/D');
   if(!base.length){ showToast('No hay bodegas operativas con dispensas activas para el filtro actual.', true); return; }
 
   const orden = base.slice().sort((a,b)=>{
@@ -4598,7 +4603,7 @@ function descargarImagenTopBodegasDispensa(modo){
                       : 'Top 20 bodegas detalle · Mayor índice de pendientes';
   const criterio = (esEf ? 'Ordenado por indicador de eficiencia, de mayor a menor.'
                          : 'Ordenado por índice de pendientes, de mayor a menor.')
-                 + ' Se excluyen las zonas Cerrada, Bodega y Bodega Virtual.';
+                 + ' Se excluyen las zonas Cerrada, Bodega y Bodega Virtual, y las filas sin bodega detalle.';
   const acento = esEf ? '#1E8F5E' : '#D98A2B';
 
   const tD=sumField(top,'dispensas'), tE=sumField(top,'dispensasEntregadas'), tP=sumField(top,'dispensasPendientes');
