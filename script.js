@@ -84,6 +84,10 @@ const DATASETS = [
       estadoDispensa: ['ESTADO','ESTADO DISPENSA','ESTADO DE LA DISPENSA','ESTADO DE DISPENSA'],
       usuarioCreacion: ['USUARIO CREACION','USUARIO CREACIÓN','USUARIO DE CREACION','USUARIO DE CREACIÓN','USUARIO CREADOR','USUARIO'],
       fechaDispensacion: ['FECHA DE DISPENSACION','FECHA DISPENSACION','FECHA DISPENSACIÓN'],
+      // FECHA ORIGEN DE DISPENSACIÓN (inmutable): la fecha fija del registro inicial.
+      fechaOrigenDispensacion: ['FECHA ORIGEN DISPENSACION','FECHA ORIGEN DE DISPENSACION','FECHA ORIGEN DISPENSACIÓN','FECHA ORIGEN DE DISPENSACIÓN','FECHA DE ORIGEN DISPENSACION','FECHA DE ORIGEN DE DISPENSACION','FECHA ORIGEN'],
+      // ID CONTRATO: identificador numérico del contrato (filtro y clave de dispensa).
+      idContrato: ['ID CONTRATO','IDCONTRATO','ID DE CONTRATO','ID_CONTRATO','IDENTIFICADOR CONTRATO','IDENTIFICADOR DE CONTRATO','NRO CONTRATO','NUMERO CONTRATO','NÚMERO CONTRATO','CONTRATO ID','COD CONTRATO','CODIGO CONTRATO'],
       eps: ['EPS'],
       contrato: ['CONTRATO'],
       codigoArticulo: ['CODIGO DE ARTICULO','CODIGO ARTICULO','CODIGO ARTICLE','CODIGO','COD ARTICULO','COD. ARTICULO','COD ARTICLE','ID ARTICULO'],
@@ -95,8 +99,8 @@ const DATASETS = [
       // Lote y vencimiento del medicamento dispensado. En el archivo van justo
       // después de la columna Diferencia y alimentan la Trazabilidad de Lotes.
       lote: ['LOTE','NUMERO LOTE','NUMERO DE LOTE','NÚMERO LOTE','NRO LOTE','NO LOTE','N LOTE','LOTE ARTICULO','LOTE MEDICAMENTO','LOTE DESPACHADO','LOTE ENVIADO','LOTE RECIBIDO'],
-      fechaVencimiento: ['FECHA DE VENCIMIENTO','FECHA VENCIMIENTO','FECHA DE VENCIMIENTO LOTE','FECHA VTO','FECHA VTO.','VENCIMIENTO','FECHA VENC.','FEC VENCIMIENTO'],
-      soportes: ['SOPORTE','SOPORTES']
+      fechaVencimiento: ['FECHA LOTE','FECHA DE LOTE','FECHA DEL LOTE','FECHA DE VENCIMIENTO','FECHA VENCIMIENTO','FECHA DE VENCIMIENTO LOTE','FECHA VTO','FECHA VTO.','VENCIMIENTO','FECHA VENC.','FEC VENCIMIENTO'],
+      soportes: ['CANTIDAD SOPORTES','CANTIDAD SOPORTE','CANTIDAD DE SOPORTES','SOPORTE','SOPORTES']
     }
   },
   {
@@ -706,6 +710,8 @@ const FIELD_FALLBACK_KEYWORDS = {
   fechaDispensacion: ['FECHA DISPENS', 'FECHA DE DISPENS'],
   cantidadAutorizada: ['AUTORIZAD'],
   soportes: ['SOPORTE'],
+  idContrato: ['IDCONTRATO','ID CONTRATO','ID DE CONTRATO'],
+  fechaOrigenDispensacion: ['FECHA ORIGEN DISPENS','FECHA ORIGEN DE DISPENS','FECHA ORIGEN'],
   documento: ['DOCUMENTO'],
   // Columna "Recibido" de Traslados (valores tipo Recibido / No Recibido)
   recibido: ['RECIBIDO','ESTADO RECIB','NO RECIBIDO','RECIB']
@@ -1859,6 +1865,12 @@ function getDepartamentoFiltro(){
   const el=document.getElementById('fDepartamento');
   return el ? el.value : '';
 }
+// Id Contrato seleccionado en la barra superior. Segmenta TODAS las vistas del visor
+// (tarjetas, seguimiento por bodega, reasignación mensual, soporte de Cápita, etc.).
+function getIdContratoFiltro(){
+  const el=document.getElementById('fIdContrato');
+  return el ? String(el.value||'').trim() : '';
+}
 // Departamento de una bodega por su nombre (para las secciones que no traen el campo).
 function deptoDeBodega(nombre){
   const m=(typeof state!=='undefined' && state) ? state.bodegaDepto : null;
@@ -2054,9 +2066,21 @@ async function calcularIndicadores(){
       const archivoCargue=archivoDeCargue(r);
       const documento=String(r.documento||'').trim();
       const contrato=normValue(r.contrato);
+      // ID CONTRATO: identificador numérico del contrato. Sirve para el filtro "Id Contrato"
+      // y para identificar la dispensa (Documento + Id Contrato) en Soporte Cápita.
+      const idContrato=String(r.idContrato||'').trim();
       const eps=corregirEps(r.eps);
       const epsGrupo=epsAGrupo(eps);
       const fecha=toDateSafe(r.fechaDispensacion);
+      // FECHA ORIGEN DE DISPENSACIÓN (inmutable): viene en el archivo. Se guarda solo el
+      // día (sin hora). Si el archivo no la trae, se reconstruirá más abajo con la primera
+      // versión conocida de la línea.
+      const _fdo=toDateSafe(r.fechaOrigenDispensacion);
+      const fechaOrigenDispensacion=(_fdo && !isNaN(_fdo)) ? _fdo.toISOString().slice(0,10) : '';
+      /* FECHA DE ENTREGA EFECTIVA: cuando la línea llega con Diferencia = 0 (y con unidades
+         entregadas) la entrega ya se materializó; se registra la fecha del CARGUE en que
+         eso ocurrió. Si Diferencia != 0 la línea sigue pendiente y no hay entrega. */
+      const fechaEntregaEfectiva=(unidades>0 && diferencia===0) ? String(fechaCargue||'').slice(0,10) : '';
       const estadoDispensa=normValue(r.estadoDispensa);
       const usuarioCreacion=String(r.usuarioCreacion||'').trim();
       // Lote y vencimiento del medicamento dispensado (Trazabilidad de Lotes).
@@ -2064,9 +2088,10 @@ async function calcularIndicadores(){
       const fechaVencimiento=toDateSafe(r.fechaVencimiento);
       const codigoCie10=String(r.codigoCie10||'').trim().toUpperCase();
       return {
-        idx, documento, fecha, eps, epsGrupo, contrato, codigoArticulo, homologo, moleculaPareto, descripcionDci, estado,
+        idx, documento, fecha, eps, epsGrupo, contrato, idContrato, codigoArticulo, homologo, moleculaPareto, descripcionDci, estado,
         descripcionReporte, enHomologos,
         estadoDispensa, usuarioCreacion, codigoCie10, lote, fechaVencimiento,
+        fechaOrigenDispensacion, fechaEntregaEfectiva,
         unidades, cantidadAutorizada, diferencia, lineaPendiente, noMedicamento, bodegaDetalle, bodegaNorm,
         zona: bodegaToZona.get(bodegaNorm) || 'N/D',
         // Departamento de la bodega (tabla Bodega y Zona): base del filtro global.
@@ -2141,10 +2166,14 @@ async function calcularIndicadores(){
       rows.forEach(r=>{
         const k=claveLineaCargue(r);
         r.versionVigente = (ultimaPorLinea.get(k)===r);
+        // Se prefiere la FECHA ORIGEN de dispensación que trae EL ARCHIVO (dato oficial e
+        // inmutable). Si el archivo no la informa (acumulados antiguos), se reconstruye con
+        // la fecha de dispensación de la PRIMERA versión conocida de la línea.
         const ori=primeraPorLinea.get(k);
-        r._fechaOrigenDisp = (ori && ori.fecha instanceof Date && !isNaN(ori.fecha))
+        const oriDerivada = (ori && ori.fecha instanceof Date && !isNaN(ori.fecha))
           ? ori.fecha.toISOString().slice(0,10)
           : (ori ? String(ori.fecha||'').slice(0,10) : '');
+        r._fechaOrigenDisp = r.fechaOrigenDispensacion || oriDerivada;
       });
     }
 
@@ -2191,6 +2220,13 @@ async function calcularIndicadores(){
     // los avances se calculan comparando versiones (ver snapshotHastaCorte / buildCorteMetrics).
 
     const contratos=Array.from(new Set(rows.map(r=>r.contrato).filter(Boolean))).sort();
+    /* Id Contrato presentes en la información cargada. Alimentan el filtro "Id Contrato"
+       de la barra superior. Se ordenan numéricamente cuando son números. */
+    const idContratos=Array.from(new Set(rows.map(r=>String(r.idContrato||'').trim()).filter(Boolean))).sort((a,b)=>{
+      const na=Number(a), nb=Number(b);
+      if(!isNaN(na) && !isNaN(nb) && a!=='' && b!=='') return na-nb;
+      return a.localeCompare(b,'es');
+    });
     const epsFromReporte=new Set(rows.map(r=>r.eps).filter(Boolean));
     (byKey.sigla||[]).forEach(r=>{ const s=String(r.sigla||'').trim(); if(s) epsFromReporte.add(s); });
     const epsList=Array.from(epsFromReporte).sort();
@@ -2293,7 +2329,7 @@ async function calcularIndicadores(){
     const facturasPuntos = Array.from(new Set(facturasRows.map(r=>r.puntoVenta).filter(Boolean))).sort((a,b)=>a.localeCompare(b,'es'));
 
     _trazaListasListas=false;   // datos nuevos: se vuelven a llenar los filtros de la Trazabilidad
-    state.processed={rows, rowsConsolidado, contratos, epsList, epsGrupos, cie10List, zonas, departamentos, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
+    state.processed={rows, rowsConsolidado, contratos, idContratos, epsList, epsGrupos, cie10List, zonas, departamentos, minFecha, maxFecha, hasCargues, traslados:trasladosRows, trasladosOrigenes, trasladosDestinos, trasladosZonas, facturas:facturasRows, facturasPuntos};
     populateFilters();
     populateTrasladosFilters();
     populateFacturasFilters();
@@ -2319,6 +2355,16 @@ function populateFilters(){
   const selC=document.getElementById('fContrato'); const selE=document.getElementById('fEps'); const selZ=document.getElementById('fZona'); const selEG=document.getElementById('fEpsGrupo');
   buildCie10Multi(p.cie10List||[]);
   selC.innerHTML='<option value="">Todos</option>'+p.contratos.map(c=>`<option value="${c}">${c}</option>`).join('');
+  // Filtro por Id Contrato: opciones tomadas de los Id Contrato presentes en el reporte.
+  const selIC=document.getElementById('fIdContrato');
+  if(selIC){
+    const prevIC=selIC.value;
+    const lista=p.idContratos||[];
+    const wrapIC=document.getElementById('fIdContratoWrap');
+    if(wrapIC) wrapIC.style.display = lista.length ? '' : 'none';
+    selIC.innerHTML='<option value="">Todos</option>'+lista.map(c=>`<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+    selIC.value = lista.indexOf(prevIC)>=0 ? prevIC : '';
+  }
   selE.innerHTML='<option value="">Todos</option>'+p.epsList.map(c=>`<option value="${c}">${c}</option>`).join('');
   selEG.innerHTML='<option value="">Todas</option>'+p.epsGrupos.map(c=>`<option value="${c}">${c}</option>`).join('');
   selZ.innerHTML='<option value="">Todas las zonas</option>'+p.zonas.map(z=>`<option value="${z}">${z}</option>`).join('');
@@ -2414,7 +2460,7 @@ document.getElementById('fCorte').addEventListener('change', ()=>{
   });
 })();
 // Se aplica automáticamente también al cambiar cualquiera de los campos (no solo con el botón),
-['fMes','fFechaDesde','fFechaHasta','fContrato','fEps','fEpsGrupo'].forEach(id=>{
+['fMes','fFechaDesde','fFechaHasta','fContrato','fIdContrato','fEps','fEpsGrupo'].forEach(id=>{
   const el=document.getElementById(id);
   if(el) el.addEventListener('change', aplicarFiltrosYRenderizar);
 });
@@ -2474,7 +2520,7 @@ function limpiarCie10(){
 document.getElementById('btnLimpiarFiltro').addEventListener('click', ()=>{
   document.getElementById('fFechaDesde').value = state.processed.minFecha ? dateToISO(state.processed.minFecha):'';
   document.getElementById('fFechaHasta').value = state.processed.maxFecha ? dateToISO(state.processed.maxFecha):'';
-  document.getElementById('fContrato').value=''; document.getElementById('fEps').value=''; document.getElementById('fEpsGrupo').value=''; limpiarCie10();
+  document.getElementById('fContrato').value=''; const _selIC=document.getElementById('fIdContrato'); if(_selIC) _selIC.value=''; document.getElementById('fEps').value=''; document.getElementById('fEpsGrupo').value=''; limpiarCie10();
   const selMesLimpiar=document.getElementById('fMes'); if(selMesLimpiar) selMesLimpiar.value='';
   document.getElementById('fBodegaSearch').value=''; document.getElementById('fBodega').value=''; document.getElementById('fZona').value='';
   const selDepto=document.getElementById('fDepartamento');
@@ -2511,13 +2557,18 @@ const CORTE_CONSOLIDADO = 3;   // los consolidados siempre usan el corte final
 /* Caché del consolidado ya recortado por departamento: el filtro se aplica también a los
    consolidados (Reporte Comparativo, Reasignación mensual y consumo promedio de
    supervisores) y esas vistas piden las filas muchas veces por render. */
-let _consolidadoDeptoCache={base:null, depto:null, rows:null};
+let _consolidadoDeptoCache={base:null, depto:null, idc:null, rows:null};
 function _recorteDepartamento(base){
   const depto=getDepartamentoFiltro();
-  if(!depto) return base;
-  if(_consolidadoDeptoCache.base===base && _consolidadoDeptoCache.depto===depto) return _consolidadoDeptoCache.rows;
-  const rows=base.filter(r=>(r.departamento||'N/D')===depto);
-  _consolidadoDeptoCache={base, depto, rows};
+  const idc=getIdContratoFiltro();
+  if(!depto && !idc) return base;
+  if(_consolidadoDeptoCache.base===base && _consolidadoDeptoCache.depto===depto && _consolidadoDeptoCache.idc===idc) return _consolidadoDeptoCache.rows;
+  const rows=base.filter(r=>{
+    if(depto && (r.departamento||'N/D')!==depto) return false;
+    if(idc && String(r.idContrato||'').trim()!==idc) return false;
+    return true;
+  });
+  _consolidadoDeptoCache={base, depto, idc, rows};
   return rows;
 }
 function filasConsolidado(){
@@ -2537,6 +2588,7 @@ function aplicarFiltrosYRenderizar(){
   const desde=desdeStr? new Date(desdeStr+'T00:00:00Z'):null;
   const hasta=hastaStr? new Date(hastaStr+'T23:59:59Z'):null;
   const contrato=document.getElementById('fContrato').value;
+  const idContratoSel=getIdContratoFiltro();
   const eps=document.getElementById('fEps').value;
   const epsGrupo=document.getElementById('fEpsGrupo').value;
   const selMes=document.getElementById('fMes');
@@ -2551,6 +2603,7 @@ function aplicarFiltrosYRenderizar(){
     if(desde && r.fecha && r.fecha<desde) return false;
     if(hasta && r.fecha && r.fecha>hasta) return false;
     if(contrato && r.contrato!==contrato) return false;
+    if(idContratoSel && String(r.idContrato||'').trim()!==idContratoSel) return false;
     if(eps && r.eps!==eps) return false;
     if(epsGrupo && r.epsGrupo!==epsGrupo) return false;
     if(cie10Sel.size && !cie10Sel.has(r.codigoCie10)) return false;
@@ -4081,17 +4134,19 @@ function renderIndicadorDispensa(rowsAllRaw, bodegaSearch, zona){
   const eventoRows = rowsAmbito.filter(r=>r.contrato==='EVENTO');
   const dispCapita = new Set(capitaRows.map(r=>r.dispensaYPunto)).size;
   const dispEvento = new Set(eventoRows.map(r=>r.dispensaYPunto)).size;
-  /* Estado de SOPORTE por DISPENSA (bodega + documento), no por línea suelta. Una
+  /* Estado de SOPORTE por DISPENSA. Para el soporte, la dispensa se identifica por
+     Documento + Id Contrato (no por bodega+documento): un mismo documento puede tener
+     varias líneas del mismo contrato y el soporte aplica a esa dispensa completa. Una
      dispensa cuenta CON SOPORTE si CUALQUIERA de sus líneas vigentes ya trae soporte
-     (Soporte > 0); de lo contrario queda SIN SOPORTE. Así, cuando un cargue posterior
-     actualiza una dispensa (p. ej. Cápita) de Soporte = 0 a Soporte > 0, la dispensa
-     pasa automáticamente a "Con soporte" y refresca la tarjeta y el anillo. Además
-     evita el doble conteo: una misma dispensa no puede sumar a la vez en "con" y
-     "sin" soporte. */
+     (Cantidad Soportes > 0); de lo contrario queda SIN SOPORTE. Así, cuando un cargue
+     posterior actualiza la dispensa de Soporte = 0 a Soporte > 0, pasa automáticamente
+     de "Sin soporte" a "Con soporte" y refresca la tarjeta y el anillo. Además evita el
+     doble conteo: una misma dispensa no puede sumar a la vez en "con" y "sin" soporte. */
+  const soporteDispKey = (r)=> String(r.documento||('_R'+r.idx)) + '|' + String(r.idContrato||'').trim();
   const soporteDispensa = (rs)=>{
     const m=new Map();
     rs.forEach(r=>{
-      const k=r.dispensaYPunto;
+      const k=soporteDispKey(r);
       const con = r.tieneSoportes==='TIENE SOPORTE';
       if(con) m.set(k, true);
       else if(!m.has(k)) m.set(k, false);
@@ -4104,6 +4159,10 @@ function renderIndicadorDispensa(rowsAllRaw, bodegaSearch, zona){
   const mapSopEvento = soporteDispensa(eventoRows);
   const dispConSoporte = contarSoporte(mapSopTodos, true);
   const dispSinSoporte = contarSoporte(mapSopTodos, false);
+  // Total de dispensas (para %) medido con el MISMO criterio del soporte (Documento+Id
+  // Contrato), de modo que "con" + "sin" soporte cuadren siempre con el total.
+  const totalDispSoporte = mapSopTodos.size;
+  const dispCapitaSoporte = mapSopCapita.size;
   const sinSoporteCapita = contarSoporte(mapSopCapita, false);
   const sinSoporteEvento = contarSoporte(mapSopEvento, false);
   const pctSinSopCapita = dispSinSoporte ? sinSoporteCapita/dispSinSoporte : null;
@@ -4113,14 +4172,14 @@ function renderIndicadorDispensa(rowsAllRaw, bodegaSearch, zona){
     <div class="stat"><div class="label">1.1 Total de dispensas</div><div class="value">${fmtInt(totalDispensas)}</div></div>
     <div class="stat"><div class="label">1.2 Dispensas Capita</div><div class="value">${fmtInt(dispCapita)}</div></div>
     <div class="stat"><div class="label">1.3 Dispensas Evento</div><div class="value">${fmtInt(dispEvento)}</div></div>
-    <div class="stat"><div class="label">1.4 Con soporte</div><div class="value">${fmtInt(dispConSoporte)}</div><div class="sub">${fmtPct(totalDispensas?dispConSoporte/totalDispensas:null)} del total</div></div>
-    <div class="stat warn"><div class="label">1.5 Sin soporte</div><div class="value">${fmtInt(dispSinSoporte)}</div><div class="sub">${fmtPct(totalDispensas?dispSinSoporte/totalDispensas:null)} del total</div></div>
+    <div class="stat"><div class="label">1.4 Con soporte</div><div class="value">${fmtInt(dispConSoporte)}</div><div class="sub">${fmtPct(totalDispSoporte?dispConSoporte/totalDispSoporte:null)} del total</div></div>
+    <div class="stat warn"><div class="label">1.5 Sin soporte</div><div class="value">${fmtInt(dispSinSoporte)}</div><div class="sub">${fmtPct(totalDispSoporte?dispSinSoporte/totalDispSoporte:null)} del total</div></div>
     <div class="stat"><div class="label">1.5.1 Sin soporte · Capita</div><div class="value">${fmtInt(sinSoporteCapita)}</div><div class="sub">${fmtPct(pctSinSopCapita)} de las sin soporte</div></div>
     <div class="stat"><div class="label">1.5.2 Sin soporte · Evento</div><div class="value">${fmtInt(sinSoporteEvento)}</div><div class="sub">${fmtPct(pctSinSopEvento)} de las sin soporte</div></div>
   `;
 
   // ---- Anillo de soporte para las dispensas CAPITA (sigue los mismos filtros) ----
-  renderDonutCapitaSoporte(dispCapita, sinSoporteCapita);
+  renderDonutCapitaSoporte(dispCapitaSoporte, sinSoporteCapita);
 
   // ---- 1.6 - 1.12: por bodega detalle (con filtro de búsqueda / zona) ----
   const groups = groupByBodega(rowsAll, bodegaSearch, zona);
@@ -5960,6 +6019,43 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
 });
 
 // ---- Sin Homologar: líneas pendientes cuyo código no está clasificado como PARETO ni NO PARETO ----
+// ---- Descargar Pendientes (Excel): detalle de las líneas PENDIENTES del Indicador por
+// Línea. Hereda TODOS los filtros globales activos (rango de fechas, corte, mes, EPS/
+// sigla comercial e Id Contrato) porque parte de filteredRowsCache, que ya viene recortado
+// por aplicarFiltrosYRenderizar; además aplica los subfiltros de bodega y zona del propio
+// indicador. Condición: solo líneas con cantidad pendiente distinta de cero (Diferencia < 0).
+(function initDescargarPendientesLinea(){
+  const btn=document.getElementById('btnDescargarPendientesLinea');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
+    const bodegaSearch = getBodegaFiltro();
+    const zona = document.getElementById('fZona').value;
+    const pendientes = filteredRowsCache.filter(r=>{
+      if(r.versionVigente===false) return false;          // versión superada por un recargue
+      if(!esEstadoActivo(r.estadoDispensa)) return false; // solo dispensas activas
+      if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
+      if(zona && r.zona!==zona) return false;
+      return lineaEsPendiente(r);                          // pendiente = Diferencia < 0 (cantidad pendiente ≠ 0)
+    }).map(r=>({
+      'Zona': r.zona || 'N/D',
+      'Bodega detalle': r.bodegaDetalle || '',
+      'Código': r.codigoArticulo || '',
+      'Descripción': String(r.descripcionReporte||r.descripcion||'').trim(),
+      'Homólogo': String(r.homologo||'').trim(),
+      'Descripción DCI': String(r.descripcionDci||'').trim(),
+      'Cantidad pendiente': Math.abs(toNumber(r.diferencia)),
+      'Sigla comercial': r.eps || ''
+    }));
+    if(!pendientes.length){ showToast('No hay líneas pendientes con los filtros actuales.', true); return; }
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pendientes), 'PENDIENTES');
+    const fecha=new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, 'Pendientes_por_Linea_'+fecha+'.xlsx');
+    showToast('Excel de Pendientes exportado: '+fmtInt(pendientes.length)+' líneas.');
+  });
+})();
+
 document.getElementById('btnDescargarSinHomologar').addEventListener('click', ()=>{
   if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
   const bodegaSearch = getBodegaFiltro();
