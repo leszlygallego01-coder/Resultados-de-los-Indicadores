@@ -2123,12 +2123,29 @@ async function calcularIndicadores(){
     // pero no deben sumar en los indicadores ni en el seguimiento del estado actual.
     {
       const ultimaPorLinea=new Map();
+      const primeraPorLinea=new Map();
       rows.forEach(r=>{
         const k=claveLineaCargue(r);
-        const prev=ultimaPorLinea.get(k);
-        if(!prev || esVersionPosterior(r, prev)) ultimaPorLinea.set(k, r);
+        const prevU=ultimaPorLinea.get(k);
+        if(!prevU || esVersionPosterior(r, prevU)) ultimaPorLinea.set(k, r);
+        const prevP=primeraPorLinea.get(k);
+        if(!prevP || esVersionPosterior(prevP, r)) primeraPorLinea.set(k, r);   // versión más antigua
       });
-      rows.forEach(r=>{ r.versionVigente = (ultimaPorLinea.get(claveLineaCargue(r))===r); });
+      /* DOS FECHAS DE DISPENSACIÓN:
+         - FECHA ORIGEN DE DISPENSACIÓN (inmutable): la fecha de dispensación con la que la
+           línea apareció por PRIMERA vez. Queda congelada aunque un cargue posterior
+           actualice la fecha de dispensación de esa línea.
+         - FECHA DE DISPENSACIÓN (actualizable): la de cada versión (r.fecha). Es la que
+           manda en la consolidación por cortes, el seguimiento por bodega y la
+           reasignación mensual. */
+      rows.forEach(r=>{
+        const k=claveLineaCargue(r);
+        r.versionVigente = (ultimaPorLinea.get(k)===r);
+        const ori=primeraPorLinea.get(k);
+        r._fechaOrigenDisp = (ori && ori.fecha instanceof Date && !isNaN(ori.fecha))
+          ? ori.fecha.toISOString().slice(0,10)
+          : (ori ? String(ori.fecha||'').slice(0,10) : '');
+      });
     }
 
     /* Pendiente por DISPENSA. Una dispensa se identifica por Documento + Bodega: el mismo
@@ -2818,8 +2835,11 @@ function renderSegMeses(rows, corteGlobal){
   // ¿El CARGUE de esta versión ya ocurrió dentro del corte global mostrado? El
   // cumplimiento solo puede acreditarse con cargues visibles en el corte seleccionado.
   const cargueVisible = (r) => {
-    const p = getPeriodoDeCarga(r.fechaCargue||'');
-    return p===null || p<=corteGlobal;                    // sin fecha de cargue: se conserva
+    // La entrega se materializa en el corte de su FECHA DE DISPENSACIÓN (actualizable),
+    // no en el del archivo. Respaldo: la fecha del cargue si la versión no trae fecha.
+    let p = getPeriodoDeCarga(r.fecha);
+    if(p===null) p = getPeriodoDeCarga(r.fechaCargue||'');
+    return p===null || p<=corteGlobal;                    // sin fecha: se conserva
   };
   visibles.forEach(r => {
     const k = claveLineaCargue(r);
@@ -2831,20 +2851,20 @@ function renderSegMeses(rows, corteGlobal){
   const docsMap = new Map();            // dispensa (documento+bodega) -> {mesOrigen, mesEntrega, completo}
   porLinea.forEach(vs => {
     vs.sort((a,b) => esVersionPosterior(a,b) ? 1 : -1);
-    // Mes de origen = mes de la FECHA DE DISPENSACIÓN (fecha el ORIGEN del pendiente).
+    // Mes de origen = mes de la FECHA ORIGEN de dispensación (inmutable: primera versión).
     const rBase = vs[0];
-    const mesOrigen = mesDeDispensacion(rBase) || SIN_FECHA;
+    const mesOrigen = mesOrigenDispensacion(rBase) || SIN_FECHA;
     const pendienteAlInicio = rBase.lineaPendiente==='SI';
     let mesEntrega = null;
     for(let i=0;i<vs.length;i++){
       if(vs[i].lineaPendiente!=='NO') continue;
       if(!cargueVisible(vs[i])) continue;                  // cargue fuera del corte mostrado
-      /* DOS EJES: el mes de ORIGEN sale de la fecha de dispensación (allí nació el
-         pendiente) y el mes de la ENTREGA sale del CARGUE en que la línea volvió a
-         subirse ya entregada. Si la línea nunca estuvo pendiente, la entrega se queda
-         en su propio mes de origen (no hay recuperación que reasignar).            */
+      /* DOS FECHAS: el mes de ORIGEN sale de la FECHA ORIGEN de dispensación (inmutable,
+         donde nació el pendiente) y el mes de la ENTREGA/REASIGNACIÓN sale de la FECHA DE
+         DISPENSACIÓN (actualizable) de la versión que ya llegó entregada. Si la línea
+         nunca estuvo pendiente, la entrega se queda en su propio mes de origen.       */
       const acreditado = pendienteAlInicio && cambioAcreditado(rBase, vs[i]);
-      mesEntrega = acreditado ? (mesDeCargue(vs[i]) || mesOrigen) : mesOrigen;
+      mesEntrega = acreditado ? (mesDeDispensacion(vs[i]) || mesOrigen) : mesOrigen;
       if(mesEntrega < mesOrigen) mesEntrega = mesOrigen;
       break;
     }
@@ -4061,10 +4081,31 @@ function renderIndicadorDispensa(rowsAllRaw, bodegaSearch, zona){
   const eventoRows = rowsAmbito.filter(r=>r.contrato==='EVENTO');
   const dispCapita = new Set(capitaRows.map(r=>r.dispensaYPunto)).size;
   const dispEvento = new Set(eventoRows.map(r=>r.dispensaYPunto)).size;
-  const dispConSoporte = new Set(rowsAmbito.filter(r=>r.tieneSoportes==='TIENE SOPORTE').map(r=>r.dispensaYPunto)).size;
-  const dispSinSoporte = new Set(rowsAmbito.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
-  const sinSoporteCapita = new Set(capitaRows.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
-  const sinSoporteEvento = new Set(eventoRows.filter(r=>r.tieneSoportes==='NO TIENE SOPORTES').map(r=>r.dispensaYPunto)).size;
+  /* Estado de SOPORTE por DISPENSA (bodega + documento), no por línea suelta. Una
+     dispensa cuenta CON SOPORTE si CUALQUIERA de sus líneas vigentes ya trae soporte
+     (Soporte > 0); de lo contrario queda SIN SOPORTE. Así, cuando un cargue posterior
+     actualiza una dispensa (p. ej. Cápita) de Soporte = 0 a Soporte > 0, la dispensa
+     pasa automáticamente a "Con soporte" y refresca la tarjeta y el anillo. Además
+     evita el doble conteo: una misma dispensa no puede sumar a la vez en "con" y
+     "sin" soporte. */
+  const soporteDispensa = (rs)=>{
+    const m=new Map();
+    rs.forEach(r=>{
+      const k=r.dispensaYPunto;
+      const con = r.tieneSoportes==='TIENE SOPORTE';
+      if(con) m.set(k, true);
+      else if(!m.has(k)) m.set(k, false);
+    });
+    return m;
+  };
+  const contarSoporte = (m, con)=>{ let n=0; m.forEach(v=>{ if(v===con) n++; }); return n; };
+  const mapSopTodos = soporteDispensa(rowsAmbito);
+  const mapSopCapita = soporteDispensa(capitaRows);
+  const mapSopEvento = soporteDispensa(eventoRows);
+  const dispConSoporte = contarSoporte(mapSopTodos, true);
+  const dispSinSoporte = contarSoporte(mapSopTodos, false);
+  const sinSoporteCapita = contarSoporte(mapSopCapita, false);
+  const sinSoporteEvento = contarSoporte(mapSopEvento, false);
   const pctSinSopCapita = dispSinSoporte ? sinSoporteCapita/dispSinSoporte : null;
   const pctSinSopEvento = dispSinSoporte ? sinSoporteEvento/dispSinSoporte : null;
 
@@ -8453,6 +8494,11 @@ function corteDeDispensacion(r){
 function mesDeDispensacion(r){
   return mesKey(r && r.fecha) || '';
 }
+// Mes (AAAA-MM) de la FECHA ORIGEN de dispensación (inmutable: primera versión de la
+// línea). Respaldo: la fecha de dispensación de la propia fila si no hay origen guardado.
+function mesOrigenDispensacion(r){
+  return mesKey((r && r._fechaOrigenDisp) || (r && r.fecha)) || '';
+}
 /* DOS EJES DE TIEMPO (regla del visor):
    1) ORIGEN DEL PENDIENTE → se fecha con la FECHA DE DISPENSACIÓN: define el mes y el
       corte en el que nació el pendiente.
@@ -8517,8 +8563,14 @@ function claveLineaCargue(r){
    Si la fila no trae fecha de cargue (acumulados antiguos) se usa como respaldo su
    fecha de dispensación para no perderla del cálculo.                            */
 function corteDeCargue(r){
-  const p=getPeriodoDeCarga((r && r.fechaCargue) || '');
-  return p===null ? corteDeDispensacion(r) : p;
+  // La consolidación por cortes y el seguimiento por bodega se miden por la FECHA DE
+  // DISPENSACIÓN (actualizable): el estado de una versión se ubica en el corte de SU
+  // fecha de dispensación, no en el del archivo que la trajo. Respaldo: si la versión no
+  // trae fecha de dispensación válida (acumulados antiguos) se usa la fecha del cargue.
+  const p=corteDeDispensacion(r);
+  if(p>0) return p;
+  const pc=getPeriodoDeCarga((r && r.fechaCargue) || '');
+  return pc===null ? 0 : pc;
 }
 function esVersionPosterior(a, b){
   // Primero manda el NÚMERO de cargue (orden real de los cargues); si alguno de los dos
@@ -9116,8 +9168,8 @@ function mesesGenEntPorCorte(rows){
   (rows||[]).forEach(r=>{
     const c=corteDeCargue(r);
     if(!c || !acc[c]) return;
-    _sumaMesCorte(acc[c].gen, mesDeDispensacion(r));
-    _sumaMesCorte(acc[c].ent, mesDeCargue(r) || mesDeDispensacion(r));
+    _sumaMesCorte(acc[c].gen, mesOrigenDispensacion(r));
+    _sumaMesCorte(acc[c].ent, mesDeDispensacion(r));
   });
   return _cierraMesesCorte(acc);
 }
@@ -9131,8 +9183,8 @@ function mesesGenEntPorCorteBodega(rows){
     const bod=r.bodegaDetalle;
     if(!porBod.has(bod)) porBod.set(bod, _accMesesCorte());
     const acc=porBod.get(bod);
-    _sumaMesCorte(acc[c].gen, mesDeDispensacion(r));
-    _sumaMesCorte(acc[c].ent, mesDeCargue(r) || mesDeDispensacion(r));
+    _sumaMesCorte(acc[c].gen, mesOrigenDispensacion(r));
+    _sumaMesCorte(acc[c].ent, mesDeDispensacion(r));
   });
   const out=new Map();
   porBod.forEach((acc,bod)=>{ out.set(bod, _cierraMesesCorte(acc)); });
