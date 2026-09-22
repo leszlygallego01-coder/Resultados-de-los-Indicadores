@@ -8996,10 +8996,14 @@ function recuperadasEnCortes(filtered, corteFinal, tipo){
     if(!porDoc.has(kd)) porDoc.set(kd, {
       documento:r.documento, zona:r.zona, bodega:r.bodegaDetalle, eps:r.eps, epsGrupo:r.epsGrupo,
       contrato:r.contrato, fecha:r.fecha, lineas:0, unidades:0, soporte:r.tieneSoportes,
-      cargue:r.fechaCargue||'', dispEntrega:diaCargue(r)
+      cargue:r.fechaCargue||'', dispEntrega:diaCargue(r), fechaOrigen:(r._fechaOrigenDisp||'')
     });
     const g=porDoc.get(kd);
     g.lineas++; g.unidades+=(Number(r.unidades)||0);
+    // FECHA ORIGEN DE DISPENSACIÓN (inmutable) de la dispensa: se toma la más temprana
+    // entre sus líneas para fechar el momento en que nació el pendiente.
+    const _fo=r._fechaOrigenDisp||'';
+    if(_fo && (!g.fechaOrigen || _fo<g.fechaOrigen)) g.fechaOrigen=_fo;
     if(String(r.fechaCargue||'')>String(g.cargue)) g.cargue=r.fechaCargue||'';
     // La ENTREGA se fecha con el CARGUE: se guarda el día del cargue más reciente.
     const dd=diaCargue(r);
@@ -9647,6 +9651,15 @@ function periodicoFechaTxt(f){
   const d = f instanceof Date ? f : (f ? new Date(f) : null);
   return (d && !isNaN(d)) ? d.toISOString().slice(0,10) : '';
 }
+// FECHA ORIGEN DE DISPENSACIÓN (inmutable) de un registro: prioriza el dato oficial del
+// archivo (_fechaOrigenDisp / fechaOrigenDispensacion). Respaldo: la fecha de dispensación
+// de la propia fila. Es la “fecha de generación” del pendiente para los reportes.
+function origenDispTxt(r){
+  if(!r) return '';
+  const o = r._fechaOrigenDisp || r.fechaOrigenDispensacion || '';
+  if(o) return String(o).slice(0,10);
+  return diaDispensacion(r);
+}
 // 1) Dispensas (documentos) que siguen NO entregadas al cierre del corte.
 document.getElementById('btnPeriodicoDocsPend').addEventListener('click', ()=>{
   const ctx=periodicoContextoExport(); if(!ctx) return;
@@ -9773,10 +9786,12 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
         'Cantidad pendiente inicial':rb?Math.abs(rb.diferencia||0):'',
         'Unidades Entregadas':r.unidades, 'Diferencia':r.diferencia,
         'Recuperada en':etqRec(corteRec),
-        /* La FECHA DISPENSACIÓN fecha el pendiente (mes/corte de origen); la ENTREGA se
-           fecha con el CARGUE en que la línea volvió a subirse ya entregada. */
-        'Fecha Dispensación del pendiente':diaDispensacion(rb),
-        'Fecha de cargue de la entrega':diaCargue(r),
+        /* Trazabilidad temporal: la FECHA ORIGEN DISPENSACIÓN (inmutable) fecha la
+           generación del pendiente; la FECHA DISPENSACIÓN (columna de arriba) fecha la
+           entrega/recuperación (Diferencia = 0). Antes aquí se mostraban la fecha del
+           pendiente y la fecha de cargue de la entrega (dinámicas), ahora se usa la
+           fecha de origen del registro inicial. */
+        'Fecha origen dispensación':origenDispTxt(rb||r),
         'Soportes':r.tieneSoportes, 'Estado al':etqCorte
       }));
   } else if(tipo==='soporte'){
@@ -9815,8 +9830,11 @@ document.getElementById('btnPeriodicoEntregadas').addEventListener('click', ()=>
         'Líneas entregadas en un cargue posterior':recLineas||0,
         'Unidades entregadas':g.unidades,
         'Entregada en':etqRec(corteRec),
-        // La ENTREGA se fecha con el CARGUE en que la dispensa volvió a subirse cumpliendo.
-        'Fecha de cargue de la entrega':g.dispEntrega||'',
+        /* Trazabilidad temporal: la FECHA ORIGEN DISPENSACIÓN (inmutable) fecha la
+           generación del pendiente; la FECHA DISPENSACIÓN (columna de arriba) fecha la
+           entrega/recuperación. Antes aquí se mostraba la fecha de cargue de la entrega
+           (dinámica), ahora se usa la fecha de origen de la dispensa. */
+        'Fecha origen dispensación':g.fechaOrigen||'',
         'Soportes':g.soporte, 'Estado al':etqCorte
       }));
   }
