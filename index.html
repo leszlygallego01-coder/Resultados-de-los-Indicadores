@@ -87,6 +87,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="field"><label>Fecha desde</label><input type="date" id="fFechaDesde"></div>
       <div class="field"><label>Fecha hasta</label><input type="date" id="fFechaHasta"></div>
       <div class="field"><label>Modalidad</label><select id="fContrato"><option value="">Todos</option></select></div>
+      <div class="field" id="fIdContratoWrap" style="display:none;"><label>Id Contrato</label><select id="fIdContrato" title="Id Contrato. Segmenta todas las secciones del visor"><option value="">Todos</option></select></div>
       <div class="field grow"><label>EPS / Sigla Comercial</label><select id="fEps"><option value="">Todos</option></select></div>
       <div class="field grow"><label>EPS Consolidada</label><select id="fEpsGrupo"><option value="">Todas</option></select></div>
       <div class="field grow"><label>Diagnóstico</label>
@@ -304,6 +305,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
         <div class="helpbox" id="lineaDiag" style="display:none;"></div>
         <div style="margin-bottom:16px;">
           <button class="btn btn-export" id="btnDescargarParetoExistencias">Descargar Pareto y No pareto existencias</button>
+          <button class="btn btn-export" id="btnDescargarPendientesLinea" style="background:var(--clay,#D98A2B);box-shadow:0 2px 0 #A5641A;" title="Descarga en Excel el detalle de las líneas pendientes (Diferencia distinta de cero) con los filtros activos.">⬇ Descargar Pendientes (Excel)</button>
           <button class="btn btn-export" id="btnDescargarCodigosComprar" style="background:var(--clay,#B23A34);box-shadow:0 2px 0 #7A2019;">⬇ Descargar Códigos a Comprar (Excel)</button>
           <button class="btn btn-export" id="btnDescargarSinHomologar" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar Sin Homologar (Excel)</button>
           <button class="btn btn-export" id="btnDescargarAgotadas" style="background:#8E44AD;box-shadow:0 2px 0 #5B2D75;">⬇ Descargar Líneas Agotadas (Excel)</button>
