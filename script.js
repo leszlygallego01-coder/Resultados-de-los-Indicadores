@@ -2720,9 +2720,12 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   const tdVacio = '<td class="num" style="color:#9CA9B6;" title="Corte sin dispensaciones: no hubo dispensaciones en estas fechas">' + DASH + '</td>';
   const tdSinCambio = '<td class="num" style="color:#9CA9B6;" title="Sin cambios frente al corte anterior: esta bodega no presentó movimientos nuevos en este corte">' + DASH + '</td>';
   const tdFuera = '<td class="num" style="color:#C3CCD6;" title="Corte posterior al corte global seleccionado en los filtros">' + DASH + '</td>';
-  // Collect unique bodegas from all cortes
+  // Collect unique bodegas from all cortes. Se excluyen las filas cuya BODEGA DETALLE
+  // viene en blanco (o marcada como "N/D"): no identifican un punto real, así que no se
+  // tienen en cuenta en el seguimiento.
+  const _bodegaValida = (b) => String(b||'').trim() !== '' && normValue(b) !== 'N/D';
   const bodegaSet = new Set();
-  [1,2,3].forEach(c => (cmAll[c]||[]).forEach(bm => bodegaSet.add(bm.bodega)));
+  [1,2,3].forEach(c => (cmAll[c]||[]).forEach(bm => { if(_bodegaValida(bm.bodega)) bodegaSet.add(bm.bodega); }));
   const bodegas = Array.from(bodegaSet).sort((a,b) => a.localeCompare(b,'es'));
 
   // Build a lookup: bodegaMetrics[bodega][corte] = {docsTotal, docsEnt, docsPend, ...}
@@ -2750,7 +2753,7 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   const mirrorEl = document.getElementById('segCorteGlobal');
   if(mirrorEl) mirrorEl.value = String(corteGlobalSeg);
   const infoEl = document.getElementById('segCorteGlobalInfo');
-  if(infoEl) infoEl.textContent = 'Las columnas por corte solo muestran cifras cuando la bodega tuvo cambios reales; si no hubo cambios frente al estado anterior aparece “—”.';
+  if(infoEl) infoEl.textContent = 'Las columnas por corte muestran el estado acumulado (entregas y pendientes) al cierre de cada corte con dispensaciones. Un corte sin dispensaciones aparece como “—”.';
   const _idxPend = (b) => {
     const m = bodegaMetrics[b][corteFinalSeg] || {docsTotal:0, docsEnt:0, docsPend:0};
     const tot = m.docsTotal !== undefined ? m.docsTotal : (m.docsEnt + m.docsPend);
@@ -2840,14 +2843,12 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   let hHtml = '<tr><th rowspan="2">Bodega</th><th rowspan="2">Entregas totales<br><span style="font-weight:600;font-size:10.5px;color:#9CA9B6;">actual · anterior</span></th><th rowspan="2">Pendientes totales<br><span style="font-weight:600;font-size:10.5px;color:#9CA9B6;">actual · anterior</span></th><th rowspan="2">Índice de Pendientes</th>';
   for(let c=1; c<=NUM_CORTES; c++){
     if(c>corteGlobalSeg) hHtml += '<th colspan="2" style="color:#C3CCD6;">Corte ' + c + '</th>';
-    else if(cortesActivos.has(c) && !corteConCambio[c]) hHtml += '<th colspan="2" style="color:#9CA9B6;">Corte ' + c + ' <span style="font-weight:600;">· sin cambios</span></th>';
     else hHtml += '<th colspan="2">Corte ' + c + '</th>';
   }
   void 0;
   hHtml += '</tr><tr>';
   for(let c=1; c<=NUM_CORTES; c++){
     if(c>corteGlobalSeg) hHtml += '<th style="color:#C3CCD6;">Fuera del corte</th><th style="color:#C3CCD6;">Fuera del corte</th>';
-    else if(cortesActivos.has(c) && !corteConCambio[c]) hHtml += '<th style="color:#9CA9B6;">Sin cambios</th><th style="color:#9CA9B6;">Sin cambios</th>';
     else if(cortesActivos.has(c)) hHtml += '<th>Entregas</th><th>Pendientes</th>';
     else hHtml += '<th style="color:#9CA9B6;">Sin dispensaciones</th><th style="color:#9CA9B6;">Sin dispensaciones</th>';
   }
@@ -2870,13 +2871,12 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
       if(c>corteGlobalSeg){ bHtml += tdFuera + tdFuera; continue; }
       if(!cortesActivos.has(c)){ bHtml += tdVacio + tdVacio; continue; }
       const cd = bodegaMetrics[b][c] || {docsEnt:0,docsPend:0};
-      // Solo se muestran cifras cuando la bodega cambió respecto al estado anterior.
-      if(!cambioPorBodega[b][c]){
-        bHtml += tdSinCambio + tdSinCambio;
-      } else {
-        bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
-        bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
-      }
+      // Análisis por corte: se muestra el estado ACUMULADO (entregas y pendientes) al
+      // cierre de cada corte con dispensaciones, para que el análisis por corte siempre
+      // sea visible (igual que el Reporte Comparativo Periódico), aunque el estado no
+      // haya cambiado frente al corte anterior.
+      bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
+      bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
     }
     bHtml += '</tr>';
   });
@@ -2890,18 +2890,12 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   const t3DocsTotal = t3.docsTotal !== undefined ? t3.docsTotal : (t3.docsEnt + t3.docsPend);
   const t3IPend = t3DocsTotal ? t3.docsPend / t3DocsTotal : null;
   bHtml += '<td class="' + effClass(t3IPend) + '">' + fmtPct(t3IPend) + '</td>';
-  let refTot = totRow[0] || null;
   for(let c=1; c<=NUM_CORTES; c++){
     if(c>corteGlobalSeg){ bHtml += tdFuera + tdFuera; continue; }
     if(!cortesActivos.has(c)){ bHtml += tdVacio + tdVacio; continue; }
     const cd = totRow[c] || {docsEnt:0,docsPend:0};
-    if(refTot && refTot.docsEnt === cd.docsEnt && refTot.docsPend === cd.docsPend){
-      bHtml += tdSinCambio + tdSinCambio;
-    } else {
-      bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
-      bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
-    }
-    refTot = cd;
+    bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
+    bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
   }
   bHtml += '</tr>';
   document.getElementById('tblSeguimientoBody').innerHTML = bHtml;
@@ -4183,6 +4177,9 @@ let lastSoporteCtx=null;
 function groupByBodega(rows, bodegaSearch, zona){
   const g=new Map();
   rows.forEach(r=>{
+    // Se excluyen las filas cuya BODEGA DETALLE viene en blanco (o "N/D"): no identifican
+    // un punto de dispensación real, así que no se tienen en cuenta en los análisis por bodega.
+    if(String(r.bodegaDetalle||'').trim()==='' || normValue(r.bodegaDetalle)==='N/D') return;
     if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return;
     if(zona && r.zona!==zona) return;
     if(!g.has(r.bodegaDetalle)) g.set(r.bodegaDetalle, {zona:r.zona, bodega:r.bodegaDetalle, rows:[]});
@@ -5593,8 +5590,10 @@ document.getElementById('btnExportar').addEventListener('click', ()=>{
     // Los cortes sin dispensaciones se exportan vacíos (no repiten cifras del corte anterior).
     const cortesActivosExp = cortesConCargue(filteredRowsCache);
     const corteFinalExp = corteVigenteHasta(cortesActivosExp, 3);
+    // Se excluyen las filas con BODEGA DETALLE en blanco (o "N/D"): no identifican un punto real.
+    const _bodegaValidaExp = (b) => String(b||'').trim() !== '' && normValue(b) !== 'N/D';
     const bodegaSet = new Set();
-    [1,2,3].forEach(c => (cmAll[c]||[]).forEach(bm => bodegaSet.add(bm.bodega)));
+    [1,2,3].forEach(c => (cmAll[c]||[]).forEach(bm => { if(_bodegaValidaExp(bm.bodega)) bodegaSet.add(bm.bodega); }));
     const bodegas = Array.from(bodegaSet).sort((a,b) => a.localeCompare(b,'es'));
     const bodegaMetrics = {};
     bodegas.forEach(b => { bodegaMetrics[b] = {}; });
@@ -6202,6 +6201,9 @@ document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
     'Descripción': String(r.descripcionDci||'').trim() || String(r.descripcionReporte||r.descripcion||'').trim(),
     'Bodega': r.bodegaDetalle,
     'Documento': r.documento,
+    // Datos que trae el Reporte de Dispensación cargado:
+    'Fecha origen de la dispensación': r._fechaOrigenDisp || r.fechaOrigenDispensacion || '',
+    'Descripción CIE 10': r.codigoCie10 || '',
     'Cant. pendiente': Math.abs(r.diferencia),
     'Pareto / No Pareto': (r.moleculaPareto==='PARETO'||r.moleculaPareto==='NO PARETO') ? r.moleculaPareto : 'SIN CLASIFICAR'
   }));
