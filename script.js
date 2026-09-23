@@ -6213,10 +6213,29 @@ document.getElementById('btnDescargarAgotadas').addEventListener('click', ()=>{
       : 'Ninguna línea pendiente corresponde a códigos agotados con los datos cargados.', true);
     return;
   }
+  // ---- Hoja 2: resumen por bodega ----
+  // Reusa los mismos números del Indicador por Línea que se ven en pantalla
+  // (pendientes, líneas agotadas y % cierre), respetando el filtro de bodega/zona activo.
+  const resumenBodega = (lastTables.linea||[])
+    .filter(t=>{
+      if(zona && t.zona!==zona) return false;
+      if(bodegaSearch && !normValue(t.bodega).includes(bodegaSearch)) return false;
+      return true;
+    })
+    .map(t=>({
+      'Zona': t.zona || 'N/D',
+      'Bodega': t.bodega,
+      'Pendientes': t.lineasPen || 0,
+      'Lineas agotadas': t.totalAgotadas || 0,
+      // % de cierre = líneas agotadas / líneas pendientes, expresado en porcentaje.
+      '% Cierre': (t.pctCierre==null ? '' : Math.round(t.pctCierre*10000)/100)
+    }));
+
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(agotadas), 'Lineas Agotadas');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumenBodega), 'Resumen por Bodega');
   XLSX.writeFile(wb, 'Lineas_Agotadas_'+new Date().toISOString().slice(0,10)+'.xlsx');
-  showToast('Excel de Líneas Agotadas exportado: '+fmtInt(agotadas.length)+' líneas.');
+  showToast('Excel de Líneas Agotadas exportado: '+fmtInt(agotadas.length)+' líneas y '+fmtInt(resumenBodega.length)+' bodegas en el resumen.');
 });
 
 // ---- Detalle por bodega: líneas del Reporte de Dispensación con las columnas clave ----
