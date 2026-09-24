@@ -2743,17 +2743,17 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   const cortePrevSeg  = corteFinalSeg>0 ? corteVigenteHasta(cortesActivos, corteFinalSeg-1) : 0;
   const hayPrevSeg    = corteFinalSeg>0;
   const tituloPrevSeg = cortePrevSeg===0 ? 'estado inicial (línea base)' : 'corte '+cortePrevSeg;
-  // Celda con dos cifras: estado del corte seleccionado (negro) y el del corte anterior (gris).
-  const celdaDoble = (act, ant) => (act===ant
-      ? '<td class="num" title="Sin cambios frente al ' + tituloPrevSeg + '">' + fmtInt(act) + '</td>'
-      : '<td class="num" title="Actual: corte '+corteFinalSeg+' · Anterior: '+tituloPrevSeg+'">'
-        + fmtInt(act)
-        + (hayPrevSeg ? '<span style="color:#9CA9B6;font-weight:500;"> · ' + fmtInt(ant) + '</span>' : '')
+  // Celda con dos cifras SIEMPRE visibles: la forma ACTUAL en negro y, en gris oscuro,
+  // cómo estaba ANTES (corte anterior / línea base), para poder comparar de un vistazo.
+  const celdaDoble = (act, ant) => (
+      '<td class="num" title="Actual en negro (corte '+corteFinalSeg+') · Anterior en gris ('+tituloPrevSeg+')">'
+        + '<span style="color:#1F2A37;font-weight:600;">' + fmtInt(act) + '</span>'
+        + (hayPrevSeg ? '<span style="color:#5B6B7B;font-weight:500;"> · ' + fmtInt(ant) + '</span>' : '')
         + '</td>');
   const mirrorEl = document.getElementById('segCorteGlobal');
   if(mirrorEl) mirrorEl.value = String(corteGlobalSeg);
   const infoEl = document.getElementById('segCorteGlobalInfo');
-  if(infoEl) infoEl.textContent = 'Las columnas por corte muestran el estado acumulado (entregas y pendientes) al cierre de cada corte con dispensaciones. Un corte sin dispensaciones aparece como “—”.';
+  if(infoEl) infoEl.textContent = 'Las columnas por corte muestran las cifras solo en el corte donde hubo movimiento (entregas que aumentan y pendientes que bajan). Un corte sin cambios frente al anterior, o sin dispensaciones, aparece como “—”. En Entregas y Pendientes totales, el valor en negro es el actual y el gris oscuro es cómo estaba antes.';
   const _idxPend = (b) => {
     const m = bodegaMetrics[b][corteFinalSeg] || {docsTotal:0, docsEnt:0, docsPend:0};
     const tot = m.docsTotal !== undefined ? m.docsTotal : (m.docsEnt + m.docsPend);
@@ -2870,11 +2870,11 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
     for(let c=1; c<=NUM_CORTES; c++){
       if(c>corteGlobalSeg){ bHtml += tdFuera + tdFuera; continue; }
       if(!cortesActivos.has(c)){ bHtml += tdVacio + tdVacio; continue; }
+      // El corte solo muestra cifras cuando hubo un CAMBIO frente al corte anterior de esa
+      // bodega: así se ve el aumento de las entregas y la disminución del pendiente. Si el
+      // corte no presentó movimiento, se muestra “—” en vez de repetir el acumulado previo.
+      if(!cambioPorBodega[b][c]){ bHtml += tdSinCambio + tdSinCambio; continue; }
       const cd = bodegaMetrics[b][c] || {docsEnt:0,docsPend:0};
-      // Análisis por corte: se muestra el estado ACUMULADO (entregas y pendientes) al
-      // cierre de cada corte con dispensaciones, para que el análisis por corte siempre
-      // sea visible (igual que el Reporte Comparativo Periódico), aunque el estado no
-      // haya cambiado frente al corte anterior.
       bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
       bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
     }
@@ -2893,6 +2893,9 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   for(let c=1; c<=NUM_CORTES; c++){
     if(c>corteGlobalSeg){ bHtml += tdFuera + tdFuera; continue; }
     if(!cortesActivos.has(c)){ bHtml += tdVacio + tdVacio; continue; }
+    // Igual que las filas: el total del corte solo se muestra si alguna bodega tuvo
+    // movimiento en ese corte; si no, “—” para no repetir el acumulado del corte anterior.
+    if(!corteConCambio[c]){ bHtml += tdSinCambio + tdSinCambio; continue; }
     const cd = totRow[c] || {docsEnt:0,docsPend:0};
     bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
     bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
