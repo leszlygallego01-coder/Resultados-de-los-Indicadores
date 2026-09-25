@@ -2743,13 +2743,12 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   const cortePrevSeg  = corteFinalSeg>0 ? corteVigenteHasta(cortesActivos, corteFinalSeg-1) : 0;
   const hayPrevSeg    = corteFinalSeg>0;
   const tituloPrevSeg = cortePrevSeg===0 ? 'estado inicial (línea base)' : 'corte '+cortePrevSeg;
-  // Celda igual que el "Seguimiento de dispensación por bodega" del reporte de dispensación:
-  // el valor ACTUAL en negro y, debajo en gris, el valor ANTERIOR con la diferencia
-  // coloreada (verde si mejora, rojo si empeora, gris si no cambia). Para Entregas mejora
-  // al SUBIR (mejorSiSube=true); para Pendientes mejora al BAJAR (mejorSiSube=false).
-  const refCorteTxt = cortePrevSeg===0 ? 'base' : 'C'+cortePrevSeg;
-  const celdaDoble = (act, ant, mejorSiSube) => {
-    if(!hayPrevSeg || ant===null || ant===undefined)
+  // Celda igual que el "Seguimiento de dispensación por bodega" del reporte comparativo:
+  // valor ACTUAL y, debajo, el ANTERIOR con la diferencia coloreada (verde si mejora, rojo
+  // si empeora, gris si no cambia). Para Entregas mejora al SUBIR (mejorSiSube=true); para
+  // Pendientes mejora al BAJAR (mejorSiSube=false). refC = corte de la referencia anterior.
+  const celdaDoble = (act, ant, mejorSiSube, refC) => {
+    if(ant===null || ant===undefined)
       return '<td class="num">' + fmtInt(act) + '</td>';
     const d = (act||0)-(ant||0);
     const bueno = mejorSiSube ? d>0 : d<0;
@@ -2757,15 +2756,17 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
     const delta = d===0
       ? '<span style="color:#9CA9B6;"> · sin cambio</span>'
       : '<span style="color:'+color+';"> · '+(d>0?'+':'')+fmtInt(d)+'</span>';
-    return '<td class="num" title="Actual (corte '+corteFinalSeg+') · Anterior ('+tituloPrevSeg+') y diferencia">'
+    const refTxt = (refC!==null && refC!==undefined)
+      ? '<span style="color:#B3BFCB;"> ('+etqCortoSeg(refC)+')</span>' : '';
+    return '<td class="num" title="Actual (corte '+corteFinalSeg+') · Anterior y diferencia, igual que el Reporte Comparativo">'
       + fmtInt(act)
-      + '<span class="prev-val">Ant.: '+fmtInt(ant)+'<span style="color:#B3BFCB;"> ('+refCorteTxt+')</span>'+delta+'</span>'
+      + '<span class="prev-val">Ant.: '+fmtInt(ant)+refTxt+delta+'</span>'
       + '</td>';
   };
   const mirrorEl = document.getElementById('segCorteGlobal');
   if(mirrorEl) mirrorEl.value = String(corteGlobalSeg);
   const infoEl = document.getElementById('segCorteGlobalInfo');
-  if(infoEl) infoEl.textContent = 'Igual que el reporte de dispensación: en Entregas y Pendientes totales se muestra el valor actual y, debajo, el anterior con la diferencia (verde si mejora, rojo si empeora, gris si no cambia). Las columnas por corte muestran cifras solo donde hubo movimiento; un corte sin cambios o sin dispensaciones aparece como “—”.';
+  if(infoEl) infoEl.textContent = 'Esta tabla usa exactamente el mismo cálculo y la misma regla que el Reporte Comparativo Periódico: un corte solo muestra cifras cuando esa bodega tuvo una entrega real validada (un pendiente que se cumple en un cargue posterior) y el acumulado cambia; si no, aparece “—”. En Entregas y Pendientes totales se ve el valor actual y, debajo, el anterior con la diferencia (verde si mejora, rojo si empeora).';
   const _idxPend = (b) => {
     const m = bodegaMetrics[b][corteFinalSeg] || {docsTotal:0, docsEnt:0, docsPend:0};
     const tot = m.docsTotal !== undefined ? m.docsTotal : (m.docsEnt + m.docsPend);
@@ -2833,22 +2834,82 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   drawSegDonut();
   selEl.onchange = drawSegDonut;
 
-  // ¿En qué cortes hubo realmente cambios? Se compara cada corte con el estado anterior
-  // de la MISMA bodega (partiendo de la línea base). Si no hay cambio no se muestran cifras.
-  const cambioPorBodega = {};
-  const corteConCambio = {};
-  bodegas.forEach(b => {
-    cambioPorBodega[b] = {};
-    let ref = bodegaMetrics[b][0] || null;
-    for(let c=1; c<=NUM_CORTES; c++){
-      if(c>corteGlobalSeg || !cortesActivos.has(c)) continue;
-      const cd = bodegaMetrics[b][c] || {docsEnt:0,docsPend:0};
-      const cambio = !(ref && ref.docsEnt===cd.docsEnt && ref.docsPend===cd.docsPend);
-      cambioPorBodega[b][c] = cambio;
-      if(cambio) corteConCambio[c] = true;
-      ref = cd;
+  // ===== Alineación TOTAL con el Reporte Comparativo Periódico (dispensas) =====
+  // El Seguimiento usa EXACTAMENTE la misma fuente y regla que el reporte comparativo:
+  // - un corte solo abre cifras si ESA bodega tuvo cargue en el corte (cortesConCarguePorBodega),
+  // - solo cuenta como movimiento una ENTREGA REAL validada (recuperadasEnCortes: el
+  //   pendiente se cumple en un cargue POSTERIOR), la misma función que alimenta el Excel,
+  // - y además el acumulado debe cambiar frente al corte anterior mostrado.
+  // La referencia “Anterior” de los totales se calcula por bodega (último corte con cifras
+  // distintas, incluida la línea base), igual que en el comparativo.
+  const tdSinEntrega = '<td class="num" style="color:#9CA9B6;" title="Esta bodega no registró entregas reales (recuperaciones validadas) en este corte: la celda queda en «—», igual que en el Reporte Comparativo Periódico">' + DASH + '</td>';
+  const cargueBodega = cortesConCarguePorBodega(filtered);
+  const fueraSeg  = c => c > corteGlobalSeg;
+  const activoSeg = c => cortesActivos.has(c) && !fueraSeg(c);
+  const activoBodSeg = (c, b) => { const s = cargueBodega.get(b); return !!s && s.has(c) && !fueraSeg(c); };
+  const valAseg = (c, b) => (bodegaMetrics[b][c] || {docsEnt:0}).docsEnt;
+  const valBseg = (c, b) => (bodegaMetrics[b][c] || {docsPend:0}).docsPend;
+  const valTseg = (c, b) => { const m = bodegaMetrics[b][c]; return m ? (m.docsTotal!==undefined ? m.docsTotal : m.docsEnt+m.docsPend) : 0; };
+  const estadosPreviosSeg = [0].concat([1,2,3].filter(c => c<corteFinalSeg && activoSeg(c)));
+  const etqCortoSeg = c => (c===null || c===undefined) ? '' : (c===0 ? 'base' : 'C'+c);
+  const refPrevBodegaSeg = (b) => {
+    if(corteFinalSeg===0 || !estadosPreviosSeg.length) return null;
+    const aNow = valAseg(corteFinalSeg,b), bNow = valBseg(corteFinalSeg,b);
+    for(let i=estadosPreviosSeg.length-1; i>=0; i--){
+      const c = estadosPreviosSeg[i];
+      if(valAseg(c,b)!==aNow || valBseg(c,b)!==bNow) return c;
     }
+    return estadosPreviosSeg[estadosPreviosSeg.length-1];
+  };
+  const mapRecSeg = recuperadasPorBodega(filtered, corteFinalSeg, 'docs');
+  const marcaSinCambioSeg = (arr, base) => {
+    let ref = base || null;
+    return arr.map(cc => {
+      if(cc.fuera || cc.sin) return Object.assign({}, cc, {igual:false});
+      const igual = !!ref && ref.ent===cc.ent && ref.pend===cc.pend;
+      ref = cc;
+      return Object.assign({}, cc, {igual:igual});
+    });
+  };
+  // Precálculo por bodega (mismos campos que el comparativo)
+  const segRows = bodegas.map(b => {
+    const entFinal = valAseg(corteFinalSeg,b), pendFinal = valBseg(corteFinalSeg,b);
+    const total = valTseg(corteFinalSeg,b);
+    const cRef = refPrevBodegaSeg(b);
+    const entPrev = cRef===null ? null : valAseg(cRef,b);
+    const pendPrev = cRef===null ? null : valBseg(cRef,b);
+    const baseB = {ent:valAseg(0,b), pend:valBseg(0,b)};
+    const cortesB = [1,2,3].map(c => activoBodSeg(c,b)
+      ? {ent:valAseg(c,b), pend:valBseg(c,b), sin:false, fuera:false}
+      : {ent:0, pend:0, sin:!fueraSeg(c), fuera:fueraSeg(c)});
+    const cortesMk = marcaSinCambioSeg(cortesB, baseB);
+    const rec = (mapRecSeg.get(b) || [0,0,0]).slice(0,3).map(v => v||0);
+    const recTotal = rec.reduce((a,c)=>a+c, 0);
+    const indice = total ? pendFinal/total : null;
+    return {bodega:b, total, entFinal, pendFinal, entPrev, pendPrev, refPrev:cRef, cortesMk, rec, recTotal, indice};
   });
+  // Totales, con el mismo criterio del comparativo
+  const hayPrevSegTot = segRows.some(f => f.recTotal>0 && f.refPrev!==null && f.refPrev!==undefined);
+  const segTot = {total:0, ent:0, pend:0, entPrev:0, pendPrev:0, c:[{ent:0,pend:0},{ent:0,pend:0},{ent:0,pend:0}], rec:[0,0,0]};
+  segRows.forEach(f => {
+    segTot.total += f.total; segTot.ent += f.entFinal; segTot.pend += f.pendFinal;
+    const aportaRef = f.recTotal>0 && f.refPrev!==null && f.refPrev!==undefined;
+    segTot.entPrev  += (aportaRef && f.entPrev!==null && f.entPrev!==undefined) ? f.entPrev : f.entFinal;
+    segTot.pendPrev += (aportaRef && f.pendPrev!==null && f.pendPrev!==undefined) ? f.pendPrev : f.pendFinal;
+    [0,1,2].forEach(i => segTot.rec[i] += f.rec[i]);
+  });
+  [0,1,2].forEach(i => {
+    let e=0, p=0;
+    segRows.forEach(f => {
+      const cc = f.cortesMk[i];
+      if(cc.fuera || cc.sin) return;
+      if(!f.rec[i]) return;
+      if(cc.igual) return;
+      e += cc.ent; p += cc.pend;
+    });
+    segTot.c[i] = {ent:e, pend:p};
+  });
+  const rpCambioSeg = [0,1,2].map(i => segRows.some(f => !f.cortesMk[i].fuera && !f.cortesMk[i].sin && !f.cortesMk[i].igual && !!f.rec[i]));
 
   // Build table
   // Header: Bodega | Entregas totales | Pendientes totales | Entregas Corte 1 | Pendientes Corte 1 | ...
@@ -2867,50 +2928,37 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   hHtml += '</tr>';
   document.getElementById('tblSeguimientoHead').innerHTML = hHtml;
 
-  // Body rows
+  // Body rows — misma regla y fuente que el Reporte Comparativo Periódico
   let bHtml = '';
-  bodegas.forEach(b => {
-    const c3 = bodegaMetrics[b][corteFinalSeg] || {docsEnt:0,docsPend:0};
-    const cPrevB = bodegaMetrics[b][cortePrevSeg] || {docsEnt:0,docsPend:0};
-    bHtml += '<tr><td>' + escHtml(b) + '</td>';
-    bHtml += celdaDoble(c3.docsEnt, cPrevB.docsEnt, true);
-    bHtml += celdaDoble(c3.docsPend, cPrevB.docsPend, false);
-    // Índice de Pendientes
-    const ipTotal = c3.docsTotal !== undefined ? c3.docsTotal : (c3.docsEnt + c3.docsPend);
-    const iPend = ipTotal ? c3.docsPend / ipTotal : null;
-    bHtml += '<td class="' + effClass(iPend) + '">' + fmtPct(iPend) + '</td>';
+  segRows.forEach(f => {
+    bHtml += '<tr><td>' + escHtml(f.bodega) + '</td>';
+    bHtml += celdaDoble(f.entFinal, f.entPrev, true, f.refPrev);
+    bHtml += celdaDoble(f.pendFinal, f.pendPrev, false, f.refPrev);
+    bHtml += '<td class="' + effClass(f.indice) + '">' + fmtPct(f.indice) + '</td>';
     for(let c=1; c<=NUM_CORTES; c++){
-      if(c>corteGlobalSeg){ bHtml += tdFuera + tdFuera; continue; }
-      if(!cortesActivos.has(c)){ bHtml += tdVacio + tdVacio; continue; }
-      // El corte solo muestra cifras cuando hubo un CAMBIO frente al corte anterior de esa
-      // bodega: así se ve el aumento de las entregas y la disminución del pendiente. Si el
-      // corte no presentó movimiento, se muestra “—” en vez de repetir el acumulado previo.
-      if(!cambioPorBodega[b][c]){ bHtml += tdSinCambio + tdSinCambio; continue; }
-      const cd = bodegaMetrics[b][c] || {docsEnt:0,docsPend:0};
-      bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
-      bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
+      const mk = f.cortesMk[c-1];
+      if(mk.fuera){ bHtml += tdFuera + tdFuera; continue; }
+      if(mk.sin){ bHtml += tdVacio + tdVacio; continue; }
+      if(!f.rec[c-1]){ bHtml += tdSinEntrega + tdSinEntrega; continue; }
+      if(mk.igual){ bHtml += tdSinCambio + tdSinCambio; continue; }
+      bHtml += '<td class="num">' + fmtInt(mk.ent) + '</td>';
+      bHtml += '<td class="num">' + fmtInt(mk.pend) + '</td>';
     }
     bHtml += '</tr>';
   });
-  // Totals row
-  const t3 = totRow[corteFinalSeg] || {docsEnt:0,docsPend:0};
-  const tPrev = totRow[cortePrevSeg] || {docsEnt:0,docsPend:0};
+  // Totals row — mismo criterio: en los cortes solo suman las celdas visibles
   bHtml += '<tr class="total-row"><td>TOTAL</td>';
-  bHtml += celdaDoble(t3.docsEnt, tPrev.docsEnt, true);
-  bHtml += celdaDoble(t3.docsPend, tPrev.docsPend, false);
-  // Total Índice de Pendientes
-  const t3DocsTotal = t3.docsTotal !== undefined ? t3.docsTotal : (t3.docsEnt + t3.docsPend);
-  const t3IPend = t3DocsTotal ? t3.docsPend / t3DocsTotal : null;
-  bHtml += '<td class="' + effClass(t3IPend) + '">' + fmtPct(t3IPend) + '</td>';
+  bHtml += celdaDoble(segTot.ent, hayPrevSegTot ? segTot.entPrev : null, true, null);
+  bHtml += celdaDoble(segTot.pend, hayPrevSegTot ? segTot.pendPrev : null, false, null);
+  const totIPend = segTot.total ? segTot.pend / segTot.total : null;
+  bHtml += '<td class="' + effClass(totIPend) + '">' + fmtPct(totIPend) + '</td>';
   for(let c=1; c<=NUM_CORTES; c++){
-    if(c>corteGlobalSeg){ bHtml += tdFuera + tdFuera; continue; }
-    if(!cortesActivos.has(c)){ bHtml += tdVacio + tdVacio; continue; }
-    // Igual que las filas: el total del corte solo se muestra si alguna bodega tuvo
-    // movimiento en ese corte; si no, “—” para no repetir el acumulado del corte anterior.
-    if(!corteConCambio[c]){ bHtml += tdSinCambio + tdSinCambio; continue; }
-    const cd = totRow[c] || {docsEnt:0,docsPend:0};
-    bHtml += '<td class="num">' + fmtInt(cd.docsEnt) + '</td>';
-    bHtml += '<td class="num">' + fmtInt(cd.docsPend) + '</td>';
+    if(fueraSeg(c)){ bHtml += tdFuera + tdFuera; continue; }
+    if(!activoSeg(c)){ bHtml += tdVacio + tdVacio; continue; }
+    if(!segTot.rec[c-1]){ bHtml += tdSinEntrega + tdSinEntrega; continue; }
+    if(!rpCambioSeg[c-1]){ bHtml += tdSinCambio + tdSinCambio; continue; }
+    bHtml += '<td class="num">' + fmtInt(segTot.c[c-1].ent) + '</td>';
+    bHtml += '<td class="num">' + fmtInt(segTot.c[c-1].pend) + '</td>';
   }
   bHtml += '</tr>';
   document.getElementById('tblSeguimientoBody').innerHTML = bHtml;
