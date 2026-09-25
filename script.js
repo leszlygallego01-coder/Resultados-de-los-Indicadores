@@ -2702,8 +2702,18 @@ function renderSeguimientoBodega(rowsAll, bodegaSearch, zona){
   conEl.style.display  = '';
 
   // Apply filters
-  const filtered = rowsAll.filter(r => {
-    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
+  // FUENTE ALINEADA con el Reporte Comparativo Periódico: se parte del CONSOLIDADO
+  // (historial multi-versión de líneas activas), NO del snapshot de pantalla. Solo con el
+  // historial completo se detectan las ENTREGAS REALES (un pendiente que se cumple en un
+  // cargue posterior); con el snapshot actual cada línea aparece una sola vez, el acumulado
+  // sale plano y todos los cortes quedarían en «—». filasConsolidado() ya respeta la ventana
+  // de fechas de la cabecera y el filtro de Departamento, igual que el comparativo.
+  const baseSeg = (typeof filasConsolidado === 'function' && typeof soloActivas === 'function')
+    ? soloActivas(filasConsolidado())
+    : rowsAll;
+  const filtered = baseSeg.filter(r => {
+    const bn = r.bodegaNorm || normValue(r.bodegaDetalle || '');
+    if(bodegaSearch && !bn.includes(bodegaSearch)) return false;
     if(zona && r.zona !== zona) return false;
     return true;
   });
