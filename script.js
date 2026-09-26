@@ -1003,12 +1003,13 @@ function renderFechaDatos(){
       +'Estás viendo el del '+escHtml(fechaTxt)+'. Vuelve a traer el paquete para actualizar el tablero.';
     return;
   }
+  // Los datos ya NO se borran al cumplir 24 horas: quedan siempre disponibles para
+  // quien los necesite. Después de ese lapso solo se muestra un recordatorio suave de
+  // que conviene traer el paquete del día, sin ocultar ni invalidar la información.
   if(info && info.horas>=HORAS_VIGENCIA_DATOS){
-    aviso.classList.add('vencido');
-    if(avisoIcon) avisoIcon.textContent='⚠';
-    avisoTxt.innerHTML='<b>Estos datos ya tienen más de '+HORAS_VIGENCIA_DATOS+' horas</b> '
-      +'(paquete del '+escHtml(fechaTxt)+', '+escHtml(pqTextoHace(info.horas))+'). '
-      +recordatorio+' Vuelve a traer el paquete de la carpeta antes de sacar conclusiones o exportar informes.';
+    if(avisoIcon) avisoIcon.textContent='ℹ';
+    avisoTxt.innerHTML='Estás viendo el paquete del <b>'+escHtml(fechaTxt||'—')+'</b>'
+      +(info?' ('+escHtml(pqTextoHace(info.horas))+')':'')+'. '+recordatorio;
     return;
   }
   if(avisoIcon) avisoIcon.textContent='ℹ';
@@ -1074,7 +1075,7 @@ setInterval(()=>{ try{ pqRevisarCarpetaNueva(); }catch(e){} }, 15*60000);
    viejas por descuido. El borrado es solo de ESTE navegador: no toca los
    archivos de la carpeta ni los datos del administrador.
    ------------------------------------------------------------------------- */
-const BORRADO_ESTRICTO_24H = true;
+const BORRADO_ESTRICTO_24H = false;
 
 /* Borra todo lo que el visor guarda en este navegador. */
 async function pqBorrarDatosLocales(){
