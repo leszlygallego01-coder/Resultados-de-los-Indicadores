@@ -4673,6 +4673,8 @@ function descargarImagenTopBodegasDispensa(modo){
   if(!tabla || !tabla.length){ showToast('Primero calcula los indicadores.', true); return; }
 
   const esEf = (modo === 'eficiencia');
+  const esNum = (modo === 'pendienteNum');   // ordena por NÚMERO (conteo) de dispensas pendientes
+  const esIndice = !esEf && !esNum;          // ordena por ÍNDICE (%) de pendientes
   /* Solo bodegas con dispensas activas: sin dispensas no hay indicador comparable.
      Ademas se dejan fuera de los dos Top 20 las zonas que no son puntos de venta
      operativos: "CERRADA" (puntos cerrados), "BODEGA" y "BODEGA VIRTUAL"
@@ -4687,9 +4689,12 @@ function descargarImagenTopBodegasDispensa(modo){
   if(!base.length){ showToast('No hay bodegas operativas con dispensas activas para el filtro actual.', true); return; }
 
   const orden = base.slice().sort((a,b)=>{
-    const va = esEf ? (a.efDispensa||0) : (a.pendDispensa||0);
-    const vb = esEf ? (b.efDispensa||0) : (b.pendDispensa||0);
-    if(Math.abs(vb-va) > 1e-12) return vb-va;
+    const va = esEf ? (a.efDispensa||0) : (esNum ? (a.dispensasPendientes||0) : (a.pendDispensa||0));
+    const vb = esEf ? (b.efDispensa||0) : (esNum ? (b.dispensasPendientes||0) : (b.pendDispensa||0));
+    if(esNum){
+      if(vb!==va) return vb-va;
+    } else if(Math.abs(vb-va) > 1e-12){ return vb-va; }
+    if((b.dispensasPendientes||0) !== (a.dispensasPendientes||0)) return (b.dispensasPendientes||0)-(a.dispensasPendientes||0);
     if((b.dispensas||0) !== (a.dispensas||0)) return (b.dispensas||0)-(a.dispensas||0);
     return (a.zona+a.bodega).localeCompare(b.zona+b.bodega,'es');
   });
@@ -4697,8 +4702,10 @@ function descargarImagenTopBodegasDispensa(modo){
 
   const zonaSel = document.getElementById('fZona').value || 'Todas las zonas';
   const titulo = esEf ? 'Top 20 bodegas detalle · Mejor indicador de eficiencia'
+                      : esNum ? 'Top 20 bodegas detalle · Mayor número de dispensas pendientes'
                       : 'Top 20 bodegas detalle · Mayor índice de pendientes';
   const criterio = (esEf ? 'Ordenado por indicador de eficiencia, de mayor a menor.'
+                         : esNum ? 'Ordenado por número de dispensas pendientes, de mayor a menor.'
                          : 'Ordenado por índice de pendientes, de mayor a menor.')
                  + ' Se excluyen las zonas Cerrada, Bodega, Bodega Virtual y Local y Activos, y las filas sin bodega detalle.';
   const acento = esEf ? '#1E8F5E' : '#D98A2B';
@@ -4841,12 +4848,15 @@ function descargarImagenTopBodegasDispensa(modo){
     ctx.fillStyle='#1B2733';
     ctx.fillText(fmtInt(t.dispensas), colX[3]+50, y);
     ctx.fillText(fmtInt(t.dispensasEntregadas), colX[4]+80, y);
+    // La columna Pendientes (conteo) se resalta cuando se ordena por número de pendientes.
+    ctx.fillStyle= esNum ? acento : '#1B2733';
+    ctx.font=(esNum?'bold ':'')+'11.5px Consolas, monospace';
     ctx.fillText(fmtInt(t.dispensasPendientes), colX[5]+80, y);
     ctx.fillStyle= esEf ? acento : '#5C6C7E';
     ctx.font=(esEf?'bold ':'')+'11.5px Consolas, monospace';
     ctx.fillText(fmtPct(t.efDispensa), colX[6]+90, y);
-    ctx.fillStyle= esEf ? '#5C6C7E' : acento;
-    ctx.font=(esEf?'':'bold ')+'11.5px Consolas, monospace';
+    ctx.fillStyle= esIndice ? acento : '#5C6C7E';
+    ctx.font=(esIndice?'bold ':'')+'11.5px Consolas, monospace';
     ctx.fillText(fmtPct(t.pendDispensa), colX[7]+100, y);
     ctx.textAlign='left';
     ctx.strokeStyle='#EEF3F8'; ctx.beginPath(); ctx.moveTo(28,y+8); ctx.lineTo(W-28,y+8); ctx.stroke();
@@ -4858,16 +4868,18 @@ function descargarImagenTopBodegasDispensa(modo){
 
   const a=document.createElement('a');
   const slug=zonaSel.replace(/[^A-Za-z0-9\-_]+/g,'_').slice(0,40);
-  a.download='Top20_'+(esEf?'Mejor_Eficiencia':'Mayor_Indice_Pendiente')+'_'+slug+'_'+hoy.toISOString().slice(0,10)+'.png';
+  a.download='Top20_'+(esEf?'Mejor_Eficiencia': esNum ? 'Mayor_Numero_Dispensas_Pendientes' : 'Mayor_Indice_Pendiente')+'_'+slug+'_'+hoy.toISOString().slice(0,10)+'.png';
   a.href=cv.toDataURL('image/png');
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  showToast('Imagen del Top 20 ('+(esEf?'mejor eficiencia':'mayor índice de pendientes')+') descargada.');
+  showToast('Imagen del Top 20 ('+(esEf?'mejor eficiencia': esNum ? 'mayor número de dispensas pendientes' : 'mayor índice de pendientes')+') descargada.');
 }
 (function(){
   const b1=document.getElementById('btnImagenTopEficiencia');
   const b2=document.getElementById('btnImagenTopPendiente');
+  const b3=document.getElementById('btnImagenTopPendienteNum');
   if(b1) b1.addEventListener('click', ()=>descargarImagenTopBodegasDispensa('eficiencia'));
   if(b2) b2.addEventListener('click', ()=>descargarImagenTopBodegasDispensa('pendiente'));
+  if(b3) b3.addEventListener('click', ()=>descargarImagenTopBodegasDispensa('pendienteNum'));
 })();
 
 // Selector genérico de gráfico de pastel: permite ver "General" (agregado de todas las
