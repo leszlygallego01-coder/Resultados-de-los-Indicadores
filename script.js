@@ -2009,6 +2009,33 @@ async function calcularIndicadores(){
     }
 
     function enriquecerFilasReporte(reporteRaw){
+    /* Unificación de bodegas equivalentes (p.ej. SM316 = M316): se elige una sola
+       etiqueta "Bodega Detalle" para todas las filas de un mismo código canónico,
+       tomándola de las propias filas del reporte que ya usan el código canónico
+       (la más descriptiva). Así los reportes (Top 20, seguimiento, comparativo, etc.)
+       agrupan las dos como una sola bodega. */
+    const _bodegaLabelCanon = new Map();   // código canónico -> etiqueta preferida
+    (reporteRaw||[]).forEach(r=>{
+      const bd=String(r&&r.bodegaDetalle||'').trim();
+      if(!bd) return;
+      const cod=codigoBodega(bd);
+      if(!cod) return;
+      if(bodegaCodigoCanonico(cod)!==cod) return;   // esta fila usa el código fuente, no sirve de etiqueta
+      if(!esCodigoCanonicoUnificacion(cod)) return; // solo códigos destino de una unificación
+      const prev=_bodegaLabelCanon.get(cod);
+      if(!prev || bd.length>prev.length) _bodegaLabelCanon.set(cod, bd);
+    });
+    function canonizarBodegaDetalle(bd){
+      const s=String(bd||'').trim();
+      if(!s) return s;
+      const cod=codigoBodega(s);
+      if(!cod) return s;
+      const canon=bodegaCodigoCanonico(cod);
+      if(canon===cod) return s;                     // ya es canónica o no se unifica
+      const label=_bodegaLabelCanon.get(canon);
+      if(label) return label;                       // adopta la etiqueta de la bodega canónica
+      return s.replace(cod, canon);                 // respaldo: al menos deja el código canónico
+    }
     const rows=reporteRaw.map((r,idx)=>{
       const codigoArticulo=normValue(r.codigoArticulo);
       const homologo=codigoToHomologo.get(codigoArticulo) || '';
@@ -2031,7 +2058,7 @@ async function calcularIndicadores(){
          diferencia distinta de 0 (faltó o sobró cantidad frente a lo autorizado).
          Los códigos que no son medicamento nunca generan pendiente.               */
       const lineaPendiente = noMedicamento ? 'NO' : ((unidades>0 && diferencia===0) ? 'NO':'SI');   // Linea pendiente
-      const bodegaDetalle=String(r.bodegaDetalle||'').trim();
+      const bodegaDetalle=canonizarBodegaDetalle(String(r.bodegaDetalle||'').trim());
       const bodegaNorm=normValue(bodegaDetalle);
       const existenciaPunto=invPuntoMap.get(homologo+'|'+bodegaNorm) || 0;
       const existenciaBodega=invBodegaPrincipal.get(homologo) || 0;
@@ -3861,6 +3888,22 @@ function getPendientesReporte(){
    contenga al otro; por último compara el código inicial del nombre (por
    ejemplo "M15", "N11", "B05"). Devuelve '' cuando no hay ninguna bodega
    equivalente en el reporte. */
+/* Bodegas que en realidad son la MISMA aunque el archivo las traiga con dos
+   códigos distintos (por ejemplo el mismo punto migrado de un código a otro).
+   Clave = código que se debe UNIFICAR (el que desaparece); valor = código
+   canónico con el que se agrupa todo. Se comparan en mayúsculas y sin signos.
+   Caso actual: SM316 y M316 son la misma bodega (San Juan de Villalobos). */
+const BODEGA_CODIGO_EQUIV = { 'SM316':'M316' };
+const _BODEGA_CODIGO_CANON_TARGETS = new Set(Object.values(BODEGA_CODIGO_EQUIV));
+// Devuelve el código canónico para un código de bodega (o el mismo si no se unifica).
+function bodegaCodigoCanonico(cod){
+  const c=String(cod||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  return BODEGA_CODIGO_EQUIV[c] || c;
+}
+// ¿Este código es el DESTINO de alguna unificación (p.ej. M316)?
+function esCodigoCanonicoUnificacion(c){
+  return _BODEGA_CODIGO_CANON_TARGETS.has(String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,''));
+}
 function codigoBodega(nombre){
   const t=String(nombre||'').trim().split(/[\s.\-_/]+/).filter(Boolean);
   for(const p of t){
