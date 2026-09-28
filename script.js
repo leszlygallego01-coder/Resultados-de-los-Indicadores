@@ -341,45 +341,15 @@ function localDeleteRecord(key){ return localTx('readwrite', store => store.dele
 const CONSOLIDADO_KEY='reporte_consolidado';
 let _consolidadoCache=null;
 
-// Lee la historia consolidada guardada en este navegador.
-async function consolidadoLeer(){
-  if(_consolidadoCache) return _consolidadoCache;
-  let rec=null;
-  try{ rec=await localGetRecord(CONSOLIDADO_KEY); }catch(e){ rec=null; }
-  _consolidadoCache = (rec && Array.isArray(rec.rows)) ? rec.rows : [];
-  return _consolidadoCache;
-}
-
-/* Suma las filas del cargue actual a la historia consolidada y la devuelve.
-   Las filas repetidas se descartan con la misma firma que se usa al unir meses,
-   asi que abrir dos veces el mismo mes no infla las cifras y una linea que
-   cambio de estado (pendiente -> entregada) si entra como version nueva.     */
-async function consolidadoAgregar(filas){
-  // Optimizado en memoria: se APENDEA sobre la propia historia previa en lugar de
-  // construir una segunda copia completa (“out”). Con reportes de mas de un millón de
-  // filas, esa copia extra + el Set de firmas dispara “Out of Memory” al traer un paquete
-  // nuevo. La historia previa ya viene deduplicada, así que solo se filtran las filas
-  // nuevas contra las firmas ya vistas.
-  const previas=await consolidadoLeer();
-  const vistas=new Set();
-  for(let i=0;i<previas.length;i++){
-    const fx=paqueteFirmaFilaReporte(previas[i]);
-    if(fx) vistas.add(fx);
-  }
-  const nuevas=filas||[];
-  for(let i=0;i<nuevas.length;i++){
-    const f=nuevas[i];
-    if(!f || typeof f!=='object') continue;
-    const fx=paqueteFirmaFilaReporte(f);
-    if(fx){ if(vistas.has(fx)) continue; vistas.add(fx); }
-    previas.push(f);
-  }
-  _consolidadoCache=previas;
-  try{
-    await localPutRecord({ key:CONSOLIDADO_KEY, rows:previas, fileName:'', batches:null,
-                           updatedAt:new Date().toISOString() });
-  }catch(e){ /* si no hay espacio, al menos queda en memoria durante la sesion */ }
-  return previas;
+/* Libera la "historia consolidada" que este visor guardaba en el navegador.
+   Antes se acumulaba SIN LÍMITE sesión tras sesión y, al abrir varios meses,
+   obligaba a reconstruir la tabla grande por SEGUNDA vez en memoria (causa del
+   "Out of Memory"). Las vistas consolidadas ahora usan las filas de los meses
+   cargados en pantalla, así que ese blob acumulado ya no se necesita: se borra
+   para que no vuelva a cargarse ni ocupe espacio en el almacenamiento local. */
+async function consolidadoLimpiar(){
+  _consolidadoCache=null;
+  try{ await localDeleteRecord(CONSOLIDADO_KEY); }catch(e){ /* si no se puede, no pasa nada */ }
 }
 
 /* --- Operaciones CRUD --- */
@@ -2219,17 +2189,17 @@ async function calcularIndicadores(){
        había abierto en este navegador y se enriquece igual. De aquí salen el
        consumo promedio mes, el Reporte Comparativo y la Reasignación mensual,
        para que esas cifras no cambien al abrir otros meses.                    */
+    /* Vistas CONSOLIDADAS (consumo promedio mes, Reporte Comparativo y Reasignación
+       mensual): usan las filas de los meses que están CARGADOS en pantalla. Antes se
+       mantenía una "historia consolidada" separada que crecía sin límite en el navegador
+       y obligaba a reconstruir la tabla grande por SEGUNDA vez al abrir varios meses; eso
+       era la causa del "Out of Memory". Al abrir el paquete con todos los meses que
+       interesan, esas cifras salen igual, pero sin duplicar la tabla ni el índice de
+       firmas en memoria. */
     let rowsConsolidado=rows;
-    try{
-      const crudoConsolidado=await consolidadoAgregar(reporteRaw);
-      if(crudoConsolidado && crudoConsolidado.length>rows.length){
-        rowsConsolidado=enriquecerFilasReporte(crudoConsolidado);
-      }
-    }catch(e){
-      // Si el navegador no permite guardar la historia, las vistas consolidadas
-      // siguen funcionando con lo que esté cargado en pantalla.
-      console.warn('No se pudo actualizar la historia consolidada:', e);
-    }
+    // Se libera la historia consolidada antigua (blob acumulado sin límite) para que no
+    // vuelva a cargarse ni ocupe espacio en el almacenamiento del navegador.
+    try{ await consolidadoLimpiar(); }catch(e){ console.warn('No se pudo liberar la historia consolidada previa:', e); }
 
     // El estado vigente de cada línea sale del propio cargue acumulativo del Reporte de
     // Dispensación: cada cargue trae de nuevo la línea con su estado actualizado, por lo que
