@@ -4607,15 +4607,16 @@ document.getElementById('btnDescargarImagenDispensa').addEventListener('click', 
 
 /* Zonas que NO son puntos de venta operativos y por eso quedan fuera de los
    Top 20 de dispensas: "CERRADA" (puntos cerrados), "BODEGA" y "BODEGA VIRTUAL"
-   (centros de acopio / bodegas logisticas). Se comparan sin tildes, en
-   mayusculas y sin espacios de sobra, asi que reconoce variantes como
-   "Cerradas", "BODEGA-VIRTUAL" o "Bodega  Virtual". */
+   (centros de acopio / bodegas logisticas) y "LOCAL Y ACTIVOS" (no es un punto de
+   venta operativo). Se comparan sin tildes, en mayusculas y sin espacios de sobra,
+   asi que reconoce variantes como "Cerradas", "BODEGA-VIRTUAL" o "Bodega  Virtual". */
 function zonaNoOperativaDispensa(zona){
   const z=normValue(zona).replace(/[^A-Z0-9]+/g,' ').trim();
   if(!z) return false;                       // sin zona: se deja pasar
   if(/^CERRAD[AO]S?$/.test(z)) return true;  // CERRADA / CERRADO / CERRADAS
   if(/^BODEGA(S)?$/.test(z)) return true;    // BODEGA / BODEGAS
   if(/^BODEGA(S)? VIRTUAL(ES)?$/.test(z)) return true;
+  if(/^LOCAL(ES)? Y ACTIVOS?$/.test(z)) return true;  // LOCAL Y ACTIVOS
   return false;
 }
 
@@ -4656,7 +4657,7 @@ function descargarImagenTopBodegasDispensa(modo){
                       : 'Top 20 bodegas detalle · Mayor índice de pendientes';
   const criterio = (esEf ? 'Ordenado por indicador de eficiencia, de mayor a menor.'
                          : 'Ordenado por índice de pendientes, de mayor a menor.')
-                 + ' Se excluyen las zonas Cerrada, Bodega y Bodega Virtual, y las filas sin bodega detalle.';
+                 + ' Se excluyen las zonas Cerrada, Bodega, Bodega Virtual y Local y Activos, y las filas sin bodega detalle.';
   const acento = esEf ? '#1E8F5E' : '#D98A2B';
 
   const tD=sumField(top,'dispensas'), tE=sumField(top,'dispensasEntregadas'), tP=sumField(top,'dispensasPendientes');
@@ -4810,7 +4811,7 @@ function descargarImagenTopBodegasDispensa(modo){
   });
 
   ctx.fillStyle='#9CA9B6'; ctx.font='11px Arial, sans-serif';
-  ctx.fillText('Solo dispensas con estado activo, sin las zonas Cerrada, Bodega ni Bodega Virtual. El gráfico general corresponde al agregado de las '+top.length+' bodegas mostradas.', 28, H-18);
+  ctx.fillText('Solo dispensas con estado activo, sin las zonas Cerrada, Bodega, Bodega Virtual ni Local y Activos. El gráfico general corresponde al agregado de las '+top.length+' bodegas mostradas.', 28, H-18);
 
   const a=document.createElement('a');
   const slug=zonaSel.replace(/[^A-Za-z0-9\-_]+/g,'_').slice(0,40);
