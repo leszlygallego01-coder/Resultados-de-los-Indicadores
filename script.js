@@ -355,23 +355,31 @@ async function consolidadoLeer(){
    asi que abrir dos veces el mismo mes no infla las cifras y una linea que
    cambio de estado (pendiente -> entregada) si entra como version nueva.     */
 async function consolidadoAgregar(filas){
+  // Optimizado en memoria: se APENDEA sobre la propia historia previa en lugar de
+  // construir una segunda copia completa (“out”). Con reportes de mas de un millón de
+  // filas, esa copia extra + el Set de firmas dispara “Out of Memory” al traer un paquete
+  // nuevo. La historia previa ya viene deduplicada, así que solo se filtran las filas
+  // nuevas contra las firmas ya vistas.
   const previas=await consolidadoLeer();
   const vistas=new Set();
-  const out=[];
-  const meter=(f)=>{
-    if(!f || typeof f!=='object') return;
+  for(let i=0;i<previas.length;i++){
+    const fx=paqueteFirmaFilaReporte(previas[i]);
+    if(fx) vistas.add(fx);
+  }
+  const nuevas=filas||[];
+  for(let i=0;i<nuevas.length;i++){
+    const f=nuevas[i];
+    if(!f || typeof f!=='object') continue;
     const fx=paqueteFirmaFilaReporte(f);
-    if(fx){ if(vistas.has(fx)) return; vistas.add(fx); }
-    out.push(f);
-  };
-  previas.forEach(meter);
-  (filas||[]).forEach(meter);
-  _consolidadoCache=out;
+    if(fx){ if(vistas.has(fx)) continue; vistas.add(fx); }
+    previas.push(f);
+  }
+  _consolidadoCache=previas;
   try{
-    await localPutRecord({ key:CONSOLIDADO_KEY, rows:out, fileName:'', batches:null,
+    await localPutRecord({ key:CONSOLIDADO_KEY, rows:previas, fileName:'', batches:null,
                            updatedAt:new Date().toISOString() });
   }catch(e){ /* si no hay espacio, al menos queda en memoria durante la sesion */ }
-  return out;
+  return previas;
 }
 
 /* --- Operaciones CRUD --- */
@@ -1107,18 +1115,22 @@ async function pqAplicarBorradoEstricto(){
 }
 
 // Las fechas viajan marcadas dentro del paquete; se devuelven como objetos Date.
+// Se decodifica EN EL MISMO arreglo (sin crear una segunda copia de todas las filas):
+// con reportes de mas de un millón de filas, duplicar el arreglo al guardar el paquete
+// era una de las causas del “Out of Memory” al traerlo de la carpeta.
 function backupDecodeRows(rows){
-  return (rows||[]).map(r=>{
-    if(!r || typeof r!=='object') return r;
-    const o={};
-    Object.keys(r).forEach(k=>{
+  const arr=rows||[];
+  for(let i=0;i<arr.length;i++){
+    const r=arr[i];
+    if(!r || typeof r!=='object') continue;
+    for(const k in r){
       const v=r[k];
       if(v && typeof v==='object' && typeof v.__date==='string'){
-        const d=new Date(v.__date); o[k]=isNaN(d)?null:d;
-      }else{ o[k]=v; }
-    });
-    return o;
-  });
+        const d=new Date(v.__date); r[k]=isNaN(d)?null:d;
+      }
+    }
+  }
+  return arr;
 }
 function base64ABytes(b64){
   const bin=atob(String(b64||''));
