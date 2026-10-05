@@ -5112,9 +5112,18 @@ function renderIndicadorLinea(rowsAllRaw, bodegaSearch, zona){
   const groups=groupByBodega(rowsAll, bodegaSearch, zona);
   // Cobertura de inventario calculada sobre TODO el ambito filtrado: una linea solo cuenta
   // como subsanable si la existencia alcanza para la suma de pendientes de ese mismo item.
-  const cob = calcularCoberturaExistencias(groups.reduce((acc,g)=>acc.concat(g.rows),[]));
+  // Se calcula sobre los artículos ya colapsados a su versión vigente (mismo criterio que
+  // el conteo de abajo), para no sumar pendientes de versiones antiguas ya superadas.
+  const cob = calcularCoberturaExistencias(colapsarPorArticulo(groups.reduce((acc,g)=>acc.concat(g.rows),[])));
   const table=groups.map(g=>{
-    const rs=g.rows;
+    // El Reporte de Dispensación es ACUMULATIVO: el MISMO artículo (misma dispensa +
+    // bodega + código) llega varias veces en distintos cargues a medida que cambia de
+    // estado. Antes se contaba fila por fila, así que un artículo que ya se entregó en un
+    // cargue posterior seguía sumando sus versiones pendientes antiguas (p. ej. una
+    // dispensa aparecía con 4 pendientes cuando en realidad solo 1 seguía pendiente).
+    // Para contar Total/Entregadas/Pendientes se colapsa cada artículo a su VERSIÓN MÁS
+    // VIGENTE (último cargue), igual que el Excel de Dispensas Cerrables.
+    const rs=colapsarPorArticulo(g.rows);
     let lineas=0, lineasEnt=0, lineasPen=0, sinHomologar=0;
     let molParetoPend=0, paretoAgotado=0, molNoParetoPend=0, noParetoAgotado=0;
     let cantPuntoPareto=0, cantBodegaPareto=0, cantPuntoNoPareto=0, cantBodegaNoPareto=0;
@@ -6292,7 +6301,7 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
       if(zona && r.zona!==zona) return;
       const k = r.documento+'|'+r.bodegaNorm+'|'+String(r.codigoArticulo||'').trim().toUpperCase();
       const prev = porLineaUnica.get(k);
-      if(!prev || esVersionPosterior(r, prev)) porLineaUnica.set(k, r);   // gana el último cargue
+      if(!prev || esVersionMasVigenteArticulo(r, prev)) porLineaUnica.set(k, r);   // gana la versión más vigente del artículo
     });
     // Solo dispensas activas, evaluando el estado sobre la versión vigente de la línea.
     const activas = Array.from(porLineaUnica.values()).filter(r=> esEstadoActivo(r.estadoDispensa));
@@ -9192,6 +9201,48 @@ function esVersionPosterior(a, b){
   const fa=String(a.fechaCargue||''), fb=String(b.fechaCargue||'');
   if(fa!==fb) return fa>fb;
   return a.idx>b.idx;
+}
+/* Clave de ARTÍCULO (no de ocurrencia): identifica el mismo artículo del mismo
+   documento y la misma bodega a través de los cargues, SIN el número de repetición.
+   Así, cuando un documento vuelve a subirse en un cargue posterior ya cumplido, las
+   dos filas (la pendiente antigua y la entregada nueva) colapsan en un solo artículo
+   y no se cuentan por duplicado. La fecha de dispensación NO entra en la clave (es
+   actualizable y volvería a fragmentar el artículo entre cargues); se usa solo como
+   desempate dentro del comparador de abajo.                                      */
+function claveArticuloCargue(r){
+  return String(r.documento||'')+'|'+String(r.bodegaNorm||'')+'|'+String(r.codigoArticulo||'').toUpperCase();
+}
+/* Comparador que decide, entre dos filas del MISMO artículo (misma clave de artículo),
+   cuál es la versión que vale como estado vigente. Orden de prioridad:
+     1) número de cargue mayor (el cargue más reciente manda);
+     2) a falta de número, fecha de cargue mayor;
+     3) a falta de ambas, fecha de dispensación más reciente;
+     4) una versión ENTREGADA prevalece sobre una pendiente del mismo artículo
+        (el cumplimiento ya acreditado no se pierde);
+     5) por último, el orden en que quedaron guardadas (idx mayor).            */
+function esVersionMasVigenteArticulo(a, b){
+  const na=numCargue(a), nb=numCargue(b);
+  if(na && nb && na!==nb) return na>nb;
+  const fca=String(a.fechaCargue||''), fcb=String(b.fechaCargue||'');
+  if(fca!==fcb) return fca>fcb;
+  const ta=(a && a.fecha instanceof Date)?a.fecha.getTime():(a && a.fecha?new Date(a.fecha).getTime():NaN);
+  const tb=(b && b.fecha instanceof Date)?b.fecha.getTime():(b && b.fecha?new Date(b.fecha).getTime():NaN);
+  if(!isNaN(ta) && !isNaN(tb) && ta!==tb) return ta>tb;
+  const ea=lineaEsEntregada(a), eb=lineaEsEntregada(b);
+  if(ea!==eb) return ea;
+  return (a.idx||0)>(b.idx||0);
+}
+/* Colapsa un conjunto de filas a UNA fila por artículo (clave de artículo), quedándose
+   con la versión más vigente según el comparador de arriba. Devuelve el arreglo de
+   filas vigentes (una por artículo).                                            */
+function colapsarPorArticulo(rows){
+  const m=new Map();
+  (rows||[]).forEach(r=>{
+    const k=claveArticuloCargue(r);
+    const prev=m.get(k);
+    if(!prev || esVersionMasVigenteArticulo(r, prev)) m.set(k, r);
+  });
+  return Array.from(m.values());
 }
 // Día (AAAA-MM-DD) del cargue en que llegó esta versión de la línea (para mostrar).
 function diaCargue(r){ return String((r && r.fechaCargue) || '').slice(0,10); }
