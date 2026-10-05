@@ -6255,10 +6255,11 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
 // líneas pendientes; si solo cubre una parte, la dispensa NO aparece.
 //
 // Importante: el Reporte de Dispensación es ACUMULATIVO (una misma línea llega varias
-// veces en distintos cargues). Por eso se parte de snapshotUltimaVersion, que deja UNA
-// sola fila por línea (la última versión cargada), igual que la descarga "Detalle por
-// bodega". Así los conteos de líneas totales/pendientes/entregadas coinciden con el
-// reporte real y no se parten ni se duplican por versiones viejas.
+// veces en distintos cargues a medida que cambia de estado). Por eso se consolida por la
+// CLAVE ÚNICA de 3 campos [Documento + Bodega Detalle + Código de Artículo] y se deja UNA
+// sola fila por clave: la última versión cargada. Así los conteos de líneas
+// totales/pendientes/entregadas y la cantidad pendiente reflejan la foto real y vigente
+// de la dispensa, sin inflarse por los históricos de carga.
 //
 // La cobertura se evalúa POR DISPENSA contra el inventario del punto: se agrupan las
 // líneas pendientes de la dispensa por Homólogo (producto), se suman sus cantidades
@@ -6271,16 +6272,30 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
     const bodegaSearch = getBodegaFiltro();
     const zona = document.getElementById('fZona').value;
-    // Solo la ÚLTIMA versión cargada de cada línea (el reporte es acumulativo), activa y vigente.
-    const _idxUltima = new Set(snapshotUltimaVersion(filteredRowsCache).map(r=>r.idx));
-    const activas = filteredRowsCache.filter(r=>{
-      if(r.versionVigente===false) return false;
-      if(!_idxUltima.has(r.idx)) return false;        // descarta versiones superadas por un recargue
-      if(!esEstadoActivo(r.estadoDispensa)) return false;
-      if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
-      if(zona && r.zona!==zona) return false;
-      return true;
+    /* El Reporte de Dispensación es ACUMULATIVO: la MISMA línea (misma dispensa +
+       bodega + código de artículo) se vuelve a subir en cargues posteriores a medida
+       que cambia de estado (de pendiente a entregada). Para este reporte se consolida
+       por la CLAVE ÚNICA de 3 campos que pide la operación:
+
+         Clave única = Documento (Dispensa) + Bodega Detalle + Código de Artículo
+
+       y de cada clave se toma UNA sola fila: la VERSIÓN MÁS RECIENTE (último cargue,
+       según número/fecha de cargue). Los registros anteriores/obsoletos del mismo
+       artículo en la misma dispensa se descartan por completo del conteo. Así una
+       dispensa que trae, por ejemplo, 27 registros históricos de un puñado de
+       artículos queda con sus líneas reales/únicas (13), y los pendientes se miden
+       solo sobre la versión vigente de cada artículo.                            */
+    const porLineaUnica = new Map();   // doc|bodega|codigo -> versión más reciente
+    filteredRowsCache.forEach(r=>{
+      if(!r.documento) return;
+      if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return;
+      if(zona && r.zona!==zona) return;
+      const k = r.documento+'|'+r.bodegaNorm+'|'+String(r.codigoArticulo||'').trim().toUpperCase();
+      const prev = porLineaUnica.get(k);
+      if(!prev || esVersionPosterior(r, prev)) porLineaUnica.set(k, r);   // gana el último cargue
     });
+    // Solo dispensas activas, evaluando el estado sobre la versión vigente de la línea.
+    const activas = Array.from(porLineaUnica.values()).filter(r=> esEstadoActivo(r.estadoDispensa));
     if(!activas.length){ showToast('No hay datos activos con los filtros actuales.', true); return; }
 
     // Agrupar líneas por dispensa (Documento + Bodega Detalle = punto)
@@ -8585,15 +8600,19 @@ function renderBaseSupervisores(rowsVigentes, bodegaSearch, zona){
   const mesExcluido=mesesTodos.find(k=>!factorMes.has(k)) || '';
   const parcialEnSerie = !!(mesParcial && factorMes.has(mesParcial.mes));
 
-  /* Serie mensual de un homologo+bodega: se completa con ceros en los meses sin
-     dispensacion. Todos los meses de la serie son meses cerrados.            */
+  /* Serie mensual de un homologo+bodega: se arma sobre la TOTALIDAD de los meses
+     completos cargados, no solo sobre los meses en que ese homologo tuvo
+     movimiento. Los meses sin dispensacion de ese homologo entran como 0, de
+     modo que el consumo promedio siempre se calcula contra todos los meses
+     cargados (y la columna "Meses de historia" refleja el total de meses, no
+     cuantos meses trajo ese producto en particular).                          */
   const serieDe=(mapMeses)=>{
     if(!mesesOrden.length) return [];
-    const propios=mesesOrden.filter(k=>mapMeses.has(k));
-    if(!propios.length) return [];
-    const desde=mesesOrden.indexOf(propios[0]);
+    // Si el homologo no tiene NINGUN movimiento, no entra al requerimiento.
+    const tieneDatos=mesesOrden.some(k=>mapMeses.has(k));
+    if(!tieneDatos) return [];
     const out=[];
-    for(let i=Math.max(0,desde); i<mesesOrden.length; i++){
+    for(let i=0; i<mesesOrden.length; i++){
       const k=mesesOrden[i];
       const v=mapMeses.get(k)||0;
       out.push(Math.round(v*(factorMes.get(k)||1)));
@@ -9002,6 +9021,12 @@ function pintarBaseSupervisores(){
       'Faltante del destino':p.faltaDestino, 'Total requerido destino':p.requeridoDestino,
       'Existencia destino':p.existenciaDestino, 'Excedente que queda en origen':p.sobranteOrigen
     }));
+    /* Encabezados fijos de la hoja de plan: aunque no haya traslados sugeridos la
+       hoja debe salir con sus titulos (antes salia completamente en blanco). */
+    const H2=['Supervisor','Zona','Homologo','Agrupado por','Codigo de articulo',
+      'Descripcion DCI','Bodega origen (excedente)','Existencia bodega origen',
+      'Bodega destino (faltante)','Unidades a trasladar','Faltante del destino',
+      'Total requerido destino','Existencia destino','Excedente que queda en origen'];
     // Hoja 3: resumen por zona y homólogo (consolidado de la zona).
     const hoja3=resumen.slice().sort((a,b)=>
       a.zona.localeCompare(b.zona,'es') || _supEtiqueta(a).localeCompare(_supEtiqueta(b),'es')).map(z=>({
@@ -9020,10 +9045,17 @@ function pintarBaseSupervisores(){
     const fecha=new Date().toISOString().slice(0,10);
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja1), 'REQUERIMIENTO POR HOMOLOGO');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja2), 'PLAN DE REDISTRIBUCION');
+    /* La hoja de plan siempre lleva encabezados; si no hay traslados sugeridos se
+       deja una fila que explica por que quedo vacia (en vez de una hoja en blanco). */
+    const ws2 = hoja2.length
+      ? XLSX.utils.json_to_sheet(hoja2, {header:H2})
+      : XLSX.utils.aoa_to_sheet([H2, ['Sin traslados sugeridos: dentro de cada zona no hay bodegas con excedente para cubrir a las que estan cortas del mismo homologo. Revisa el filtro de busqueda/zona (si hay uno activo el plan se limita a lo buscado) o la columna "Por comprar" en la hoja RESUMEN POR ZONA.']]);
+    XLSX.utils.book_append_sheet(wb, ws2, 'PLAN DE REDISTRIBUCION');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja3), 'RESUMEN POR ZONA');
     XLSX.writeFile(wb, 'Base_Supervisores_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(hoja1.length)+' filas de requerimiento y '+fmtInt(hoja2.length)+' traslados sugeridos.');
+    showToast(hoja2.length
+      ? 'Excel exportado: '+fmtInt(hoja1.length)+' filas de requerimiento y '+fmtInt(hoja2.length)+' traslados sugeridos.'
+      : 'Excel exportado: '+fmtInt(hoja1.length)+' filas de requerimiento. No hubo traslados sugeridos (ver nota en la hoja PLAN DE REDISTRIBUCION).');
   });
 })();
 
