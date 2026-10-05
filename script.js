@@ -6281,27 +6281,28 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
     const bodegaSearch = getBodegaFiltro();
     const zona = document.getElementById('fZona').value;
-    /* El Reporte de Dispensación es ACUMULATIVO: la MISMA línea (misma dispensa +
-       bodega + código de artículo) se vuelve a subir en cargues posteriores a medida
-       que cambia de estado (de pendiente a entregada). Para este reporte se consolida
-       por la CLAVE ÚNICA de 3 campos que pide la operación:
+    /* El Reporte de Dispensación es ACUMULATIVO: la MISMA necesidad (misma dispensa +
+       bodega + código HOMÓLOGO) se vuelve a subir en cargues posteriores a medida que
+       cambia de estado (de pendiente a entregada), y puede entregarse incluso bajo un
+       código de artículo distinto al solicitado. Para este reporte se consolida por la
+       LLAVE DE CONTROL que pide la operación:
 
-         Clave única = Documento (Dispensa) + Bodega Detalle + Código de Artículo
+         Llave de control = Documento (Dispensa) + Bodega Detalle + Código Homólogo
 
-       y de cada clave se toma UNA sola fila: la VERSIÓN MÁS RECIENTE (último cargue,
-       según número/fecha de cargue). Los registros anteriores/obsoletos del mismo
-       artículo en la misma dispensa se descartan por completo del conteo. Así una
-       dispensa que trae, por ejemplo, 27 registros históricos de un puñado de
-       artículos queda con sus líneas reales/únicas (13), y los pendientes se miden
-       solo sobre la versión vigente de cada artículo.                            */
-    const porLineaUnica = new Map();   // doc|bodega|codigo -> versión más reciente
+       (si la fila no trae Homólogo válido se usa el Código de Artículo como respaldo).
+       De cada llave se toma UNA sola fila: la VERSIÓN VIGENTE (Fecha de Dispensación /
+       Fecha Origen más reciente). Los registros anteriores/obsoletos del mismo homólogo
+       en la misma dispensa se descartan por completo del conteo. Así una entrega
+       homologada (p. ej. M023509) liquida la línea pendiente previa de su homólogo
+       (M007718), y los pendientes se miden solo sobre la versión vigente.          */
+    const porLineaUnica = new Map();   // doc|bodega|homólogo -> versión vigente
     filteredRowsCache.forEach(r=>{
       if(!r.documento) return;
       if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return;
       if(zona && r.zona!==zona) return;
-      const k = r.documento+'|'+r.bodegaNorm+'|'+String(r.codigoArticulo||'').trim().toUpperCase();
+      const k = claveArticuloCargue(r);
       const prev = porLineaUnica.get(k);
-      if(!prev || esVersionMasVigenteArticulo(r, prev)) porLineaUnica.set(k, r);   // gana la versión más vigente del artículo
+      if(!prev || esVersionMasVigenteArticulo(r, prev)) porLineaUnica.set(k, r);   // gana la versión vigente del homólogo
     });
     // Solo dispensas activas, evaluando el estado sobre la versión vigente de la línea.
     const activas = Array.from(porLineaUnica.values()).filter(r=> esEstadoActivo(r.estadoDispensa));
@@ -9202,15 +9203,23 @@ function esVersionPosterior(a, b){
   if(fa!==fb) return fa>fb;
   return a.idx>b.idx;
 }
-/* Clave de ARTÍCULO (no de ocurrencia): identifica el mismo artículo del mismo
-   documento y la misma bodega a través de los cargues, SIN el número de repetición.
-   Así, cuando un documento vuelve a subirse en un cargue posterior ya cumplido, las
-   dos filas (la pendiente antigua y la entregada nueva) colapsan en un solo artículo
-   y no se cuentan por duplicado. La fecha de dispensación NO entra en la clave (es
-   actualizable y volvería a fragmentar el artículo entre cargues); se usa solo como
-   desempate dentro del comparador de abajo.                                      */
+/* Clave de ITEM a través de los cargues. La operación controla las entregas por
+   CÓDIGO HOMÓLOGO (no por código de artículo): un mismo requerimiento puede entregarse
+   bajo un código de artículo distinto al solicitado, pero ambos comparten el mismo
+   Homólogo (p. ej. M007718 solicitado y M023509 entregado comparten MOL0001). Por eso
+   la llave de control es Documento + Bodega Detalle + Código Homólogo, y así la entrega
+   homologada liquida la línea pendiente previa aunque cambie el código.
+   Respaldo: si la fila no trae un Homólogo válido (servicios, basura tipo 0-0-NA, etc.)
+   se agrupa por el Código de Artículo para no mezclar ítems distintos en un mismo grupo.
+   La fecha de dispensación NO entra en la clave (es actualizable); se usa solo como
+   criterio de versión dentro del comparador de abajo.                            */
 function claveArticuloCargue(r){
-  return String(r.documento||'')+'|'+String(r.bodegaNorm||'')+'|'+String(r.codigoArticulo||'').toUpperCase();
+  const doc=String(r.documento||'');
+  const bod=String(r.bodegaNorm||'');
+  const llaveItem = homologoValido(r && r.homologo)
+    ? ('H:'+normValue(r.homologo))
+    : ('C:'+String((r && r.codigoArticulo)||'').toUpperCase().trim());
+  return doc+'|'+bod+'|'+llaveItem;
 }
 /* Marca de tiempo (ms) de la FECHA DE DISPENSACIÓN de una fila (r.fecha). Es la fecha
    que, según la operación, define cuál versión del artículo es la vigente: la del cargue
