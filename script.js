@@ -4673,8 +4673,6 @@ function descargarImagenTopBodegasDispensa(modo){
   if(!tabla || !tabla.length){ showToast('Primero calcula los indicadores.', true); return; }
 
   const esEf = (modo === 'eficiencia');
-  const esNum = (modo === 'pendienteNum');   // ordena por NÚMERO (conteo) de dispensas pendientes
-  const esIndice = !esEf && !esNum;          // ordena por ÍNDICE (%) de pendientes
   /* Solo bodegas con dispensas activas: sin dispensas no hay indicador comparable.
      Ademas se dejan fuera de los dos Top 20 las zonas que no son puntos de venta
      operativos: "CERRADA" (puntos cerrados), "BODEGA" y "BODEGA VIRTUAL"
@@ -4689,12 +4687,9 @@ function descargarImagenTopBodegasDispensa(modo){
   if(!base.length){ showToast('No hay bodegas operativas con dispensas activas para el filtro actual.', true); return; }
 
   const orden = base.slice().sort((a,b)=>{
-    const va = esEf ? (a.efDispensa||0) : (esNum ? (a.dispensasPendientes||0) : (a.pendDispensa||0));
-    const vb = esEf ? (b.efDispensa||0) : (esNum ? (b.dispensasPendientes||0) : (b.pendDispensa||0));
-    if(esNum){
-      if(vb!==va) return vb-va;
-    } else if(Math.abs(vb-va) > 1e-12){ return vb-va; }
-    if((b.dispensasPendientes||0) !== (a.dispensasPendientes||0)) return (b.dispensasPendientes||0)-(a.dispensasPendientes||0);
+    const va = esEf ? (a.efDispensa||0) : (a.pendDispensa||0);
+    const vb = esEf ? (b.efDispensa||0) : (b.pendDispensa||0);
+    if(Math.abs(vb-va) > 1e-12) return vb-va;
     if((b.dispensas||0) !== (a.dispensas||0)) return (b.dispensas||0)-(a.dispensas||0);
     return (a.zona+a.bodega).localeCompare(b.zona+b.bodega,'es');
   });
@@ -4702,10 +4697,8 @@ function descargarImagenTopBodegasDispensa(modo){
 
   const zonaSel = document.getElementById('fZona').value || 'Todas las zonas';
   const titulo = esEf ? 'Top 20 bodegas detalle · Mejor indicador de eficiencia'
-                      : esNum ? 'Top 20 bodegas detalle · Mayor número de dispensas pendientes'
                       : 'Top 20 bodegas detalle · Mayor índice de pendientes';
   const criterio = (esEf ? 'Ordenado por indicador de eficiencia, de mayor a menor.'
-                         : esNum ? 'Ordenado por número de dispensas pendientes, de mayor a menor.'
                          : 'Ordenado por índice de pendientes, de mayor a menor.')
                  + ' Se excluyen las zonas Cerrada, Bodega, Bodega Virtual y Local y Activos, y las filas sin bodega detalle.';
   const acento = esEf ? '#1E8F5E' : '#D98A2B';
@@ -4848,15 +4841,12 @@ function descargarImagenTopBodegasDispensa(modo){
     ctx.fillStyle='#1B2733';
     ctx.fillText(fmtInt(t.dispensas), colX[3]+50, y);
     ctx.fillText(fmtInt(t.dispensasEntregadas), colX[4]+80, y);
-    // La columna Pendientes (conteo) se resalta cuando se ordena por número de pendientes.
-    ctx.fillStyle= esNum ? acento : '#1B2733';
-    ctx.font=(esNum?'bold ':'')+'11.5px Consolas, monospace';
     ctx.fillText(fmtInt(t.dispensasPendientes), colX[5]+80, y);
     ctx.fillStyle= esEf ? acento : '#5C6C7E';
     ctx.font=(esEf?'bold ':'')+'11.5px Consolas, monospace';
     ctx.fillText(fmtPct(t.efDispensa), colX[6]+90, y);
-    ctx.fillStyle= esIndice ? acento : '#5C6C7E';
-    ctx.font=(esIndice?'bold ':'')+'11.5px Consolas, monospace';
+    ctx.fillStyle= esEf ? '#5C6C7E' : acento;
+    ctx.font=(esEf?'':'bold ')+'11.5px Consolas, monospace';
     ctx.fillText(fmtPct(t.pendDispensa), colX[7]+100, y);
     ctx.textAlign='left';
     ctx.strokeStyle='#EEF3F8'; ctx.beginPath(); ctx.moveTo(28,y+8); ctx.lineTo(W-28,y+8); ctx.stroke();
@@ -4868,18 +4858,16 @@ function descargarImagenTopBodegasDispensa(modo){
 
   const a=document.createElement('a');
   const slug=zonaSel.replace(/[^A-Za-z0-9\-_]+/g,'_').slice(0,40);
-  a.download='Top20_'+(esEf?'Mejor_Eficiencia': esNum ? 'Mayor_Numero_Dispensas_Pendientes' : 'Mayor_Indice_Pendiente')+'_'+slug+'_'+hoy.toISOString().slice(0,10)+'.png';
+  a.download='Top20_'+(esEf?'Mejor_Eficiencia':'Mayor_Indice_Pendiente')+'_'+slug+'_'+hoy.toISOString().slice(0,10)+'.png';
   a.href=cv.toDataURL('image/png');
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  showToast('Imagen del Top 20 ('+(esEf?'mejor eficiencia': esNum ? 'mayor número de dispensas pendientes' : 'mayor índice de pendientes')+') descargada.');
+  showToast('Imagen del Top 20 ('+(esEf?'mejor eficiencia':'mayor índice de pendientes')+') descargada.');
 }
 (function(){
   const b1=document.getElementById('btnImagenTopEficiencia');
   const b2=document.getElementById('btnImagenTopPendiente');
-  const b3=document.getElementById('btnImagenTopPendienteNum');
   if(b1) b1.addEventListener('click', ()=>descargarImagenTopBodegasDispensa('eficiencia'));
   if(b2) b2.addEventListener('click', ()=>descargarImagenTopBodegasDispensa('pendiente'));
-  if(b3) b3.addEventListener('click', ()=>descargarImagenTopBodegasDispensa('pendienteNum'));
 })();
 
 // Selector genérico de gráfico de pastel: permite ver "General" (agregado de todas las
@@ -6258,6 +6246,122 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Pendientes_por_Linea_'+fecha+'.xlsx');
     showToast('Excel de Pendientes exportado: '+fmtInt(pendientes.length)+' líneas.');
+  });
+})();
+
+// ---- Descargar Dispensas Cerrables (Excel): dispensas cuya existencia en el punto
+// permite subsanar TODAS sus líneas pendientes. Si la existencia no alcanza para cubrir
+// todas las líneas pendientes de una dispensa, esa dispensa NO se incluye (regla "todo o nada").
+// Usa la misma lógica de cobertura de calcularCoberturaExistencias: se suman los pendientes
+// de cada item (homólogo+bodega) y se compara con la existencia en el punto.
+(function initDescargarDispensasCerrables(){
+  const btn=document.getElementById('btnDescargarDispensasCerrables');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
+    const bodegaSearch = getBodegaFiltro();
+    const zona = document.getElementById('fZona').value;
+    // Solo líneas activas y vigentes
+    const activas = filteredRowsCache.filter(r=>{
+      if(r.versionVigente===false) return false;
+      if(!esEstadoActivo(r.estadoDispensa)) return false;
+      if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
+      if(zona && r.zona!==zona) return false;
+      return true;
+    });
+    if(!activas.length){ showToast('No hay datos activos con los filtros actuales.', true); return; }
+
+    // Calcular cobertura de existencias (misma función que usa el Indicador por Línea)
+    const cob = calcularCoberturaExistencias(activas);
+
+    // Agrupar líneas por dispensa (Documento + Bodega)
+    const porDispensa = new Map();
+    activas.forEach(r=>{
+      const k = claveDocBodega(r);
+      if(!k) return;
+      if(!porDispensa.has(k)) porDispensa.set(k, []);
+      porDispensa.get(k).push(r);
+    });
+
+    // Filtrar: solo dispensas donde TODAS sus líneas pendientes están cubiertas por el punto
+    const dispensasCerrables = [];
+    porDispensa.forEach((lineas, k)=>{
+      const pendientes = lineas.filter(r=>lineaEsPendiente(r));
+      // Si no tiene líneas pendientes, no aplica (ya está entregada)
+      if(!pendientes.length) return;
+      // Verificar que TODAS las líneas pendientes estén cubiertas por el punto
+      const todasCubiertas = pendientes.every(r=>cob.cubiertoPunto(r));
+      if(!todasCubiertas) return;
+      // Esta dispensa se puede cerrar completamente con la existencia en el punto
+      const primera = lineas[0];
+      const pendTotal = pendientes.reduce((s,r)=>s+Math.abs(toNumber(r.diferencia)),0);
+      dispensasCerrables.push({
+        zona: primera.zona || 'N/D',
+        bodega: primera.bodegaDetalle || '',
+        documento: primera.documento || '',
+        fechaDispensacion: primera.fecha ? dateToISO(primera.fecha) : '',
+        contrato: primera.contrato || '',
+        eps: primera.eps || '',
+        lineasTotales: lineas.length,
+        lineasPendientes: pendientes.length,
+        lineasEntregadas: lineas.filter(r=>lineaEsEntregada(r)).length,
+        cantidadPendiente: pendTotal,
+        lineas: pendientes   // guardamos las líneas pendientes para la hoja de detalle
+      });
+    });
+
+    if(!dispensasCerrables.length){ showToast('No hay dispensas que se puedan cerrar completamente con la existencia en el punto bajo los filtros actuales.', true); return; }
+
+    // Ordenar por zona, bodega, documento
+    dispensasCerrables.sort((a,b)=>
+      String(a.zona).localeCompare(String(b.zona),'es') ||
+      String(a.bodega).localeCompare(String(b.bodega),'es') ||
+      String(a.documento).localeCompare(String(b.documento),'es')
+    );
+
+    // Hoja 1: Resumen por dispensa
+    const resumen = dispensasCerrables.map(d=>({
+      'Zona': d.zona,
+      'Bodega Detalle': d.bodega,
+      'Documento': d.documento,
+      'Fecha de Dispensación': d.fechaDispensacion,
+      'Contrato': d.contrato,
+      'EPS': d.eps,
+      'Líneas totales': d.lineasTotales,
+      'Líneas pendientes': d.lineasPendientes,
+      'Líneas entregadas': d.lineasEntregadas,
+      'Cantidad pendiente total': d.cantidadPendiente
+    }));
+    // Fila TOTAL
+    const totD = dispensasCerrables.length;
+    const totLP = resumen.reduce((s,r)=>s+r['Líneas pendientes'],0);
+    const totCP = resumen.reduce((s,r)=>s+r['Cantidad pendiente total'],0);
+    resumen.push({'Zona':'TOTAL','Bodega Detalle':'','Documento':fmtInt(totD)+' dispensa(s)','Fecha de Dispensación':'','Contrato':'','EPS':'','Líneas totales':'','Líneas pendientes':totLP,'Líneas entregadas':'','Cantidad pendiente total':totCP});
+
+    // Hoja 2: Detalle de las líneas pendientes de cada dispensa cerrable
+    const detalle = [];
+    dispensasCerrables.forEach(d=>{
+      d.lineas.forEach(r=>{
+        detalle.push({
+          'Zona': d.zona,
+          'Bodega Detalle': d.bodega,
+          'Documento': d.documento,
+          'Código de Artículo': r.codigoArticulo || '',
+          'Homólogo': r.homologo || '',
+          'Descripción DCI': String(r.descripcionDci||'').trim() || String(r.descripcionReporte||r.descripcion||'').trim(),
+          'Cantidad pendiente': Math.abs(toNumber(r.diferencia)),
+          'Existencia en el punto': toNumber(r.existenciaPunto),
+          'Pareto / No Pareto': r.moleculaPareto || 'SIN CLASIFICAR'
+        });
+      });
+    });
+
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Dispensas Cerrables');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Líneas');
+    const fecha=new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, 'Dispensas_Cerrables_Punto_'+fecha+'.xlsx');
+    showToast('Excel de Dispensas Cerrables exportado: '+fmtInt(dispensasCerrables.length)+' dispensa(s) con '+fmtInt(detalle.length)+' líneas pendientes.');
   });
 })();
 
