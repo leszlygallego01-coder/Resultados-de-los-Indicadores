@@ -6249,11 +6249,21 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
   });
 })();
 
-// ---- Descargar Dispensas Cerrables (Excel): dispensas cuya existencia en el punto
-// permite subsanar TODAS sus líneas pendientes. Si la existencia no alcanza para cubrir
-// todas las líneas pendientes de una dispensa, esa dispensa NO se incluye (regla "todo o nada").
-// Usa la misma lógica de cobertura de calcularCoberturaExistencias: se suman los pendientes
-// de cada item (homólogo+bodega) y se compara con la existencia en el punto.
+// ---- Descargar Dispensas Cerrables (Excel): dispensas que se pueden cerrar en su
+// TOTALIDAD con la existencia en el PUNTO (bodega detalle). Regla "todo o nada":
+// una dispensa entra SOLO si la existencia del punto alcanza para subsanar TODAS sus
+// líneas pendientes; si solo cubre una parte, la dispensa NO aparece.
+//
+// Importante: el Reporte de Dispensación es ACUMULATIVO (una misma línea llega varias
+// veces en distintos cargues). Por eso se parte de snapshotUltimaVersion, que deja UNA
+// sola fila por línea (la última versión cargada), igual que la descarga "Detalle por
+// bodega". Así los conteos de líneas totales/pendientes/entregadas coinciden con el
+// reporte real y no se parten ni se duplican por versiones viejas.
+//
+// La cobertura se evalúa POR DISPENSA contra el inventario del punto: se agrupan las
+// líneas pendientes de la dispensa por Homólogo (producto), se suman sus cantidades
+// pendientes y se compara con la existencia en el punto de ese Homólogo. La dispensa es
+// cerrable solo si TODOS sus productos pendientes quedan cubiertos.
 (function initDescargarDispensasCerrables(){
   const btn=document.getElementById('btnDescargarDispensasCerrables');
   if(!btn) return;
@@ -6261,9 +6271,11 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
     const bodegaSearch = getBodegaFiltro();
     const zona = document.getElementById('fZona').value;
-    // Solo líneas activas y vigentes
+    // Solo la ÚLTIMA versión cargada de cada línea (el reporte es acumulativo), activa y vigente.
+    const _idxUltima = new Set(snapshotUltimaVersion(filteredRowsCache).map(r=>r.idx));
     const activas = filteredRowsCache.filter(r=>{
       if(r.versionVigente===false) return false;
+      if(!_idxUltima.has(r.idx)) return false;        // descarta versiones superadas por un recargue
       if(!esEstadoActivo(r.estadoDispensa)) return false;
       if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
       if(zona && r.zona!==zona) return false;
@@ -6271,10 +6283,7 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     });
     if(!activas.length){ showToast('No hay datos activos con los filtros actuales.', true); return; }
 
-    // Calcular cobertura de existencias (misma función que usa el Indicador por Línea)
-    const cob = calcularCoberturaExistencias(activas);
-
-    // Agrupar líneas por dispensa (Documento + Bodega)
+    // Agrupar líneas por dispensa (Documento + Bodega Detalle = punto)
     const porDispensa = new Map();
     activas.forEach(r=>{
       const k = claveDocBodega(r);
@@ -6283,16 +6292,33 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
       porDispensa.get(k).push(r);
     });
 
-    // Filtrar: solo dispensas donde TODAS sus líneas pendientes están cubiertas por el punto
+    // ¿La existencia del punto alcanza para cerrar TODAS las líneas pendientes de ESTA
+    // dispensa? Se agrupan sus pendientes por Homólogo (un mismo producto puede venir en
+    // varias líneas y comparte la misma existencia del punto), se suma lo pendiente y se
+    // compara con la existencia del punto de ese Homólogo. Si algún producto no tiene
+    // Homólogo o su existencia no alcanza, la dispensa NO es cerrable.
+    function dispensaCerrableEnPunto(pendientes){
+      const porHomologo = new Map();   // homologo -> { pend, exist }
+      for(const r of pendientes){
+        const h = String(r.homologo||'').trim();
+        if(!h) return false;           // sin homólogo no se puede verificar existencia
+        const it = porHomologo.get(h) || { pend:0, exist:toNumber(r.existenciaPunto) };
+        it.pend += Math.abs(toNumber(r.diferencia));
+        porHomologo.set(h, it);
+      }
+      for(const it of porHomologo.values()){
+        if(!(it.exist>0 && it.exist>=it.pend)) return false;
+      }
+      return true;
+    }
+
+    // Filtrar: solo dispensas que se cierran en su totalidad con el inventario del punto.
     const dispensasCerrables = [];
     porDispensa.forEach((lineas, k)=>{
       const pendientes = lineas.filter(r=>lineaEsPendiente(r));
-      // Si no tiene líneas pendientes, no aplica (ya está entregada)
+      // Si no tiene líneas pendientes, ya está entregada: no aplica.
       if(!pendientes.length) return;
-      // Verificar que TODAS las líneas pendientes estén cubiertas por el punto
-      const todasCubiertas = pendientes.every(r=>cob.cubiertoPunto(r));
-      if(!todasCubiertas) return;
-      // Esta dispensa se puede cerrar completamente con la existencia en el punto
+      if(!dispensaCerrableEnPunto(pendientes)) return;
       const primera = lineas[0];
       const pendTotal = pendientes.reduce((s,r)=>s+Math.abs(toNumber(r.diferencia)),0);
       dispensasCerrables.push({
@@ -6306,7 +6332,7 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
         lineasPendientes: pendientes.length,
         lineasEntregadas: lineas.filter(r=>lineaEsEntregada(r)).length,
         cantidadPendiente: pendTotal,
-        lineas: pendientes   // guardamos las líneas pendientes para la hoja de detalle
+        lineas: pendientes   // líneas pendientes para la hoja de detalle
       });
     });
 
@@ -8787,13 +8813,22 @@ function _supVisible(t, f){
   if(f.zona && t.zona!==f.zona) return false;
   /* El buscador mira tres campos a la vez: codigo de homologacion (o el codigo
      de articulo cuando la fila se agrupo por codigo), Descripcion DCI y codigo
-     de articulo. Asi se puede escribir el nombre del medicamento o el codigo. */
+     de articulo. Asi se puede escribir el nombre del medicamento o el codigo.
+     La comparacion ignora espacios y signos para que "100MG" encuentre tambien
+     "100 MG" y "ACIDO ACETILSALICILICO 100MG" encuentre "ACIDO ACETILSALICILICO
+     100 MG C*900 TAB" (asi un medicamento con existencia pero escrito distinto
+     no deja de aparecer en la busqueda).                                       */
   if(f.hom){
     const texto=normValue([t.homLabel||t.hom, t.hom, t.descripcionDci, t.codigo].filter(Boolean).join(' '));
-    if(!texto.includes(f.hom)) return false;
+    const compacto=_supCompacto(texto);
+    const buscado=_supCompacto(f.hom);
+    if(!texto.includes(f.hom) && !(buscado && compacto.includes(buscado))) return false;
   }
   return true;
 }
+// Version "compacta" de un texto para buscar: sin espacios ni signos, solo letras
+// y numeros. Permite que la busqueda ignore como esta escrito el gramaje.
+function _supCompacto(s){ return normValue(s).replace(/[^A-Z0-9]/g,''); }
 // Etiqueta visible del grupo: codigo de articulo marcado cuando no hay homologo.
 function _supEtiqueta(t){ return String(t.homLabel || t.hom || ''); }
 function _supEtiquetaHtml(t){
@@ -8863,7 +8898,11 @@ function pintarBaseSupervisores(){
   const orden=filas.slice().sort((a,b)=>
     b.faltante-a.faltante || b.requerido-a.requerido ||
     a.bodega.localeCompare(b.bodega,'es') || _supEtiqueta(a).localeCompare(_supEtiqueta(b),'es'));
-  const vista=orden.slice(0, SUP_MAX_FILAS);
+  /* Cuando el usuario busca un medicamento puntual se muestran TODAS las filas que
+     coinciden (sin el tope de 250): si no, un item con mucha existencia y sin
+     faltante quedaria al final del orden y el tope lo dejaria fuera de la pantalla.
+     Sin busqueda se conserva el tope para no pintar miles de filas de golpe.    */
+  const vista = f.hom ? orden : orden.slice(0, SUP_MAX_FILAS);
   let h=vista.map(t=>
     '<tr><td class="txt"><b>'+escHtml(t.supervisor)+'</b></td>'+
     '<td class="txt">'+escHtml(t.bodega)+'</td>'+
