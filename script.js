@@ -2165,7 +2165,11 @@ async function calcularIndicadores(){
       rows.forEach(r=>{
         const k=claveLineaCargue(r);
         const prevU=ultimaPorLinea.get(k);
-        if(!prevU || esVersionPosterior(r, prevU)) ultimaPorLinea.set(k, r);
+        // La versión VIGENTE del homólogo se decide con la regla de la operación: manda el
+        // CARGUE más reciente y, a igualdad de cargue, una ENTREGA (Unidades>0 y Diferencia=0)
+        // prevalece sobre un pendiente. Así una entrega homologada de un cargue posterior
+        // liquida el pendiente previo aunque ambos sigan apareciendo en el acumulado.
+        if(!prevU || esVersionMasVigenteArticulo(r, prevU)) ultimaPorLinea.set(k, r);
         const prevP=primeraPorLinea.get(k);
         if(!prevP || esVersionPosterior(prevP, r)) primeraPorLinea.set(k, r);   // versión más antigua
       });
@@ -9177,7 +9181,21 @@ function corteRecuperacionSoporte(r){
 // Incluye el número de repetición dentro del cargue: si un documento trae dos filas del
 // mismo artículo en la misma bodega, cada una se cuenta y se sigue por separado.
 function claveLineaCargue(r){
-  return r.documento+'|'+r.bodegaNorm+'|'+r.codigoArticulo+'|'+(r.ocurrenciaLinea||1);
+  /* IDENTIDAD DE LA NECESIDAD a través de los cargues. La operación controla las entregas
+     por CÓDIGO HOMÓLOGO, no por código de artículo: una misma necesidad puede entregarse
+     bajo un código distinto al solicitado, pero ambos comparten el mismo Homólogo
+     (p. ej. M007718 solicitado y M023509 entregado comparten MOL0001). Por eso la llave de
+     control es Documento + Bodega Detalle + Código Homólogo, y así la entrega homologada de
+     un cargue posterior liquida la línea pendiente previa aunque cambie el código. Al
+     unificar esta llave, TODAS las vistas (indicadores, Indicador por Línea, Dispensas
+     Cerrables y el Reporte Comparativo) deduplican y liquidan por el mismo criterio.
+     Respaldo: si la fila no trae un Homólogo válido (servicios, basura tipo 0-0-NA, etc.)
+     se agrupa por Código de Artículo + nº de repetición, para no mezclar ítems distintos
+     ni confundir dos renglones legítimos del mismo código sin homologar.                */
+  if(homologoValido(r && r.homologo)){
+    return String(r.documento||'')+'|'+String(r.bodegaNorm||'')+'|H:'+normValue(r.homologo);
+  }
+  return String(r.documento||'')+'|'+String(r.bodegaNorm||'')+'|C:'+String((r&&r.codigoArticulo)||'').toUpperCase().trim()+'|'+(r.ocurrenciaLinea||1);
 }
 /* Corte en el que se conoce esta VERSIÓN de la línea. El estado (entregada / con
    soporte) solo puede acreditarse en el corte del CARGUE en que llegó esa versión.
@@ -9249,17 +9267,29 @@ function tsFechaOrigen(r){
         (el cumplimiento ya acreditado no se pierde);
      5) por último, el orden en que quedaron guardadas (idx mayor).            */
 function esVersionMasVigenteArticulo(a, b){
-  const da=tsDispensacion(a), db=tsDispensacion(b);
-  if(!isNaN(da) && !isNaN(db) && da!==db) return da>db;
-  if(isNaN(da)!==isNaN(db)) return !isNaN(da);          // la que tiene fecha válida gana
-  const oa=tsFechaOrigen(a), ob=tsFechaOrigen(b);
-  if(!isNaN(oa) && !isNaN(ob) && oa!==ob) return oa>ob;
+  // REGLA DE LA OPERACIÓN (liquidación dinámica por homólogo): entre dos versiones del
+  // MISMO homólogo (misma dispensa + bodega), la VIGENTE es la del CARGUE más reciente;
+  // a igualdad de cargue, una ENTREGA (Unidades>0 y Diferencia=0) prevalece sobre un
+  // pendiente. Así la entrega de un cargue POSTERIOR —incluso bajo otro código de
+  // artículo— liquida el pendiente previo, y si pendiente y entrega llegan en el mismo
+  // cargue (el acumulado no reevaluó el estado) manda la entrega. Las fechas de
+  // dispensación / origen quedan como desempates finales.
+  //  1) CARGUE más reciente (nº de cargue; respaldo: fecha del cargue);
+  //  2) a igualdad de cargue, ENTREGADA sobre pendiente;
+  //  3) FECHA DE DISPENSACIÓN más reciente;
+  //  4) FECHA ORIGEN de dispensación más reciente;
+  //  5) orden de guardado.
   const na=numCargue(a), nb=numCargue(b);
   if(na && nb && na!==nb) return na>nb;
   const fca=String(a.fechaCargue||''), fcb=String(b.fechaCargue||'');
   if(fca!==fcb) return fca>fcb;
   const ea=lineaEsEntregada(a), eb=lineaEsEntregada(b);
   if(ea!==eb) return ea;
+  const da=tsDispensacion(a), db=tsDispensacion(b);
+  if(!isNaN(da) && !isNaN(db) && da!==db) return da>db;
+  if(isNaN(da)!==isNaN(db)) return !isNaN(da);          // la que tiene fecha válida gana
+  const oa=tsFechaOrigen(a), ob=tsFechaOrigen(b);
+  if(!isNaN(oa) && !isNaN(ob) && oa!==ob) return oa>ob;
   return (a.idx||0)>(b.idx||0);
 }
 /* Colapsa un conjunto de filas a UNA fila por artículo (clave de artículo), quedándose
