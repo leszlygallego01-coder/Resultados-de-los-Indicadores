@@ -9212,22 +9212,43 @@ function esVersionPosterior(a, b){
 function claveArticuloCargue(r){
   return String(r.documento||'')+'|'+String(r.bodegaNorm||'')+'|'+String(r.codigoArticulo||'').toUpperCase();
 }
+/* Marca de tiempo (ms) de la FECHA DE DISPENSACIÓN de una fila (r.fecha). Es la fecha
+   que, según la operación, define cuál versión del artículo es la vigente: la del cargue
+   más reciente actualiza esta fecha. Devuelve NaN si no hay fecha válida.          */
+function tsDispensacion(r){
+  if(!r || !r.fecha) return NaN;
+  if(r.fecha instanceof Date) return isNaN(r.fecha) ? NaN : r.fecha.getTime();
+  const d=new Date(r.fecha); return isNaN(d) ? NaN : d.getTime();
+}
+/* Marca de tiempo (ms) de la FECHA ORIGEN DE DISPENSACIÓN (respaldo cuando dos versiones
+   comparten la misma fecha de dispensación). Devuelve NaN si no hay fecha válida.    */
+function tsFechaOrigen(r){
+  const v = r && (r._fechaOrigenDisp || r.fechaOrigenDispensacion);
+  if(!v) return NaN;
+  if(v instanceof Date) return isNaN(v) ? NaN : v.getTime();
+  const d=new Date(v); return isNaN(d) ? NaN : d.getTime();
+}
 /* Comparador que decide, entre dos filas del MISMO artículo (misma clave de artículo),
-   cuál es la versión que vale como estado vigente. Orden de prioridad:
-     1) número de cargue mayor (el cargue más reciente manda);
-     2) a falta de número, fecha de cargue mayor;
-     3) a falta de ambas, fecha de dispensación más reciente;
-     4) una versión ENTREGADA prevalece sobre una pendiente del mismo artículo
+   cuál es la versión VIGENTE. La regla de la operación manda: se queda la fila con la
+   FECHA DE DISPENSACIÓN / FECHA ORIGEN más reciente; todas las versiones con fechas
+   anteriores de esa misma llave se descartan del cómputo. Orden de prioridad:
+     1) FECHA DE DISPENSACIÓN (r.fecha) más reciente — criterio principal;
+     2) a igualdad, FECHA ORIGEN de dispensación más reciente;
+     3) a igualdad, el cargue más reciente (número de cargue y luego fecha de cargue),
+        por si la foto se diferencia por el archivo que la trajo;
+     4) a igualdad total, una versión ENTREGADA prevalece sobre una pendiente
         (el cumplimiento ya acreditado no se pierde);
      5) por último, el orden en que quedaron guardadas (idx mayor).            */
 function esVersionMasVigenteArticulo(a, b){
+  const da=tsDispensacion(a), db=tsDispensacion(b);
+  if(!isNaN(da) && !isNaN(db) && da!==db) return da>db;
+  if(isNaN(da)!==isNaN(db)) return !isNaN(da);          // la que tiene fecha válida gana
+  const oa=tsFechaOrigen(a), ob=tsFechaOrigen(b);
+  if(!isNaN(oa) && !isNaN(ob) && oa!==ob) return oa>ob;
   const na=numCargue(a), nb=numCargue(b);
   if(na && nb && na!==nb) return na>nb;
   const fca=String(a.fechaCargue||''), fcb=String(b.fechaCargue||'');
   if(fca!==fcb) return fca>fcb;
-  const ta=(a && a.fecha instanceof Date)?a.fecha.getTime():(a && a.fecha?new Date(a.fecha).getTime():NaN);
-  const tb=(b && b.fecha instanceof Date)?b.fecha.getTime():(b && b.fecha?new Date(b.fecha).getTime():NaN);
-  if(!isNaN(ta) && !isNaN(tb) && ta!==tb) return ta>tb;
   const ea=lineaEsEntregada(a), eb=lineaEsEntregada(b);
   if(ea!==eb) return ea;
   return (a.idx||0)>(b.idx||0);
