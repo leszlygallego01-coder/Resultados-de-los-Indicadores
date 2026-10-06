@@ -1968,11 +1968,38 @@ async function calcularIndicadores(){
     const invPuntoMap=new Map();
     const invBodegaPrincipal=new Map();
     const bodegasPrincipalSet=new Set(BODEGAS_PRINCIPAL.map(normValue));
+    /* -------------------------------------------------------------------
+       EXISTENCIA DEL PUNTO — una sola cifra por LOTE (Codigo + Bodega
+       Detalle + Fecha de Vencimiento), NO la suma de filas repetidas.
+
+       Diagnostico de raiz: el Inventario del Punto proviene del ULTIMO
+       archivo cargado en Drive (el panel reemplaza, no acumula; no hay
+       columna de corte en la Tabla_2). Ese unico archivo lista el MISMO
+       lote (mismo Codigo, misma Bodega Detalle y misma Fecha de
+       Vencimiento) en VARIAS filas cuando trae desgloses que el visor no
+       usa (por ejemplo por EPS/sigla). Si se suman tal cual, un stock real
+       de 700 (M023666=100 + M008072=600) se infla a 2000 al contar el mismo
+       lote varias veces.
+
+       Regla correcta: la existencia fisica de un lote es UN solo valor; se
+       toma una vez por (codigo|bodega|vencimiento) y RECIEN DESPUES se suman
+       los lotes/codigos DISTINTOS que comparten Homologo. Lotes con distinta
+       fecha de vencimiento SI suman (es stock diferente del mismo codigo);
+       filas repetidas del mismo lote cuentan una sola vez.                */
+    const invLotes=new Map();   // codigo|bodega|vto -> {cod, bod, un}
     (byKey.inventario||[]).forEach(r=>{
       const cod=normValue(r.codigoArticulo);
-      const hom=codigoToHomologo.get(cod) || '';
+      if(!cod) return;
       const bod=normValue(r.bodegaDetalle);
+      const vto=normValue(r.fechaVencimiento);
       const un=toNumber(r.unidades);
+      const lk=cod+'|'+bod+'|'+vto;
+      const prev=invLotes.get(lk);
+      if(!prev) invLotes.set(lk, {cod, bod, un});
+      else if(un>prev.un) prev.un=un;   // mismo lote repetido: una sola cifra, la mayor
+    });
+    invLotes.forEach(({cod, bod, un})=>{
+      const hom=codigoToHomologo.get(cod) || '';
       if(!hom) return;
       const k=hom+'|'+bod;
       invPuntoMap.set(k, (invPuntoMap.get(k)||0)+un);
