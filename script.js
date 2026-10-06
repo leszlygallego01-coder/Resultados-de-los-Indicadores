@@ -1969,37 +1969,25 @@ async function calcularIndicadores(){
     const invBodegaPrincipal=new Map();
     const bodegasPrincipalSet=new Set(BODEGAS_PRINCIPAL.map(normValue));
     /* -------------------------------------------------------------------
-       EXISTENCIA DEL PUNTO — una sola cifra por LOTE (Codigo + Bodega
-       Detalle + Fecha de Vencimiento), NO la suma de filas repetidas.
+       EXISTENCIA DEL PUNTO — SUMA de las Unidades de todas las filas por
+       Homologo + Bodega Detalle.
 
-       Diagnostico de raiz: el Inventario del Punto proviene del ULTIMO
-       archivo cargado en Drive (el panel reemplaza, no acumula; no hay
-       columna de corte en la Tabla_2). Ese unico archivo lista el MISMO
-       lote (mismo Codigo, misma Bodega Detalle y misma Fecha de
-       Vencimiento) en VARIAS filas cuando trae desgloses que el visor no
-       usa (por ejemplo por EPS/sigla). Si se suman tal cual, un stock real
-       de 700 (M023666=100 + M008072=600) se infla a 2000 al contar el mismo
-       lote varias veces.
+       El Inventario del Punto NO se maneja por lote: cada fila de la Tabla_2
+       (Codigo | Bodega Detalle | Unidades | Fecha de Vencimiento | Descripcion)
+       es existencia real que SUMA, aunque se repita el Codigo con distinta
+       fecha de vencimiento. Ejemplo: LEVOTIROXINA en M286 =
+       1020 + 300 + 570 (M005290) + 100 (M022608) = 1990. Por eso NO se
+       deduplica ni se colapsa por lote: eso restaba unidades reales.
 
-       Regla correcta: la existencia fisica de un lote es UN solo valor; se
-       toma una vez por (codigo|bodega|vencimiento) y RECIEN DESPUES se suman
-       los lotes/codigos DISTINTOS que comparten Homologo. Lotes con distinta
-       fecha de vencimiento SI suman (es stock diferente del mismo codigo);
-       filas repetidas del mismo lote cuentan una sola vez.                */
-    const invLotes=new Map();   // codigo|bodega|vto -> {cod, bod, un}
+       La vigencia ("solo el ultimo cargue") ya la garantiza la ingestion: la
+       sincronizacion del panel REEMPLAZA el inventario con el ultimo archivo
+       de Drive (no acumula cortes), de modo que estas filas son las del
+       cargue vigente.                                                      */
     (byKey.inventario||[]).forEach(r=>{
       const cod=normValue(r.codigoArticulo);
-      if(!cod) return;
-      const bod=normValue(r.bodegaDetalle);
-      const vto=normValue(r.fechaVencimiento);
-      const un=toNumber(r.unidades);
-      const lk=cod+'|'+bod+'|'+vto;
-      const prev=invLotes.get(lk);
-      if(!prev) invLotes.set(lk, {cod, bod, un});
-      else if(un>prev.un) prev.un=un;   // mismo lote repetido: una sola cifra, la mayor
-    });
-    invLotes.forEach(({cod, bod, un})=>{
       const hom=codigoToHomologo.get(cod) || '';
+      const bod=normValue(r.bodegaDetalle);
+      const un=toNumber(r.unidades);
       if(!hom) return;
       const k=hom+'|'+bod;
       invPuntoMap.set(k, (invPuntoMap.get(k)||0)+un);
