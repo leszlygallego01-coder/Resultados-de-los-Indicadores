@@ -6299,14 +6299,25 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
        en la misma dispensa se descartan por completo del conteo. Así una entrega
        homologada (p. ej. M023509) liquida la línea pendiente previa de su homólogo
        (M007718), y los pendientes se miden solo sobre la versión vigente.          */
-    const porLineaUnica = new Map();   // doc|bodega|homólogo -> versión vigente
+    /* FUENTE ÚNICA DE VERDAD: no se vuelve a elegir la versión vigente dentro de este
+       reporte. La liquidación por Código Homólogo (Documento + Bodega + Homólogo) YA se
+       resolvió una sola vez sobre el UNIVERSO COMPLETO de cargues al calcular los
+       indicadores (campo r.versionVigente). Reelegir la vigente aquí, sobre el subconjunto
+       ya recortado por los filtros de pantalla (p. ej. la VENTANA DE FECHAS por Fecha de
+       Dispensación), reintroducía el bug: si la ENTREGA homologada llegó en un cargue
+       posterior cuya fecha de dispensación cae fuera de la ventana, esa entrega se
+       descartaba del subconjunto y el pendiente viejo volvía a ganar como "vigente",
+       mostrando pendientes ya liquidados (caso M007718→M023509 / M023371). Por eso aquí
+       solo se CONSERVA la versión vigente global (r.versionVigente!==false), idéntica a la
+       que usa el Indicador por Línea del visor: así Resumen, Detalle e Indicador siempre
+       cuadran. Una versión superada por un cargue posterior nunca vuelve a contar. */
+    const porLineaUnica = new Map();   // doc|bodega|homólogo -> versión vigente GLOBAL
     filteredRowsCache.forEach(r=>{
       if(!r.documento) return;
+      if(r.versionVigente===false) return;   // solo la versión vigente global (liquidada sobre TODOS los cargues)
       if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return;
       if(zona && r.zona!==zona) return;
-      const k = claveArticuloCargue(r);
-      const prev = porLineaUnica.get(k);
-      if(!prev || esVersionMasVigenteArticulo(r, prev)) porLineaUnica.set(k, r);   // gana la versión vigente del homólogo
+      porLineaUnica.set(claveArticuloCargue(r), r);   // ya es la única versión vigente de la necesidad
     });
     // Solo dispensas activas, evaluando el estado sobre la versión vigente de la línea.
     const activas = Array.from(porLineaUnica.values()).filter(r=> esEstadoActivo(r.estadoDispensa));
