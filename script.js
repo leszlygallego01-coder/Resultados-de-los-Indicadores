@@ -6332,47 +6332,83 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
       porDispensa.get(k).push(r);
     });
 
-    // ¿La existencia del punto alcanza para cerrar TODAS las líneas pendientes de ESTA
-    // dispensa? Se agrupan sus pendientes por Homólogo (un mismo producto puede venir en
-    // varias líneas y comparte la misma existencia del punto), se suma lo pendiente y se
-    // compara con la existencia del punto de ese Homólogo. Si algún producto no tiene
-    // Homólogo o su existencia no alcanza, la dispensa NO es cerrable.
-    function dispensaCerrableEnPunto(pendientes){
-      const porHomologo = new Map();   // homologo -> { pend, exist }
-      for(const r of pendientes){
-        const h = String(r.homologo||'').trim();
-        if(!h) return false;           // sin homólogo no se puede verificar existencia
-        const it = porHomologo.get(h) || { pend:0, exist:toNumber(r.existenciaPunto) };
-        it.pend += Math.abs(toNumber(r.diferencia));
-        porHomologo.set(h, it);
-      }
-      for(const it of porHomologo.values()){
-        if(!(it.exist>0 && it.exist>=it.pend)) return false;
-      }
-      return true;
-    }
+    /* VIABILIDAD DE INVENTARIO (existencia COMPARTIDA y FINITA por punto).
+       La existencia de cada Homólogo en una Bodega Detalle es un POOL finito que se reparte
+       entre TODAS las dispensas pendientes de ese punto; NO es ilimitada ni "por dispensa".
+       Por eso no basta con que cada dispensa quepa por separado: hay que repartir el stock
+       disponible y solo pueden cerrarse las dispensas que, EN CONJUNTO, no superen la
+       existencia del punto. Regla:
+         1) Una dispensa solo califica si TODOS sus ítems pendientes tienen Homólogo (sin
+            Homólogo no hay cómo verificar existencia) y se cubren al 100% con el stock que
+            AÚN queda en el pool del punto.
+         2) Al incluir una dispensa, su demanda se DESCUENTA del pool, de modo que ese stock
+            ya no está disponible para las siguientes dispensas del mismo punto.
+       Prioridad: dispensas de MENOR saldo pendiente primero (así se cierra la mayor cantidad
+       posible de dispensas con el inventario existente) y, a igualdad, la más antigua.
+       Ejemplo del requerimiento: con existencia 180 y 7 dispensas que suman 750, solo entran
+       las que —sumadas— quepan en 180; las demás quedan por fuera hasta que ingrese stock. */
 
-    // Filtrar: solo dispensas que se cierran en su totalidad con el inventario del punto.
-    const dispensasCerrables = [];
+    // 1) Armar las dispensas candidatas (solo con líneas pendientes) y su demanda por homólogo.
+    const candidatas = [];
     porDispensa.forEach((lineas, k)=>{
       const pendientes = lineas.filter(r=>lineaEsPendiente(r));
-      // Si no tiene líneas pendientes, ya está entregada: no aplica.
-      if(!pendientes.length) return;
-      if(!dispensaCerrableEnPunto(pendientes)) return;
+      if(!pendientes.length) return;                 // ya entregada: no aplica
+      let sinHomologo = false;
+      const demanda = new Map();                     // homólogo -> cantidad pendiente de ESTA dispensa
+      const exist   = new Map();                     // homólogo -> existencia del punto (mismo valor por homólogo+bodega)
+      pendientes.forEach(r=>{
+        const h = String(r.homologo||'').trim();
+        if(!h){ sinHomologo = true; return; }        // sin homólogo: no se puede verificar existencia
+        demanda.set(h, (demanda.get(h)||0) + Math.abs(toNumber(r.diferencia)));
+        exist.set(h, toNumber(r.existenciaPunto));
+      });
       const primera = lineas[0];
-      const pendTotal = pendientes.reduce((s,r)=>s+Math.abs(toNumber(r.diferencia)),0);
-      dispensasCerrables.push({
-        zona: primera.zona || 'N/D',
-        bodega: primera.bodegaDetalle || '',
-        documento: primera.documento || '',
-        fechaDispensacion: primera.fecha ? dateToISO(primera.fecha) : '',
-        contrato: primera.contrato || '',
-        eps: primera.eps || '',
-        lineasTotales: lineas.length,
-        lineasPendientes: pendientes.length,
-        lineasEntregadas: lineas.filter(r=>lineaEsEntregada(r)).length,
-        cantidadPendiente: pendTotal,
-        lineas: pendientes   // líneas pendientes para la hoja de detalle
+      candidatas.push({
+        lineas, pendientes, primera, demanda, exist, sinHomologo,
+        bodegaNorm: primera.bodegaNorm || normValue(primera.bodegaDetalle||''),
+        pendTotal: pendientes.reduce((s,r)=>s+Math.abs(toNumber(r.diferencia)),0),
+        tsOrden: (primera.fecha instanceof Date && !isNaN(primera.fecha)) ? primera.fecha.getTime() : Number.MAX_SAFE_INTEGER
+      });
+    });
+
+    // 2) Repartir el inventario COMPARTIDO por punto (bodega). El pool por homólogo se
+    //    consume a medida que se van incluyendo dispensas.
+    const porBodega = new Map();
+    candidatas.forEach(c=>{
+      if(!porBodega.has(c.bodegaNorm)) porBodega.set(c.bodegaNorm, []);
+      porBodega.get(c.bodegaNorm).push(c);
+    });
+
+    const dispensasCerrables = [];
+    porBodega.forEach(lista=>{
+      // Existencia disponible por homólogo en este punto (se toma una sola vez por homólogo).
+      const pool = new Map();
+      lista.forEach(c=> c.exist.forEach((v,h)=>{ if(!pool.has(h)) pool.set(h, v); }));
+      // Menor saldo pendiente primero; a igualdad, la más antigua y luego por documento.
+      lista.sort((a,b)=> a.pendTotal-b.pendTotal || a.tsOrden-b.tsOrden ||
+        String(a.primera.documento||'').localeCompare(String(b.primera.documento||''),'es'));
+      lista.forEach(c=>{
+        if(c.sinHomologo) return;                    // no se puede verificar existencia
+        // ¿El stock que AÚN queda en el punto cubre al 100% toda la demanda de esta dispensa?
+        let cabe = true;
+        c.demanda.forEach((need,h)=>{ if(!(need>0 && (pool.get(h)||0) >= need)) cabe = false; });
+        if(!cabe) return;                            // excede la existencia disponible: queda por fuera
+        // Reservar (descontar) el stock para que no lo reutilicen otras dispensas del punto.
+        c.demanda.forEach((need,h)=> pool.set(h, (pool.get(h)||0) - need));
+        const primera = c.primera;
+        dispensasCerrables.push({
+          zona: primera.zona || 'N/D',
+          bodega: primera.bodegaDetalle || '',
+          documento: primera.documento || '',
+          fechaDispensacion: primera.fecha ? dateToISO(primera.fecha) : '',
+          contrato: primera.contrato || '',
+          eps: primera.eps || '',
+          lineasTotales: c.lineas.length,
+          lineasPendientes: c.pendientes.length,
+          lineasEntregadas: c.lineas.filter(r=>lineaEsEntregada(r)).length,
+          cantidadPendiente: c.pendTotal,
+          lineas: c.pendientes   // líneas pendientes para la hoja de detalle
+        });
       });
     });
 
