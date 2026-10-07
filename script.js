@@ -6293,6 +6293,77 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
 // líneas pendientes de la dispensa por Homólogo (producto), se suman sus cantidades
 // pendientes y se compara con la existencia en el punto de ese Homólogo. La dispensa es
 // cerrable solo si TODOS sus productos pendientes quedan cubiertos.
+/* =========================================================================
+   PROMEDIO DE ROTACION (consumo mensual pronosticado) — metodo HOMOLOGADO
+   con la Base de Supervisores.
+   -------------------------------------------------------------------------
+   Replica EXACTAMENTE el calculo del "consumo" de renderBaseSupervisores,
+   reutilizando los MISMOS helpers (claveGrupoSup, soloActivas, supZonaDeLinea,
+   mesDeDispensacion, _cierreDelMes, pronosticoConsumoMensual), de modo que el
+   valor sea 100% identico al de la Base de Supervisores para el mismo homologo
+   y bodega:
+     - se agrupa por Codigo Homologo + Bodega Detalle (claveGrupoSup),
+     - la serie mensual es la suma de Cantidad Autorizada por mes de
+       dispensacion sobre los MESES COMPLETOS (el mes en curso, aun abierto,
+       se descarta por completo y no se proyecta: quedan los 3 meses completos
+       anteriores que suele traer el reporte),
+     - se pronostica con Suavizacion Exponencial Simple (SES) eligiendo el alfa
+       de 0,05 a 1,00 que minimiza MAD (desempate por MAPE y luego el alfa mas
+       bajo), via pronosticoConsumoMensual().
+   Devuelve Map('clave|bodegaNorm' -> consumo redondeado).
+   ========================================================================= */
+function calcularRotacionPorBodega(rowsVigentes, bodegaSearch, zona){
+  const map=new Map();
+  const base=(rowsVigentes && rowsVigentes.length) ? rowsVigentes : [];
+  if(!base.length) return map;
+  const rows=soloActivas(base).filter(r=>{
+    if(bodegaSearch && !r.bodegaNorm.includes(bodegaSearch)) return false;
+    if(zona && r.zona!==zona) return false;
+    return true;
+  });
+  const agg=new Map();
+  const mesesGlobal=new Set();
+  const diaMaxMes=new Map();   // ultimo dia con dispensacion cargada en cada mes
+  rows.forEach(r=>{
+    const grp=claveGrupoSup(r.homologo, r.codigoArticulo);
+    if(!grp) return;
+    if(!supZonaDeLinea(r)) return;              // mismo alcance que la Base de Supervisores
+    const bod=r.bodegaDetalle || 'SIN BODEGA';
+    const k=grp.clave+'|'+normValue(bod);
+    let g=agg.get(k);
+    if(!g){ g={meses:new Map()}; agg.set(k,g); }
+    const mes=mesDeDispensacion(r);
+    if(mes){
+      g.meses.set(mes, (g.meses.get(mes)||0) + (Number(r.cantidadAutorizada)||0));
+      mesesGlobal.add(mes);
+      const dt=toDateSafe(r.fecha);
+      if(dt && !isNaN(dt)){ const d=dt.getUTCDate(); if(d>(diaMaxMes.get(mes)||0)) diaMaxMes.set(mes, d); }
+    }
+  });
+  // Solo meses COMPLETOS alimentan el promedio: el mes mas reciente, si aun esta
+  // abierto, se descarta (no se proyecta), igual que en la Base de Supervisores.
+  const mesesTodos=[...mesesGlobal].sort();
+  const mesesInfo=mesesTodos.map((k,i)=>{
+    const c=_cierreDelMes(k, diaMaxMes.get(k)||0);
+    const abierto=(i===mesesTodos.length-1) && !c.cerrado;
+    return { mes:k, usable: !abierto };
+  });
+  let mesesUsados=mesesInfo.filter(m=>m.usable);
+  if(!mesesUsados.length && mesesInfo.length) mesesUsados=mesesInfo.map(m=>Object.assign({}, m, {usable:true}));
+  const mesesOrden=mesesUsados.map(m=>m.mes);
+  const serieDe=(mapMeses)=>{
+    if(!mesesOrden.length) return [];
+    if(!mesesOrden.some(k=>mapMeses.has(k))) return [];
+    return mesesOrden.map(k=> Math.round(mapMeses.get(k)||0));
+  };
+  agg.forEach((g,k)=>{
+    const serie=serieDe(g.meses);
+    const pr=pronosticoConsumoMensual(serie);
+    map.set(k, Math.round(pr.valor));
+  });
+  return map;
+}
+
 (function initDescargarDispensasCerrables(){
   const btn=document.getElementById('btnDescargarDispensasCerrables');
   if(!btn) return;
@@ -6300,6 +6371,17 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     if(!filteredRowsCache.length){ showToast('No hay datos calculados para exportar.', true); return; }
     const bodegaSearch = getBodegaFiltro();
     const zona = document.getElementById('fZona').value;
+    /* Promedio de Rotación por homólogo + bodega, calculado con EXACTAMENTE el
+       mismo método que la Base de Supervisores (SES sobre meses completos). Es el
+       stock de seguridad: una dispensa solo es cerrable si, tras reservar su
+       pendiente, en el punto queda MÁS que este promedio (existencia > pend + rot). */
+    const rotMap = calcularRotacionPorBodega(filasConsolidadoVigentes(), bodegaSearch, zona);
+    const rotDeLinea = (r)=>{
+      const grp = claveGrupoSup(r.homologo, r.codigoArticulo);
+      if(!grp) return 0;
+      const bn = r.bodegaNorm || normValue(r.bodegaDetalle||'');
+      return rotMap.get(grp.clave+'|'+bn) || 0;
+    };
     /* El Reporte de Dispensación es ACUMULATIVO: la MISMA necesidad (misma dispensa +
        bodega + código HOMÓLOGO) se vuelve a subir en cargues posteriores a medida que
        cambia de estado (de pendiente a entregada), y puede entregarse incluso bajo un
@@ -6371,15 +6453,17 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
       let sinHomologo = false;
       const demanda = new Map();                     // homólogo -> cantidad pendiente de ESTA dispensa
       const exist   = new Map();                     // homólogo -> existencia del punto (mismo valor por homólogo+bodega)
+      const rot     = new Map();                     // homólogo -> promedio de rotación (stock de seguridad por homólogo+bodega)
       pendientes.forEach(r=>{
         const h = String(r.homologo||'').trim();
         if(!h){ sinHomologo = true; return; }        // sin homólogo: no se puede verificar existencia
         demanda.set(h, (demanda.get(h)||0) + Math.abs(toNumber(r.diferencia)));
         exist.set(h, toNumber(r.existenciaPunto));
+        rot.set(h, rotDeLinea(r));
       });
       const primera = lineas[0];
       candidatas.push({
-        lineas, pendientes, primera, demanda, exist, sinHomologo,
+        lineas, pendientes, primera, demanda, exist, rot, sinHomologo,
         bodegaNorm: primera.bodegaNorm || normValue(primera.bodegaDetalle||''),
         pendTotal: pendientes.reduce((s,r)=>s+Math.abs(toNumber(r.diferencia)),0),
         tsOrden: (primera.fecha instanceof Date && !isNaN(primera.fecha)) ? primera.fecha.getTime() : Number.MAX_SAFE_INTEGER
@@ -6398,16 +6482,29 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     porBodega.forEach(lista=>{
       // Existencia disponible por homólogo en este punto (se toma una sola vez por homólogo).
       const pool = new Map();
-      lista.forEach(c=> c.exist.forEach((v,h)=>{ if(!pool.has(h)) pool.set(h, v); }));
+      // Stock de seguridad (promedio de rotación) por homólogo: NO se puede repartir.
+      const rotReserva = new Map();
+      lista.forEach(c=>{
+        c.exist.forEach((v,h)=>{ if(!pool.has(h)) pool.set(h, v); });
+        c.rot.forEach((v,h)=>{ if(!rotReserva.has(h)) rotReserva.set(h, v); });
+      });
       // Menor saldo pendiente primero; a igualdad, la más antigua y luego por documento.
       lista.sort((a,b)=> a.pendTotal-b.pendTotal || a.tsOrden-b.tsOrden ||
         String(a.primera.documento||'').localeCompare(String(b.primera.documento||''),'es'));
       lista.forEach(c=>{
         if(c.sinHomologo) return;                    // no se puede verificar existencia
-        // ¿El stock que AÚN queda en el punto cubre al 100% toda la demanda de esta dispensa?
+        /* Regla de cierre con stock de seguridad: la existencia debe ser
+           ESTRICTAMENTE mayor que (pendiente + promedio de rotación). Es decir,
+           tras reservar el pendiente de esta dispensa en el pool del punto, debe
+           quedar MÁS que el promedio de rotación del homólogo — nunca igual — para
+           no dejar la bodega por debajo de su consumo mensual habitual. */
         let cabe = true;
-        c.demanda.forEach((need,h)=>{ if(!(need>0 && (pool.get(h)||0) >= need)) cabe = false; });
-        if(!cabe) return;                            // excede la existencia disponible: queda por fuera
+        c.demanda.forEach((need,h)=>{
+          const disp = (pool.get(h)||0);
+          const seguridad = (rotReserva.get(h)||0);
+          if(!(need>0 && (disp - need) > seguridad)) cabe = false;
+        });
+        if(!cabe) return;                            // no deja el stock de rotación a salvo: queda por fuera
         // Reservar (descontar) el stock para que no lo reutilicen otras dispensas del punto.
         c.demanda.forEach((need,h)=> pool.set(h, (pool.get(h)||0) - need));
         const primera = c.primera;
@@ -6468,6 +6565,7 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
           'Descripción DCI': String(r.descripcionDci||'').trim() || String(r.descripcionReporte||r.descripcion||'').trim(),
           'Cantidad pendiente': Math.abs(toNumber(r.diferencia)),
           'Existencia en el punto': toNumber(r.existenciaPunto),
+          'Promedio de Rotación': rotDeLinea(r),
           'Pareto / No Pareto': r.moleculaPareto || 'SIN CLASIFICAR'
         });
       });
