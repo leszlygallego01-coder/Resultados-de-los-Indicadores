@@ -151,7 +151,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <div class="result-tabs">
         <button class="active" data-sub="dispensa">Indicador de dispensa</button>
         <button data-sub="linea">Indicador por línea (subsanar)</button>
-        <button data-sub="soporte">Indicador soporte evento</button>
+        <button data-sub="soporte">Indicador soporte evento y cápita</button>
         <button data-sub="inactivas">Información de Dispensas Inactivas</button>
         <button data-sub="traslados">Indicador de Traslados Realizados</button>
         <button data-sub="trazabilidad">Trazabilidad de Lotes y Traslados</button>
@@ -490,6 +490,70 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             </div>
           </div>
         </div>
+
+        <!-- ============================================================= -->
+        <!-- ---- SECCION INFERIOR: DISPENSAS CAPITA ---- -->
+        <!-- Mismo esquema que Soporte Evento, pero filtrando contrato CAPITA -->
+        <!-- y SOLO dispensas entregadas en su totalidad. Ligada al filtro global. -->
+        <!-- ============================================================= -->
+        <div style="margin:34px 0 14px;border-top:2px solid var(--line);padding-top:22px;">
+          <h3 style="margin:0 0 4px;color:var(--blue-deep);">Dispensas Cápita</h3>
+          <p class="seg-desc" style="margin:0 0 14px;">Soporte de las dispensas de contrato <b>Cápita</b> que fueron <b>entregadas en su totalidad</b>. Usa los mismos filtros globales que el resto del visor.</p>
+        </div>
+        <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-export" id="btnSoporteCapitaExportXlsx" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar soporte cápita (Excel)</button>
+          <button class="btn btn-export" id="btnSoporteCapitaSinSoporte" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar dispensas cápita SIN soporte (Excel)</button>
+        </div>
+        <p class="seg-desc" id="soporteCapitaAlcanceTxt" style="margin:-6px 0 12px;"></p>
+
+        <div class="stat-row" id="statsSoporteCapita"></div>
+
+        <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+          <div class="chart-card" style="flex:0 0 300px;min-width:260px;max-width:100%;margin:0;">
+            <h4>% de dispensas cápita entregadas CON y SIN soporte</h4>
+            <select id="pieSoporteCapitaSelect"></select>
+            <svg id="pieSoporteCapita" width="200" height="200" viewBox="0 0 200 200"></svg>
+            <div class="legend" id="pieSoporteCapitaLegend"></div>
+          </div>
+          <div style="flex:1 1 480px;min-width:320px;">
+            <div class="table-wrap" style="margin-bottom:0;">
+              <p class="seg-desc" style="margin-bottom:8px;"><b>Alcance:</b> se cuentan <b>solo las dispensas con Estado Activo</b>; las INACTIVO se excluyen. &nbsp;<b>Orden:</b> usa el filtro de abajo (o haz clic en los encabezados <i>Total</i>, <i>Con soporte</i>, <i>Sin soporte</i>, <i>% con soporte</i>) para ordenar de mayor a menor o de menor a mayor.</p>
+              <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">
+                <div class="field" style="max-width:210px;margin-bottom:0;">
+                  <label>Ordenar por</label>
+                  <select id="fSoporteCapitaOrdenCol">
+                    <option value="ent">Total</option>
+                    <option value="entCon">Con soporte</option>
+                    <option value="entSin">Sin soporte</option>
+                    <option value="efEnt">% con soporte</option>
+                  </select>
+                </div>
+                <div class="field" style="max-width:210px;margin-bottom:0;">
+                  <label>Dirección</label>
+                  <select id="fSoporteCapitaOrdenDir">
+                    <option value="desc">De mayor a menor</option>
+                    <option value="asc">De menor a mayor</option>
+                  </select>
+                </div>
+              </div>
+              <table class="data" id="tblSoporteCapita">
+                <thead>
+                  <tr>
+                    <th rowspan="2">Zona</th><th rowspan="2">Bodega</th>
+                    <th colspan="4">Dispensas entregadas (Cápita)</th>
+                  </tr>
+                  <tr class="sub">
+                    <th class="sortable" data-col="ent" title="Clic para ordenar por Total">Total<span class="sort-ind">⇅</span></th>
+                    <th class="sortable" data-col="entCon" title="Clic para ordenar por Con soporte">Con soporte<span class="sort-ind">⇅</span></th>
+                    <th class="sortable" data-col="entSin" title="Clic para ordenar por Sin soporte">Sin soporte<span class="sort-ind">⇅</span></th>
+                    <th class="sortable" data-col="efEnt" title="Clic para ordenar por % con soporte">% con soporte<span class="sort-ind">⇅</span></th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
       </div>
 
@@ -669,6 +733,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
               <p class="seg-desc">Usa el <b>Estado Logístico</b> (columna M del archivo de Traslados) para contar, por <b>Bodega Destino</b> y por <b>traslado único</b> (no por línea), cuántos traslados ya están <b>Alistados</b> y cuántos siguen <b>Pendientes por Alistar</b>. Usa el filtro <b>Bodega Origen</b> de arriba para acotar dinámicamente estos totales.</p>
             </div>
             <div style="margin-left:auto;align-self:center;display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-export" id="btnDescargarAlistados" style="background:#1E8F5E;box-shadow:0 2px 0 #14633F;">⬇ Descargar alistados (Excel)</button>
               <button class="btn btn-export" id="btnDescargarPendientesAlistar" style="background:#C0392B;box-shadow:0 2px 0 #7E241A;">⬇ Descargar pendientes por alistar (Excel)</button>
             </div>
           </div>
