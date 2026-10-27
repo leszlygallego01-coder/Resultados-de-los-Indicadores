@@ -3199,6 +3199,7 @@ function renderAllTablesFromCache(){
   renderIndicadorDispensa(rowsVigentes, bodegaSearch, zona);
   renderIndicadorLinea(rowsVigentes, bodegaSearch, zona);
   renderIndicadorSoporteEvento(rowsVigentes.filter(r=>r.contrato==='EVENTO'), bodegaSearch, zona);
+  renderIndicadorSoporteCapita(rowsVigentes.filter(r=>r.contrato==='CAPITA'), bodegaSearch, zona);
   // El Reporte Comparativo es un CONSOLIDADO: se calcula con el corte final y sin los
   // filtros de pantalla (contrato, EPS, zona…) para que sus cifras queden fijas. ÚNICA
   // excepción: respeta la VENTANA DE FECHAS de la cabecera (FECHA DESDE/HASTA), de modo
@@ -4407,7 +4408,7 @@ function renderComparativos(rows){
 /* =========================================================================
    9. Utilidad de agrupación
    ========================================================================= */
-let lastTables={dispensa:[], linea:[], soporte:[]};
+let lastTables={dispensa:[], linea:[], soporte:[], soporteCapita:[]};
 // Contexto del Indicador Soporte Evento: guarda el MISMO dataset ya filtrado por bodega
 // y zona, el estado acumulado por dispensa y el corte de trazabilidad usado en pantalla,
 // para que las descargas (CSV / Excel) entreguen exactamente lo que se esta viendo.
@@ -5809,6 +5810,250 @@ function hayContextoSoporte(){
 })();
 
 /* =========================================================================
+   12-bis. Indicador Soporte CÁPITA (mismo esquema que Soporte Evento, pero
+   filtrando contrato CAPITA y dispensas entregadas en su totalidad)
+   ========================================================================= */
+let soporteCapitaOrden={col:'efEnt', dir:'asc'};
+let lastSoporteCapitaCtx=null;
+
+function pintarTablaSoporteCapita(){
+  const tbody=document.querySelector('#tblSoporteCapita tbody');
+  if(!tbody) return;
+  const table=(lastTables.soporteCapita||[]).slice();
+  const col=soporteCapitaOrden.col, dir=(soporteCapitaOrden.dir==='asc')?1:-1;
+  table.sort((a,b)=>{
+    const va=(a[col]==null)?-1:a[col], vb=(b[col]==null)?-1:b[col];
+    if(va===vb) return String(a.bodega||'').localeCompare(String(b.bodega||''));
+    return (va-vb)*dir;
+  });
+  let bodyHtml = table.map(t=>`
+    <tr>
+      <td class="txt">${t.zona}</td><td class="txt">${t.bodega}</td>
+      <td>${fmtInt(t.ent)}</td><td>${fmtInt(t.entCon)}</td><td>${fmtInt(t.entSin)}</td>
+      <td class="${effClass(t.efEnt)}">${fmtPct(t.efEnt)}</td>
+    </tr>`).join('');
+  if(!table.length) bodyHtml='<tr><td colspan="6" class="txt" style="text-align:center;color:#9CA9B6;">Sin datos (este indicador solo aplica a contrato CÁPITA entregado en su totalidad).</td></tr>';
+  else{
+    const sf=(f)=>sumField(table,f);
+    const tE=sf('ent'), tEC=sf('entCon'), tES=sf('entSin');
+    bodyHtml += `<tr class="total-row"><td class="txt">—</td><td class="txt">TOTAL (${table.length} bodegas)</td>
+      <td>${fmtInt(tE)}</td><td>${fmtInt(tEC)}</td><td>${fmtInt(tES)}</td>
+      <td class="${effClass(tE?tEC/tE:null)}">${fmtPct(tE?tEC/tE:null)}</td></tr>`;
+  }
+  tbody.innerHTML=bodyHtml;
+  actualizarControlesOrdenSoporteCapita();
+}
+
+function actualizarControlesOrdenSoporteCapita(){
+  document.querySelectorAll('#tblSoporteCapita thead th.sortable').forEach(th=>{
+    const ind=th.querySelector('.sort-ind');
+    const activo = th.dataset.col===soporteCapitaOrden.col;
+    th.classList.toggle('sort-active', activo);
+    if(ind) ind.textContent = activo ? (soporteCapitaOrden.dir==='asc'?'▲':'▼') : '⇅';
+  });
+  const selCol=document.getElementById('fSoporteCapitaOrdenCol');
+  const selDir=document.getElementById('fSoporteCapitaOrdenDir');
+  if(selCol) selCol.value=soporteCapitaOrden.col;
+  if(selDir) selDir.value=soporteCapitaOrden.dir;
+}
+
+function initOrdenSoporteCapita(){
+  const selCol=document.getElementById('fSoporteCapitaOrdenCol');
+  const selDir=document.getElementById('fSoporteCapitaOrdenDir');
+  if(selCol) selCol.addEventListener('change', ()=>{ soporteCapitaOrden.col=selCol.value; pintarTablaSoporteCapita(); });
+  if(selDir) selDir.addEventListener('change', ()=>{ soporteCapitaOrden.dir=selDir.value; pintarTablaSoporteCapita(); });
+  document.querySelectorAll('#tblSoporteCapita thead th.sortable').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const c=th.dataset.col;
+      if(soporteCapitaOrden.col===c) soporteCapitaOrden.dir=(soporteCapitaOrden.dir==='asc')?'desc':'asc';
+      else { soporteCapitaOrden.col=c; soporteCapitaOrden.dir='desc'; }
+      pintarTablaSoporteCapita();
+    });
+  });
+  actualizarControlesOrdenSoporteCapita();
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initOrdenSoporteCapita); else initOrdenSoporteCapita();
+
+function renderIndicadorSoporteCapita(rowsCapitaRaw, bodegaSearch, zona){
+  // Solo dispensas con Estado Activo (se excluyen las INACTIVO).
+  const rowsCapita = soloActivas(rowsCapitaRaw);
+  /* BASE UNICA: dispensas de CAPITA con TODAS sus lineas entregadas (entregadas en su
+     totalidad), identificadas por Documento + Bodega sobre la ultima version cargada. */
+  const rowsEntregadas = filasSoporteCapita(rowsCapita);
+  const groups = groupByBodega(rowsEntregadas, bodegaSearch, zona);
+  const rowsBase = groups.reduce((acc,g)=>acc.concat(g.rows), []);
+  const corteGlobalSop = getCorteGlobal();
+  const corteFinalSop = corteVigenteHasta(cortesConCargue(rowsBase), corteGlobalSop);
+  const etqCorteSop = corteFinalSop===0 ? 'línea base' : 'corte '+corteFinalSop;
+  const estadoDisp = new Map();
+  rowsBase.forEach(r=>{
+    const k = claveDocBodega(r);
+    if(!k) return;
+    const con = tieneSoporteHastaCorte(r, corteFinalSop);
+    if(!estadoDisp.has(k)) estadoDisp.set(k, con);
+    else if(con) estadoDisp.set(k, true);
+  });
+  let totalEnt=0, conSoporte=0;
+  estadoDisp.forEach(v=>{ totalEnt++; if(v) conSoporte++; });
+  const sinSoporte = totalEnt - conSoporte;
+  const alcanceSop = describirAlcanceFiltro(groups.map(g=>({bodega:g.bodega})), bodegaSearch, zona);
+  const subAlcance = alcanceSop+' · acumulado a '+etqCorteSop;
+  const statsEl=document.getElementById('statsSoporteCapita');
+  if(statsEl) statsEl.innerHTML = `
+    <div class="stat"><div class="label">Dispensas entregadas (Cápita)</div><div class="value">${fmtInt(totalEnt)}</div><div class="sub">${subAlcance}</div></div>
+    <div class="stat"><div class="label">Entregado con soporte</div><div class="value">${fmtInt(conSoporte)}</div><div class="sub">${fmtPct(totalEnt?conSoporte/totalEnt:null)} · ${subAlcance}</div>
+      <div class="bar"><i style="width:${totalEnt?(conSoporte/totalEnt*100).toFixed(0):0}%;"></i></div></div>
+    <div class="stat warn"><div class="label">Entregado sin soporte</div><div class="value">${fmtInt(sinSoporte)}</div><div class="sub">${fmtPct(totalEnt?sinSoporte/totalEnt:null)} · ${subAlcance}</div>
+      <div class="bar"><i style="width:${totalEnt?(sinSoporte/totalEnt*100).toFixed(0):0}%;"></i></div></div>
+  `;
+
+  const table=groups.map(g=>{
+    const estado=new Map();
+    g.rows.forEach(r=>{
+      const k=claveDocBodega(r);
+      if(!k) return;
+      const con=tieneSoporteHastaCorte(r, corteFinalSop);
+      if(!estado.has(k)) estado.set(k, con);
+      else if(con) estado.set(k, true);
+    });
+    let ent=0, entCon=0;
+    estado.forEach(v=>{ ent++; if(v) entCon++; });
+    const entSin = ent-entCon;
+    return { zona:g.zona, bodega:g.bodega, ent, entCon, entSin, efEnt: ent? entCon/ent: null };
+  });
+  table.sort((a,b)=>(a.efEnt||0)-(b.efEnt||0));
+  lastTables.soporteCapita=table;
+  lastSoporteCapitaCtx={ rows:rowsBase, estadoDisp, corteFinal:corteFinalSop, corteGlobal:corteGlobalSop,
+    etqCorte:etqCorteSop, alcance:alcanceSop, bodegaSearch, zona };
+  const txtAlcance=document.getElementById('soporteCapitaAlcanceTxt');
+  if(txtAlcance) txtAlcance.innerHTML = '<b>Alcance de este indicador y de sus descargas:</b> '+alcanceSop
+    + ' · estado <b>acumulado a '+etqCorteSop+'</b> (corte global '+corteGlobalSop+'). '
+    + 'Solo dispensas de contrato <b>Cápita entregadas en su totalidad</b>.';
+  pintarTablaSoporteCapita();
+
+  if(table.length){
+    const aggSop=(tbl)=>({
+      bodega:'__ALL__',
+      ent: tbl.reduce((a,b)=>a+(b.ent||0),0),
+      entCon: tbl.reduce((a,b)=>a+(b.entCon||0),0),
+      entSin: tbl.reduce((a,b)=>a+(b.entSin||0),0)
+    });
+    setupGenericPieSelector('pieSoporteCapitaSelect','pieSoporteCapita','pieSoporteCapitaLegend', table, aggSop, row=>[
+      {label:'Con soporte', value: row.entCon||0, color:'#1E8F5E'},
+      {label:'Sin soporte', value: row.entSin||0, color:'#C0392B'}
+    ], {
+      mode:'count',
+      totalFn:(row)=>row.ent||0,
+      centerFn:(slices,total)=>{
+        const con=slices.find(s=>s.label==='Con soporte');
+        return fmtPct(total ? (con? con.value:0)/total : null);
+      },
+      notaFn:(row)=>'Sobre '+fmtInt(row.ent||0)+' dispensas cápita entregadas · acumulado a '+etqCorteSop+'.'
+    });
+  } else {
+    drawDonut('pieSoporteCapita', [{label:'',value:1,color:'#DCE4EC'}], '—');
+    const lg=document.getElementById('pieSoporteCapitaLegend'); if(lg) lg.innerHTML='';
+    const sl=document.getElementById('pieSoporteCapitaSelect'); if(sl) sl.innerHTML='<option value="__ALL__">Sin datos</option>';
+  }
+}
+
+function construirDetalleSoporteCapita(){
+  if(!lastSoporteCapitaCtx || !lastSoporteCapitaCtx.rows || !lastSoporteCapitaCtx.rows.length) return [];
+  const ctx=lastSoporteCapitaCtx;
+  const porDisp=new Map();
+  ctx.rows.forEach(r=>{
+    const k=claveDocBodega(r);
+    if(!k) return;
+    const prev=porDisp.get(k);
+    if(!prev || esVersionPosterior(r, prev)) porDisp.set(k, r);
+  });
+  const det=[];
+  porDisp.forEach((r,k)=>{
+    const con = ctx.estadoDisp.get(k)===true;
+    const corteRec = con ? corteRecuperacionSoporte(r) : null;
+    det.push({
+      'Zona': r.zona||'',
+      'Bodega': r.bodegaDetalle||'',
+      'Documento': r.documento||'',
+      'Contrato': r.contrato||'',
+      'Estado dispensa': r.estadoDispensa||'',
+      'Estado soporte': con ? 'CON SOPORTE' : 'SIN SOPORTE',
+      'Estado al': ctx.etqCorte,
+      'Corte global filtrado': ctx.corteGlobal,
+      'Corte en que llego el soporte': con ? (corteRec===null ? 'Linea base' : 'Corte '+corteRec) : '',
+      'Fecha Dispensacion (origen)': diaDispensacion(r),
+      'Fecha de cargue del soporte': con ? (diaSoporte(r)||diaCargue(r)) : ''
+    });
+  });
+  det.sort((a,b)=> String(a['Bodega']).localeCompare(String(b['Bodega']),'es')
+    || String(a['Estado soporte']).localeCompare(String(b['Estado soporte']))
+    || String(a['Documento']).localeCompare(String(b['Documento'])));
+  return det;
+}
+
+function construirResumenSoporteCapita(){
+  const etq = lastSoporteCapitaCtx ? lastSoporteCapitaCtx.etqCorte : '';
+  const cg = lastSoporteCapitaCtx ? lastSoporteCapitaCtx.corteGlobal : '';
+  return (lastTables.soporteCapita||[]).map(t=>({
+    'Zona':t.zona,'Bodega':t.bodega,'Dispensas Entregadas':t.ent,'Con Soporte':t.entCon,'Sin Soporte':t.entSin,
+    'Indicador Eficiencia Soporte':t.efEnt,'Estado al':etq,'Corte global filtrado':cg
+  }));
+}
+
+function hayContextoSoporteCapita(){
+  if(lastSoporteCapitaCtx && lastSoporteCapitaCtx.rows && lastSoporteCapitaCtx.rows.length) return true;
+  showToast('No hay datos de Soporte Cápita para descargar con los filtros actuales.', true);
+  return false;
+}
+
+(function initDescargasSoporteCapita(){
+  const bx=document.getElementById('btnSoporteCapitaExportXlsx');
+  const bs=document.getElementById('btnSoporteCapitaSinSoporte');
+  const fecha=()=>new Date().toISOString().slice(0,10);
+  if(bx) bx.addEventListener('click', ()=>{
+    if(!hayContextoSoporteCapita()) return;
+    const resumen=construirResumenSoporteCapita();
+    const detalle=construirDetalleSoporteCapita();
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen.length?resumen:[{'Sin datos':''}]), 'RESUMEN POR BODEGA');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Sin datos':''}]), 'DETALLE POR DISPENSA');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+      'Alcance': lastSoporteCapitaCtx.alcance,
+      'Estado al': lastSoporteCapitaCtx.etqCorte,
+      'Corte global filtrado': lastSoporteCapitaCtx.corteGlobal,
+      'Filtro de bodega': lastSoporteCapitaCtx.bodegaSearch || '(todas)',
+      'Zona': lastSoporteCapitaCtx.zona || '(todas)',
+      'Dispensas incluidas': detalle.length
+    }]), 'ALCANCE');
+    XLSX.writeFile(wb, `Soporte_Capita_${fecha()}.xlsx`);
+    showToast('Excel de Soporte Cápita descargado.');
+  });
+  if(bs) bs.addEventListener('click', ()=>{
+    if(!hayContextoSoporteCapita()) return;
+    const sinSoporte=construirDetalleSoporteCapita().filter(d=>d['Estado soporte']==='SIN SOPORTE');
+    if(!sinSoporte.length){ showToast('No hay dispensas cápita SIN soporte con los filtros actuales.', true); return; }
+    const filas=sinSoporte.map(d=>({
+      'Zona':d['Zona'],'Bodega':d['Bodega'],'Documento':d['Documento'],'Contrato':d['Contrato'],
+      'Estado dispensa':d['Estado dispensa'],'Estado soporte':d['Estado soporte'],
+      'Estado al':d['Estado al'],'Corte global filtrado':d['Corte global filtrado'],
+      'Fecha Dispensacion (origen)':d['Fecha Dispensacion (origen)']
+    }));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), 'CAPITA SIN SOPORTE');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+      'Alcance': lastSoporteCapitaCtx.alcance,
+      'Estado al': lastSoporteCapitaCtx.etqCorte,
+      'Corte global filtrado': lastSoporteCapitaCtx.corteGlobal,
+      'Filtro de bodega': lastSoporteCapitaCtx.bodegaSearch || '(todas)',
+      'Zona': lastSoporteCapitaCtx.zona || '(todas)',
+      'Dispensas SIN soporte': filas.length
+    }]), 'ALCANCE');
+    XLSX.writeFile(wb, `Dispensas_Capita_SIN_soporte_${fecha()}.xlsx`);
+    showToast(fmtInt(filas.length)+' dispensas cápita SIN soporte descargadas.');
+  });
+})();
+
+/* =========================================================================
    13. Exportar a Excel
    ========================================================================= */
 document.getElementById('btnExportar').addEventListener('click', ()=>{
@@ -7118,6 +7363,96 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_Pendientes_por_Alistar'+suf+'_'+fecha+'.xlsx');
     showToast('Excel exportado: '+fmtInt(totDocs)+' traslado(s) pendientes por alistar ('+fmtInt(detalle.length)+' líneas).');
+  });
+})();
+
+/* Descarga, a nivel de LÍNEA, los traslados que ya están ALISTADOS
+   (Estado Logístico = Alistado, columna M) para la Bodega Destino seleccionada o
+   filtrada. Un traslado cuenta como ALISTADO si trae Estado Logístico reconocible,
+   ninguna de sus líneas sigue pendiente y al menos una viene alistada; se exportan
+   todas las líneas de esos documentos. Respeta los mismos filtros de la sección:
+   departamento global, zona, bodega origen y bodega destino. */
+(function(){
+  const btn=document.getElementById('btnDescargarAlistados');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    const all=trasladosDelDepartamento();
+    if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
+
+    const zona=(document.getElementById('fTrasladoZona')||{}).value||'';
+    const origen=(document.getElementById('fTrasladoOrigen')||{}).value||'';
+    const destino=(document.getElementById('fTrasladoDestino')||{}).value||'';
+
+    const filas=all.filter(r=>{
+      if(zona && r.zonaDestino!==zona) return false;
+      if(origen && r.bodegaOrigen!==origen) return false;
+      if(destino && r.bodegaDestino!==destino) return false;
+      return true;
+    });
+    if(!filas.length){ showToast('No hay traslados para los filtros actuales.', true); return; }
+
+    // Clasificación por DOCUMENTO (traslado único), igual que el conteo en pantalla:
+    // ALISTADO = tiene Estado Logístico reconocible, ninguna línea pendiente y al
+    // menos una línea alistada. Basta una línea pendiente para descartar el documento.
+    const docEstado=new Map();   // id -> {tienePend, tieneAlist}
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      if(!docEstado.has(id)) docEstado.set(id, {tienePend:false, tieneAlist:false});
+      const d=docEstado.get(id);
+      const est=('estadoAlist' in r) ? r.estadoAlist : estadoAlistamiento(r.estadoLogistico);
+      if(est==='PENDIENTE') d.tienePend=true;
+      else if(est==='ALISTADO') d.tieneAlist=true;
+    });
+    const esAlistado=(id)=>{ const d=docEstado.get(id); return !!(d && d.tieneAlist && !d.tienePend); };
+
+    // Líneas a exportar: todas las de los documentos marcados como alistados.
+    const detalle=[];
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      if(!esAlistado(id)) return;
+      detalle.push({
+        'Traslado': r.traslado||'',
+        'Fecha': r.fecha ? dateToISO(r.fecha) : '',
+        'Bodega Origen': r.bodegaOrigen||'',
+        'Bodega Destino': r.bodegaDestino||'',
+        'Zona (destino)': r.zonaDestino||'N/D',
+        'Codigo': r.codigo||'',
+        'Descripcion': r.descripcion||'',
+        'Cantidad': r.cantidad||0,
+        'Estado Logístico': r.estadoLogistico||'',
+        'Recibido': r.recibido||'',
+        'Usuario': r.usuario||''
+      });
+    });
+    if(!detalle.length){ showToast('No hay traslados alistados para los filtros actuales.', true); return; }
+
+    // Resumen por Bodega Destino (traslados únicos alistados).
+    const resMap=new Map();
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      if(!esAlistado(id)) return;
+      const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
+      const zn=r.zonaDestino||'N/D';
+      const k=zn+'||'+bd;
+      if(!resMap.has(k)) resMap.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
+      const g=resMap.get(k); g.ids.add(id); g.lineas++;
+    });
+    const resumen=[...resMap.values()].map(g=>({
+      'Zona': g.zona, 'Bodega Destino': g.bodega,
+      'Traslados alistados': g.ids.size,
+      'Líneas de artículo': g.lineas
+    })).sort((a,b)=> (b['Traslados alistados']-a['Traslados alistados']) || a['Bodega Destino'].localeCompare(b['Bodega Destino'],'es'));
+    const totDocs=resumen.reduce((a,g)=>a+g['Traslados alistados'],0);
+    resumen.push({'Zona':'','Bodega Destino':'TOTAL ('+resumen.length+(resumen.length===1?' bodega)':' bodegas)'),
+      'Traslados alistados':totDocs,'Líneas de artículo':detalle.length});
+
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Alistados');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Líneas');
+    const fecha=new Date().toISOString().slice(0,10);
+    const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
+    XLSX.writeFile(wb, 'Traslados_Alistados'+suf+'_'+fecha+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(totDocs)+' traslado(s) alistados ('+fmtInt(detalle.length)+' líneas).');
   });
 })();
 
@@ -9821,6 +10156,25 @@ function clavesEventoEntregadas(rows){
 function filasSoporteEvento(rows){
   const ok=clavesEventoEntregadas(rows);
   return (rows||[]).filter(r=>r.contrato==='EVENTO' && r.documento && ok.has(claveDocBodega(r)));
+}
+/* Versión CÁPITA: dispensas de contrato CAPITA con TODAS sus líneas ENTREGADAS
+   (entregadas en su totalidad). Misma lógica e identidad (bodega + documento,
+   última versión cargada) que la de EVENTO, solo cambia el tipo de contrato. */
+function clavesCapitaEntregadas(rows){
+  const est=new Map();
+  snapshotUltimaVersion(rows).forEach(r=>{
+    if(r.contrato!=='CAPITA' || !r.documento) return;
+    const k=claveDocBodega(r);
+    if(r.lineaPendiente==='SI') est.set(k, false);          // queda pendiente => se excluye
+    else if(!est.has(k)) est.set(k, true);
+  });
+  const out=new Set();
+  est.forEach((completa,k)=>{ if(completa) out.add(k); });
+  return out;
+}
+function filasSoporteCapita(rows){
+  const ok=clavesCapitaEntregadas(rows);
+  return (rows||[]).filter(r=>r.contrato==='CAPITA' && r.documento && ok.has(claveDocBodega(r)));
 }
 // Estado ACUMULADO de líneas y documentos al cierre del corte indicado.
 function calcularEstadoHastaCorte(rows, corteMax){
