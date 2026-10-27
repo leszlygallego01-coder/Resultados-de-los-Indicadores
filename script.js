@@ -718,7 +718,11 @@ const FIELD_FALLBACK_KEYWORDS = {
   fechaOrigenDispensacion: ['FECHA ORIGEN DISPENS','FECHA ORIGEN DE DISPENS','FECHA ORIGEN'],
   documento: ['DOCUMENTO'],
   // Columna "Recibido" de Traslados (valores tipo Recibido / No Recibido)
-  recibido: ['RECIBIDO','ESTADO RECIB','NO RECIBIDO','RECIB']
+  recibido: ['RECIBIDO','ESTADO RECIB','NO RECIBIDO','RECIB'],
+  // Columna "Estado Logístico" de Traslados (columna M): respaldo por palabra clave
+  // para capturarla aunque el encabezado tenga variantes. Se evita "ESTADO" a secas
+  // para no chocar con "Recibido".
+  estadoLogistico: ['ESTADO LOGISTICO','ESTADO LOGISTICO ALISTAMIENTO','ESTATUS LOGISTICO','LOGISTIC','ALISTAMIENTO','ALISTA']
 };
 /* Busca una columna por palabra clave, de lo mas preciso a lo mas laxo:
    1) el encabezado es exactamente la palabra buscada,
