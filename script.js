@@ -3730,8 +3730,8 @@ function renderAlistamientoDestino(filas){
     statsEl.innerHTML =
       '<div class="stat"><div class="label">Traslados alistados</div><div class="value">'+fmtInt(totAlist)+'</div></div>'+
       '<div class="stat"><div class="label">Pendientes por alistar</div><div class="value" style="color:#C0392B;">'+fmtInt(totPend)+'</div></div>'+
-      '<div class="stat"><div class="label">Total pendientes acumulados</div><div class="value" style="color:#C0392B;">'+fmtInt(totPend)+'</div>'+
-        '<div class="sub">'+fmtInt(lista.length)+' bodega(s) destino</div></div>'+
+      '<div class="stat"><div class="label">Total de traslados</div><div class="value">'+fmtInt(totAlist+totPend)+'</div>'+
+        '<div class="sub">alistados + pendientes · '+fmtInt(lista.length)+' bodega(s) destino</div></div>'+
       '<div class="stat"><div class="label">Sin Estado Logístico</div><div class="value">'+fmtInt(totSin)+'</div>'+
         '<div class="sub">no se clasifican</div></div>';
   }
@@ -3746,13 +3746,13 @@ function renderAlistamientoDestino(filas){
       '<td class="txt">'+escHtml(g.bodega)+'</td>'+
       '<td>'+fmtInt(g.alist)+'</td>'+
       '<td style="color:#C0392B;font-weight:600;">'+fmtInt(g.pend)+'</td>'+
-      '<td><b>'+fmtInt(g.pend)+'</b></td></tr>'
+      '<td><b>'+fmtInt(g.alist+g.pend)+'</b></td></tr>'
     ).join('');
     h+='<tr class="total-row"><td class="txt">—</td>'+
        '<td class="txt">TOTAL ('+lista.length+(lista.length===1?' bodega)':' bodegas)')+'</td>'+
        '<td>'+fmtInt(totAlist)+'</td>'+
        '<td style="color:#C0392B;font-weight:600;">'+fmtInt(totPend)+'</td>'+
-       '<td><b>'+fmtInt(totPend)+'</b></td></tr>';
+       '<td><b>'+fmtInt(totAlist+totPend)+'</b></td></tr>';
     tb.innerHTML=h;
   }
 }
