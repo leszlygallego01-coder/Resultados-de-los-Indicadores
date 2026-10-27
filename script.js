@@ -152,7 +152,7 @@ const DATASETS = [
   {
     key: 'traslados', tabla: 'Tabla_8', title: 'Traslados', required: false,
     desc: 'Traslados entre bodegas realizados por cada usuario. Los datos provienen exclusivamente de la carpeta de Google Drive y se reemplazan por completo en cada sincronización. El Codigo se cruza con la tabla Homólogo para saber si la molécula es Pareto o No Pareto.',
-    cols: ['Traslado','Fecha','Bodega Origen','Bodega Destino','Codigo','Descripcion','Cantidad','Lote','Fecha de Vencimiento','Recibido','Usuario'],
+    cols: ['Traslado','Fecha','Bodega Origen','Bodega Destino','Codigo','Descripcion','Cantidad','Lote','Fecha de Vencimiento','Recibido','Usuario','Estado Logístico'],
     fields: {
       traslado: ['TRASLADO','NRO TRASLADO','NUMERO TRASLADO','NÚMERO TRASLADO','No TRASLADO','DOCUMENTO TRASLADO','DOCUMENTO','CONSECUTIVO'],
       fecha: ['FECHA','FECHA TRASLADO','FECHA DE TRASLADO','FECHA DEL TRASLADO'],
@@ -168,6 +168,10 @@ const DATASETS = [
       // Estado de recepción del traslado: 'Recibido' o 'No Recibido'. En la Base
       // Supervisores solo se cuentan como pendientes las líneas NO recibidas.
       recibido: ['RECIBIDO','RECIBIDA','ESTADO RECIBIDO','ESTADO DEL TRASLADO','ESTADO TRASLADO','ESTADO','RECEPCION','RECEPCIÓN'],
+      // Estado Logístico (columna M del archivo de Drive): indica si el traslado ya
+      // fue ALISTADO en la bodega origen o sigue PENDIENTE POR ALISTAR. Es distinto
+      // de "Recibido" (que es la recepción en la bodega destino).
+      estadoLogistico: ['ESTADO LOGISTICO','ESTADO LOGÍSTICO','ESTADO LOGISTICO ALISTAMIENTO','ESTADO DE ALISTAMIENTO','ESTADO ALISTAMIENTO','ALISTAMIENTO','ESTADO LOGISTICA','ESTADO LOGÍSTICA','ESTATUS LOGISTICO','ESTATUS LOGÍSTICO'],
       usuario: ['USUARIO','USUARIO CREACION','USUARIO CREACIÓN','USUARIO QUE REALIZA','USUARIO TRASLADO','RESPONSABLE'],
       // Observaciones / notas del traslado (opcional): se muestran en la descarga
       // de "Traslados no recibidos" si la fuente las trae.
@@ -619,6 +623,25 @@ function estadoTraslado(v){
    ("No Recibido", "Sin recibir", "Pendiente", "En transito"). Las celdas vacias
    o sin un estado reconocible devuelven false: no se cuentan como en camino. */
 function esTrasladoNoRecibido(v){ return estadoTraslado(v)==='PENDIENTE'; }
+/* Estado de ALISTAMIENTO de un traslado (columna M "Estado Logístico").
+   Devuelve:
+     'ALISTADO'  el traslado ya quedó alistado en la bodega origen,
+     'PENDIENTE' sigue pendiente por alistar,
+     ''          no hay dato reconocible (celda vacía o valor suelto).
+   Ojo: es independiente de "Recibido" (eso es la recepción en destino). */
+function estadoAlistamiento(v){
+  const s=normValue(v).replace(/[^A-Z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+  if(!s) return '';                                    // celda vacia: sin dato
+  if(s==='1') return 'ALISTADO';                       // banderas 1/0
+  if(s==='0') return 'PENDIENTE';
+  if(/^[0-9]+$/.test(s)) return '';                    // un numero suelto no es un estado
+  // "Pendiente por alistar", "Sin alistar", "Por alistar", "No alistado": todavia falta.
+  if(/(^|\s)(PENDIENTE|SIN|POR ALISTAR|NO ALISTAD|FALSE|FALSO)(\s|$)/.test(s)) return 'PENDIENTE';
+  // "Alistado", "Alistada", "Alistamiento completo": ya quedo listo.
+  if(/ALISTAD/.test(s)) return 'ALISTADO';
+  if(['SI','S','Y','YES','TRUE','VERDADERO','X','OK','LISTO','LISTA','COMPLETO','COMPLETA','CERRADO','CERRADA'].indexOf(s.split(' ')[0])>=0) return 'ALISTADO';
+  return 'PENDIENTE';                                  // cualquier otro estado explicito: pendiente
+}
 /* Códigos que NO corresponden a un medicamento (servicios, cobros, domicilios, etc.).
    Aunque la columna Diferencia sea negativa, estas líneas no se cuentan como pendientes
    ni como líneas por subsanar en ningún indicador. */
@@ -2321,6 +2344,9 @@ async function calcularIndicadores(){
         // Texto original de la columna "Recibido" y bandera derivada: si el valor
         // empieza por "N" (No Recibido / NO RECIBIDA) la línea sigue pendiente.
         recibido: String(r.recibido||'').trim(),
+        // Estado Logístico (columna M): texto original y estado de alistamiento derivado.
+        estadoLogistico: String(r.estadoLogistico||'').trim(),
+        estadoAlist: estadoAlistamiento(r.estadoLogistico),
         // Observaciones/notas del traslado (opcional, puede venir vacío).
         observaciones: String(r.observaciones||'').trim(),
         // Estado normalizado: 'RECIBIDO', 'PENDIENTE' o '' (sin dato).
@@ -3464,6 +3490,7 @@ function renderIndicadorTraslados(){
     }
     tb.innerHTML='<tr><td colspan="8" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados cargados.</td></tr>';
     renderDonutTrasladosRecibidos([]);
+    renderAlistamientoDestino([]);
     _trasladosUsuarioCache=[];
     return;
   }
@@ -3487,6 +3514,8 @@ function renderIndicadorTraslados(){
   // El anillo de recepcion usa las MISMAS filas visibles (zona, origen, destino y
   // usuario), por eso cambia junto con los filtros de esta seccion.
   renderDonutTrasladosRecibidos(filasVis);
+  // Nueva sección de alistamiento por bodega destino (respeta estos mismos filtros).
+  renderAlistamientoDestino(filasVis);
 
   // Traslados ÚNICOS por usuario: se agrupa por número de Traslado (si viene vacío se
   // usa una clave por fila para no perder el registro). Un traslado puede contener
@@ -3633,6 +3662,94 @@ function renderDonutTrasladosRecibidos(filas){
       '<div class="item" style="color:#5C6C7E;font-size:11px;">Base: '+fmtInt(base)+' traslado(s) con estado'+
         (sinEstado ? ' · '+fmtInt(sinEstado)+' sin estado (no se cuentan)' : '')+'</div>'+
       '<div class="item" style="color:#5C6C7E;font-size:11px;">'+fmtInt(rec)+' recibidos · '+fmtInt(noRec)+' en camino (documentos únicos)</div>';
+  }
+}
+
+/* ---- Alistamiento a NIVEL DE DOCUMENTO (traslado unico) ---------------------
+   Igual que la recepción, el alistamiento se evalua por DOCUMENTO (COUNT DISTINCT
+   Traslado), no por linea, para que concuerde con "Traslados realizados":
+     - un documento es PENDIENTE por alistar si al menos una de sus lineas sigue
+       pendiente (basta una linea sin alistar),
+     - es ALISTADO si ninguna linea esta pendiente y al menos una viene alistada,
+     - queda "sin estado" si ninguna de sus lineas trae Estado Logístico reconocible.
+   Devuelve el conteo de DOCUMENTOS por categoria.                              */
+function contarDocsAlistamiento(filas){
+  const docs=new Map();
+  (filas||[]).forEach((t,i)=>{
+    const id = t.traslado ? ('T:'+t.traslado) : ('F:'+i);
+    if(!docs.has(id)) docs.set(id, {tienePend:false, tieneAlist:false, tieneEstado:false});
+    const d=docs.get(id);
+    const est=('estadoAlist' in t) ? t.estadoAlist : estadoAlistamiento(t.estadoLogistico);
+    if(est==='PENDIENTE'){ d.tienePend=true; d.tieneEstado=true; }
+    else if(est==='ALISTADO'){ d.tieneAlist=true; d.tieneEstado=true; }
+  });
+  let alist=0, pend=0, sinEstado=0;
+  docs.forEach(d=>{
+    if(!d.tieneEstado) sinEstado++;
+    else if(d.tienePend) pend++;   // basta una linea pendiente para que el documento siga por alistar
+    else alist++;
+  });
+  return {alist, pend, sinEstado, total:alist+pend, docsTotales:docs.size};
+}
+
+/* ---- Sección: Alistamiento por Bodega Destino ------------------------------
+   Agrupa los traslados (ya filtrados por la sección: zona, bodega origen, bodega
+   destino y usuario) por Bodega Destino y cuenta, por DOCUMENTO único, cuántos
+   están ALISTADOS y cuántos PENDIENTES por alistar. El filtro de Bodega Origen de
+   la sección acota dinámicamente estos totales.                               */
+function renderAlistamientoDestino(filas){
+  const statsEl=document.getElementById('statsAlistamiento');
+  const tb=document.querySelector('#tblAlistamientoDestino tbody');
+  if(!tb && !statsEl) return;
+  const lf=filas||[];
+
+  // Agrupa por Zona + Bodega Destino, guardando las filas para evaluar por documento.
+  const grupos=new Map();
+  lf.forEach(r=>{
+    const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
+    const zn=r.zonaDestino||'N/D';
+    const k=zn+'||'+bd;
+    if(!grupos.has(k)) grupos.set(k, {zona:zn, bodega:bd, filas:[]});
+    grupos.get(k).filas.push(r);
+  });
+
+  const lista=[...grupos.values()].map(g=>{
+    const c=contarDocsAlistamiento(g.filas);
+    return {zona:g.zona, bodega:g.bodega, alist:c.alist, pend:c.pend, sinEstado:c.sinEstado, total:c.docsTotales};
+  }).sort((a,b)=> (b.pend-a.pend) || a.zona.localeCompare(b.zona,'es') || a.bodega.localeCompare(b.bodega,'es'));
+
+  const totAlist=lista.reduce((a,g)=>a+g.alist,0);
+  const totPend=lista.reduce((a,g)=>a+g.pend,0);
+  const totSin=lista.reduce((a,g)=>a+g.sinEstado,0);
+
+  if(statsEl){
+    statsEl.innerHTML =
+      '<div class="stat"><div class="label">Traslados alistados</div><div class="value">'+fmtInt(totAlist)+'</div></div>'+
+      '<div class="stat"><div class="label">Pendientes por alistar</div><div class="value" style="color:#C0392B;">'+fmtInt(totPend)+'</div></div>'+
+      '<div class="stat"><div class="label">Total pendientes acumulados</div><div class="value" style="color:#C0392B;">'+fmtInt(totPend)+'</div>'+
+        '<div class="sub">'+fmtInt(lista.length)+' bodega(s) destino</div></div>'+
+      '<div class="stat"><div class="label">Sin Estado Logístico</div><div class="value">'+fmtInt(totSin)+'</div>'+
+        '<div class="sub">no se clasifican</div></div>';
+  }
+
+  if(tb){
+    if(!lista.length){
+      tb.innerHTML='<tr><td colspan="5" class="txt" style="text-align:center;color:#9CA9B6;">No hay traslados para los filtros seleccionados.</td></tr>';
+      return;
+    }
+    let h=lista.map(g=>
+      '<tr><td class="txt">'+escHtml(g.zona)+'</td>'+
+      '<td class="txt">'+escHtml(g.bodega)+'</td>'+
+      '<td>'+fmtInt(g.alist)+'</td>'+
+      '<td style="color:#C0392B;font-weight:600;">'+fmtInt(g.pend)+'</td>'+
+      '<td><b>'+fmtInt(g.pend)+'</b></td></tr>'
+    ).join('');
+    h+='<tr class="total-row"><td class="txt">—</td>'+
+       '<td class="txt">TOTAL ('+lista.length+(lista.length===1?' bodega)':' bodegas)')+'</td>'+
+       '<td>'+fmtInt(totAlist)+'</td>'+
+       '<td style="color:#C0392B;font-weight:600;">'+fmtInt(totPend)+'</td>'+
+       '<td><b>'+fmtInt(totPend)+'</b></td></tr>';
+    tb.innerHTML=h;
   }
 }
 
@@ -6912,6 +7029,91 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Dispensas_Inactivas_Sin_Usuario_'+fecha+'.xlsx');
     showToast('Excel exportado: '+fmtInt(total)+' dispensas sin usuario ('+fmtInt(detalle.length)+' líneas con código y DCI).');
+  });
+})();
+
+/* Descarga, a nivel de LÍNEA, los traslados que siguen PENDIENTES POR ALISTAR
+   (Estado Logístico = Pendiente, columna M) para la Bodega Destino seleccionada o
+   filtrada. Un traslado cuenta como pendiente por alistar si al menos una de sus
+   líneas sigue pendiente; se exportan todas las líneas de esos documentos. Respeta
+   los filtros de la sección: departamento global, zona, bodega origen y bodega
+   destino. */
+(function(){
+  const btn=document.getElementById('btnDescargarPendientesAlistar');
+  if(!btn) return;
+  btn.addEventListener('click', ()=>{
+    const all=trasladosDelDepartamento();
+    if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
+
+    const zona=(document.getElementById('fTrasladoZona')||{}).value||'';
+    const origen=(document.getElementById('fTrasladoOrigen')||{}).value||'';
+    const destino=(document.getElementById('fTrasladoDestino')||{}).value||'';
+
+    const filas=all.filter(r=>{
+      if(zona && r.zonaDestino!==zona) return false;
+      if(origen && r.bodegaOrigen!==origen) return false;
+      if(destino && r.bodegaDestino!==destino) return false;
+      return true;
+    });
+    if(!filas.length){ showToast('No hay traslados para los filtros actuales.', true); return; }
+
+    // Documentos (traslados únicos) que siguen PENDIENTES por alistar: basta una
+    // línea pendiente para que todo el documento cuente como pendiente por alistar.
+    const docPend=new Map();   // id -> bool pendiente
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      const est=('estadoAlist' in r) ? r.estadoAlist : estadoAlistamiento(r.estadoLogistico);
+      if(est==='PENDIENTE') docPend.set(id, true);
+      else if(!docPend.has(id)) docPend.set(id, false);
+    });
+    // Líneas a exportar: todas las de los documentos marcados como pendientes.
+    const detalle=[];
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      if(!docPend.get(id)) return;
+      detalle.push({
+        'Traslado': r.traslado||'',
+        'Fecha': r.fecha ? dateToISO(r.fecha) : '',
+        'Bodega Origen': r.bodegaOrigen||'',
+        'Bodega Destino': r.bodegaDestino||'',
+        'Zona (destino)': r.zonaDestino||'N/D',
+        'Codigo': r.codigo||'',
+        'Descripcion': r.descripcion||'',
+        'Cantidad': r.cantidad||0,
+        'Estado Logístico': r.estadoLogistico||'',
+        'Recibido': r.recibido||'',
+        'Usuario': r.usuario||''
+      });
+    });
+    if(!detalle.length){ showToast('No hay traslados pendientes por alistar para los filtros actuales.', true); return; }
+
+    // Resumen por Bodega Destino (traslados únicos pendientes por alistar).
+    const resMap=new Map();
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      if(!docPend.get(id)) return;
+      const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
+      const zn=r.zonaDestino||'N/D';
+      const k=zn+'||'+bd;
+      if(!resMap.has(k)) resMap.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
+      const g=resMap.get(k); g.ids.add(id); g.lineas++;
+    });
+    const resumen=[...resMap.values()].map(g=>({
+      'Zona': g.zona, 'Bodega Destino': g.bodega,
+      'Traslados pendientes por alistar': g.ids.size,
+      'Líneas de artículo': g.lineas
+    })).sort((a,b)=> (b['Traslados pendientes por alistar']-a['Traslados pendientes por alistar']) || a['Bodega Destino'].localeCompare(b['Bodega Destino'],'es'));
+    const totDocs=resumen.reduce((a,g)=>a+g['Traslados pendientes por alistar'],0);
+    resumen.push({'Zona':'','Bodega Destino':'TOTAL ('+resumen.length+(resumen.length===1?' bodega)':' bodegas)'),
+      'Traslados pendientes por alistar':totDocs,'Líneas de artículo':detalle.length});
+
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Pendientes por Alistar');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Líneas');
+    const fecha=new Date().toISOString().slice(0,10);
+    const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
+    XLSX.writeFile(wb, 'Traslados_Pendientes_por_Alistar'+suf+'_'+fecha+'.xlsx');
+    showToast('Excel exportado: '+fmtInt(totDocs)+' traslado(s) pendientes por alistar ('+fmtInt(detalle.length)+' líneas).');
   });
 })();
 
