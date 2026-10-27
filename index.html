@@ -660,6 +660,30 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             </div>
           </div>
         </div>
+
+        <!-- ---- Nueva sección: Alistamiento por Bodega Destino (Estado Logístico, columna M) ---- -->
+        <div class="seguimiento-section">
+          <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:220px;">
+              <h3>📦 Alistamiento por Bodega Destino</h3>
+              <p class="seg-desc">Usa el <b>Estado Logístico</b> (columna M del archivo de Traslados) para contar, por <b>Bodega Destino</b> y por <b>traslado único</b> (no por línea), cuántos traslados ya están <b>Alistados</b> y cuántos siguen <b>Pendientes por Alistar</b>. Usa el filtro <b>Bodega Origen</b> de arriba para acotar dinámicamente estos totales.</p>
+            </div>
+            <div style="margin-left:auto;align-self:center;display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-export" id="btnDescargarPendientesAlistar" style="background:#C0392B;box-shadow:0 2px 0 #7E241A;">⬇ Descargar pendientes por alistar (Excel)</button>
+            </div>
+          </div>
+          <div class="stat-row" id="statsAlistamiento"></div>
+          <div class="table-wrap" style="max-height:460px;margin-bottom:0;">
+            <table class="data" id="tblAlistamientoDestino">
+              <thead>
+                <tr>
+                  <th>Zona</th><th>Bodega Destino</th><th>Traslados Alistados</th><th>Pendientes por Alistar</th><th>Total pendientes</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <!-- ---- SUBVISTA: INFORMACIÓN POR FACTURA ---- -->
