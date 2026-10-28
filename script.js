@@ -6636,6 +6636,7 @@ document.getElementById('btnDescargarCodigosComprar').addEventListener('click', 
     }).map(r=>({
       'Zona': r.zona || 'N/D',
       'Bodega detalle': r.bodegaDetalle || '',
+      'Dispensa (documento)': String(r.documento||'').trim(),
       'Código': r.codigoArticulo || '',
       'Descripción': String(r.descripcionReporte||r.descripcion||'').trim(),
       'Homólogo': String(r.homologo||'').trim(),
