@@ -5719,9 +5719,21 @@ function construirDetalleSoporteEvento(){
     if(!prev || esVersionPosterior(r, prev)) porDisp.set(k, r);
   });
   const det=[];
+  // Fecha de DISPENSACION ENTREGADA por dispensa: la fecha del Reporte de Dispensacion
+  // en la que la linea quedo con Diferencia = 0 y Unidades > 0 (campo fechaEntregaEfectiva).
+  // Se toma la mas reciente entre las lineas de la misma dispensa. Es la fecha que se ve
+  // en la tarjeta del Reporte de Dispensacion.
+  const fechaEntregaPorDisp=new Map();
+  ctx.rows.forEach(r=>{
+    const k=claveDocBodega(r);
+    if(!k) return;
+    const fe=String(r.fechaEntregaEfectiva||'').slice(0,10);
+    if(fe && (!fechaEntregaPorDisp.has(k) || fe>fechaEntregaPorDisp.get(k))) fechaEntregaPorDisp.set(k, fe);
+  });
   porDisp.forEach((r,k)=>{
     const con = ctx.estadoDisp.get(k)===true;
     const corteRec = con ? corteRecuperacionSoporte(r) : null;
+    const fechaDisp = fechaEntregaPorDisp.get(k) || diaDispensacion(r);
     det.push({
       'Zona': r.zona||'',
       'Bodega': r.bodegaDetalle||'',
@@ -5732,8 +5744,8 @@ function construirDetalleSoporteEvento(){
       'Estado al': ctx.etqCorte,
       'Corte global filtrado': ctx.corteGlobal,
       'Corte en que llego el soporte': con ? (corteRec===null ? 'Linea base' : 'Corte '+corteRec) : '',
-      // Dos ejes: la dispensacion fecha el origen del pendiente; el CARGUE fecha el soporte.
-      'Fecha Dispensacion (origen)': diaDispensacion(r),
+      // Fecha de dispensacion = fecha en que la dispensa quedo entregada (Diferencia = 0, Unidades > 0).
+      'Fecha de dispensacion': fechaDisp,
       'Fecha de cargue del soporte': con ? (diaSoporte(r)||diaCargue(r)) : ''
     });
   });
@@ -5968,9 +5980,19 @@ function construirDetalleSoporteCapita(){
     if(!prev || esVersionPosterior(r, prev)) porDisp.set(k, r);
   });
   const det=[];
+  // Fecha de DISPENSACION ENTREGADA por dispensa (Diferencia = 0 y Unidades > 0),
+  // la mas reciente entre las lineas de la misma dispensa (campo fechaEntregaEfectiva).
+  const fechaEntregaPorDisp=new Map();
+  ctx.rows.forEach(r=>{
+    const k=claveDocBodega(r);
+    if(!k) return;
+    const fe=String(r.fechaEntregaEfectiva||'').slice(0,10);
+    if(fe && (!fechaEntregaPorDisp.has(k) || fe>fechaEntregaPorDisp.get(k))) fechaEntregaPorDisp.set(k, fe);
+  });
   porDisp.forEach((r,k)=>{
     const con = ctx.estadoDisp.get(k)===true;
     const corteRec = con ? corteRecuperacionSoporte(r) : null;
+    const fechaDisp = fechaEntregaPorDisp.get(k) || diaDispensacion(r);
     det.push({
       'Zona': r.zona||'',
       'Bodega': r.bodegaDetalle||'',
@@ -5981,7 +6003,7 @@ function construirDetalleSoporteCapita(){
       'Estado al': ctx.etqCorte,
       'Corte global filtrado': ctx.corteGlobal,
       'Corte en que llego el soporte': con ? (corteRec===null ? 'Linea base' : 'Corte '+corteRec) : '',
-      'Fecha Dispensacion (origen)': diaDispensacion(r),
+      'Fecha de dispensacion': fechaDisp,
       'Fecha de cargue del soporte': con ? (diaSoporte(r)||diaCargue(r)) : ''
     });
   });
@@ -6036,7 +6058,7 @@ function hayContextoSoporteCapita(){
       'Zona':d['Zona'],'Bodega':d['Bodega'],'Documento':d['Documento'],'Contrato':d['Contrato'],
       'Estado dispensa':d['Estado dispensa'],'Estado soporte':d['Estado soporte'],
       'Estado al':d['Estado al'],'Corte global filtrado':d['Corte global filtrado'],
-      'Fecha Dispensacion (origen)':d['Fecha Dispensacion (origen)']
+      'Fecha de dispensacion':d['Fecha de dispensacion']
     }));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), 'CAPITA SIN SOPORTE');
