@@ -7428,54 +7428,82 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     });
     const esAlistado=(id)=>{ const d=docEstado.get(id); return !!(d && d.tieneAlist && !d.tienePend); };
 
-    // Líneas a exportar: todas las de los documentos marcados como alistados.
-    const detalle=[];
+    // Dentro de los ALISTADOS, se clasifica cada documento por su estado de RECEPCION
+    // (columna "Recibido"), con el mismo criterio por documento del tablero:
+    //   RECIBIDO     = ninguna linea pendiente y al menos una linea "Recibido".
+    //   NO RECIBIDO  = al menos una linea "No Recibido" o sin recepcion confirmada.
+    const docRecep=new Map();   // id -> {tienePend, tieneRec}
     filas.forEach((r,i)=>{
       const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
       if(!esAlistado(id)) return;
-      detalle.push({
-        'Traslado': r.traslado||'',
-        'Fecha': r.fecha ? dateToISO(r.fecha) : '',
-        'Bodega Origen': r.bodegaOrigen||'',
-        'Bodega Destino': r.bodegaDestino||'',
-        'Zona (destino)': r.zonaDestino||'N/D',
-        'Codigo': r.codigo||'',
-        'Descripcion': r.descripcion||'',
-        'Cantidad': r.cantidad||0,
-        'Estado Logístico': r.estadoLogistico||'',
-        'Recibido': r.recibido||'',
-        'Usuario': r.usuario||''
+      if(!docRecep.has(id)) docRecep.set(id, {tienePend:false, tieneRec:false});
+      const d=docRecep.get(id);
+      const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
+      if(est==='PENDIENTE') d.tienePend=true;
+      else if(est==='RECIBIDO') d.tieneRec=true;
+    });
+    const esRecibidoDoc=(id)=>{ const d=docRecep.get(id); return !!(d && d.tieneRec && !d.tienePend); };
+
+    const mapLinea=(r)=>({
+      'Traslado': r.traslado||'',
+      'Fecha': r.fecha ? dateToISO(r.fecha) : '',
+      'Bodega Origen': r.bodegaOrigen||'',
+      'Bodega Destino': r.bodegaDestino||'',
+      'Zona (destino)': r.zonaDestino||'N/D',
+      'Codigo': r.codigo||'',
+      'Descripcion': r.descripcion||'',
+      'Cantidad': r.cantidad||0,
+      'Estado Logístico': r.estadoLogistico||'',
+      'Recibido': r.recibido||'',
+      'Usuario': r.usuario||''
+    });
+
+    // Detalle linea a linea de los documentos alistados, separado por recepcion.
+    const detRec=[], detNoRec=[];
+    filas.forEach((r,i)=>{
+      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+      if(!esAlistado(id)) return;
+      (esRecibidoDoc(id) ? detRec : detNoRec).push(mapLinea(r));
+    });
+    if(!detRec.length && !detNoRec.length){ showToast('No hay traslados alistados para los filtros actuales.', true); return; }
+
+    // Resumen por Zona + Bodega Destino (traslados unicos y lineas) para un subconjunto.
+    const construirResumen=(incluir)=>{
+      const resMap=new Map();
+      filas.forEach((r,i)=>{
+        const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+        if(!esAlistado(id) || !incluir(id)) return;
+        const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
+        const zn=r.zonaDestino||'N/D';
+        const k=zn+'||'+bd;
+        if(!resMap.has(k)) resMap.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
+        const g=resMap.get(k); g.ids.add(id); g.lineas++;
       });
-    });
-    if(!detalle.length){ showToast('No hay traslados alistados para los filtros actuales.', true); return; }
+      const rows=[...resMap.values()].map(g=>({
+        'Zona': g.zona, 'Bodega Destino': g.bodega,
+        'Traslados alistados': g.ids.size,
+        'Líneas de artículo': g.lineas
+      })).sort((a,b)=> (b['Traslados alistados']-a['Traslados alistados']) || a['Bodega Destino'].localeCompare(b['Bodega Destino'],'es'));
+      const totDocs=rows.reduce((a,g)=>a+g['Traslados alistados'],0);
+      const totLin=rows.reduce((a,g)=>a+g['Líneas de artículo'],0);
+      if(rows.length) rows.push({'Zona':'','Bodega Destino':'TOTAL ('+rows.length+(rows.length===1?' bodega)':' bodegas)'),
+        'Traslados alistados':totDocs,'Líneas de artículo':totLin});
+      else rows.push({'Zona':'','Bodega Destino':'(sin traslados para este estado)','Traslados alistados':0,'Líneas de artículo':0});
+      return {rows, totDocs};
+    };
+    const resRec=construirResumen(id=>esRecibidoDoc(id));
+    const resNoRec=construirResumen(id=>!esRecibidoDoc(id));
 
-    // Resumen por Bodega Destino (traslados únicos alistados).
-    const resMap=new Map();
-    filas.forEach((r,i)=>{
-      const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
-      if(!esAlistado(id)) return;
-      const bd=r.bodegaDestino||'SIN BODEGA DESTINO';
-      const zn=r.zonaDestino||'N/D';
-      const k=zn+'||'+bd;
-      if(!resMap.has(k)) resMap.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
-      const g=resMap.get(k); g.ids.add(id); g.lineas++;
-    });
-    const resumen=[...resMap.values()].map(g=>({
-      'Zona': g.zona, 'Bodega Destino': g.bodega,
-      'Traslados alistados': g.ids.size,
-      'Líneas de artículo': g.lineas
-    })).sort((a,b)=> (b['Traslados alistados']-a['Traslados alistados']) || a['Bodega Destino'].localeCompare(b['Bodega Destino'],'es'));
-    const totDocs=resumen.reduce((a,g)=>a+g['Traslados alistados'],0);
-    resumen.push({'Zona':'','Bodega Destino':'TOTAL ('+resumen.length+(resumen.length===1?' bodega)':' bodegas)'),
-      'Traslados alistados':totDocs,'Líneas de artículo':detalle.length});
-
+    const hojaDet=(arr)=> arr.length ? arr : [{'Traslado':'(sin traslados para este estado)'}];
     const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Alistados');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Líneas');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resRec.rows),      'Alistados (Recibidos)');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet(detRec)),   'Detalle Lineas (Recibidos)');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resNoRec.rows),    'Alistados (No Recibidos)');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet(detNoRec)),'Detalle Lineas (No Recibidos)');
     const fecha=new Date().toISOString().slice(0,10);
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_Alistados'+suf+'_'+fecha+'.xlsx');
-    showToast('Excel exportado: '+fmtInt(totDocs)+' traslado(s) alistados ('+fmtInt(detalle.length)+' líneas).');
+    showToast('Excel exportado: '+fmtInt(resRec.totDocs)+' recibido(s) / '+fmtInt(resNoRec.totDocs)+' no recibido(s) · '+fmtInt(detRec.length+detNoRec.length)+' líneas.');
   });
 })();
 
