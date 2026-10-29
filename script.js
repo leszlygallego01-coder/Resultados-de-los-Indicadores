@@ -3190,35 +3190,100 @@ function renderSegMeses(rows, corteGlobal){
   bodyEl.innerHTML = html;
 }
 
-function renderAllTablesFromCache(){
+/* =========================================================================
+   FILTRADO BAJO DEMANDA (Lazy Filtering)
+   -------------------------------------------------------------------------
+   Antes, "Aplicar filtro" (y cada cambio de bodega/zona) recalculaba TODAS las
+   secciones del visor a la vez, lo que disparaba el tiempo de respuesta. Ahora:
+     - al aplicar un filtro solo se recalcula la SECCION ACTIVA;
+     - las demas secciones quedan marcadas como "desactualizadas" (stale) y se
+       recalculan unicamente cuando el usuario entra en ellas (ver el manejador
+       de las pestanas).
+   El control es una version global de filtros (filterVersion) que sube cada vez
+   que cambia cualquier filtro; cada seccion recuerda con que version se pinto por
+   ultima vez (seccionVersion). Si no coinciden, la seccion esta desactualizada. */
+let filterVersion = 0;
+const seccionVersion = {};   // sub -> filterVersion con la que se pinto por ultima vez
+
+function subActivo(){
+  const b = document.querySelector('.result-tabs button[data-sub].active');
+  return b ? b.dataset.sub : 'dispensa';
+}
+function seccionDesactualizada(sub){
+  return seccionVersion[sub] !== filterVersion;
+}
+
+/* Recalcula y repinta UNA sola seccion a partir del filteredRowsCache vigente.
+   Reproduce exactamente lo que antes hacia renderAllTablesFromCache para esa
+   seccion (mas los render que solo se llamaban al activar la pestana). */
+function renderSeccion(sub){
+  if(!filteredRowsCache) return;
   const bodegaSearch = getBodegaFiltro();
   const zona = document.getElementById('fZona').value;
-  // Los indicadores muestran el estado ACTUAL: solo la última versión de cada línea.
-  // Si una línea pendiente se recargó después como entregada, la versión vieja ya no suma.
+  // Los indicadores muestran el estado ACTUAL: solo la ultima version de cada linea.
   const rowsVigentes = filteredRowsCache.filter(r=>r.versionVigente!==false);
-  renderIndicadorDispensa(rowsVigentes, bodegaSearch, zona);
-  renderIndicadorLinea(rowsVigentes, bodegaSearch, zona);
-  renderIndicadorSoporteEvento(rowsVigentes.filter(r=>r.contrato==='EVENTO'), bodegaSearch, zona);
-  renderIndicadorSoporteCapita(rowsVigentes.filter(r=>r.contrato==='CAPITA'), bodegaSearch, zona);
-  // El Reporte Comparativo es un CONSOLIDADO: se calcula con el corte final y sin los
-  // filtros de pantalla (contrato, EPS, zona…) para que sus cifras queden fijas. ÚNICA
-  // excepción: respeta la VENTANA DE FECHAS de la cabecera (FECHA DESDE/HASTA), de modo
-  // que un cargue acotado a un rango no arrastre meses fuera de ese rango.
-  renderComparativos(filasConsolidado());
-  // El seguimiento por corte sí sigue los filtros: necesita el historial completo de
-  // versiones y toma la versión vigente al cierre de cada corte.
-  renderSeguimientoBodega(filteredRowsCache, bodegaSearch, zona);
-  renderIndicadorInactivas(rowsVigentes, bodegaSearch, zona);
-  if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
-  // Base cuentas: la matriz usa el estado actual de las líneas.
-  if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
-  // Base supervisores: el consumo promedio mes es un CONSOLIDADO de todos los meses,
-  // asi que se alimenta de las filas vigentes de TODA la carga, sin filtros de mes,
-  // fecha ni corte. Los filtros de bodega y zona solo eligen que filas se muestran.
-  if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(filasConsolidadoVigentes(), bodegaSearch, zona);
-  // El detalle por factura usa la cantidad pendiente del reporte, así que se
-  // repinta cada vez que cambian los filtros generales.
-  if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
+  switch(sub){
+    case 'dispensa':
+      renderIndicadorDispensa(rowsVigentes, bodegaSearch, zona);
+      // El Reporte Comparativo es un CONSOLIDADO (corte final, sin filtros de pantalla,
+      // salvo la ventana de fechas). Pinta cmpDispensaRow y cmpLineaRow.
+      renderComparativos(filasConsolidado());
+      // El seguimiento por corte SI sigue los filtros (historial completo de versiones).
+      renderSeguimientoBodega(filteredRowsCache, bodegaSearch, zona);
+      break;
+    case 'linea':
+      renderIndicadorLinea(rowsVigentes, bodegaSearch, zona);
+      renderComparativos(filasConsolidado());
+      break;
+    case 'soporte':
+      renderIndicadorSoporteEvento(rowsVigentes.filter(r=>r.contrato==='EVENTO'), bodegaSearch, zona);
+      renderIndicadorSoporteCapita(rowsVigentes.filter(r=>r.contrato==='CAPITA'), bodegaSearch, zona);
+      break;
+    case 'inactivas':
+      renderIndicadorInactivas(rowsVigentes, bodegaSearch, zona);
+      break;
+    case 'traslados':
+      if(typeof renderIndicadorTraslados==='function') renderIndicadorTraslados();
+      break;
+    case 'trazabilidad':
+      if(typeof renderTrazabilidad==='function') renderTrazabilidad();
+      break;
+    case 'facturas':
+      if(typeof renderInfoPorFactura==='function') renderInfoPorFactura();
+      break;
+    case 'invfisico':
+      if(typeof refrescarInvFisico==='function') refrescarInvFisico(true);
+      break;
+    case 'cohortes':
+      if(typeof renderCohortes==='function') renderCohortes(rowsVigentes, bodegaSearch, zona);
+      break;
+    case 'cuentas':
+      if(typeof renderBaseCuentas==='function') renderBaseCuentas(rowsVigentes, bodegaSearch, zona, filteredRowsCache);
+      if(typeof pintarBaseCuentas==='function') pintarBaseCuentas();
+      break;
+    case 'supervisores':
+      // Consolidado de todos los meses (sin filtros de mes/fecha/corte); bodega/zona eligen que se ve.
+      if(typeof renderBaseSupervisores==='function') renderBaseSupervisores(filasConsolidadoVigentes(), bodegaSearch, zona);
+      if(typeof pintarBaseSupervisores==='function') pintarBaseSupervisores();
+      break;
+  }
+  seccionVersion[sub] = filterVersion;
+}
+
+/* Reemplaza al antiguo render "de todo": sube la version global (deja el resto de
+   secciones desactualizadas) y recalcula SOLO la seccion activa en ese momento. */
+function renderAllTablesFromCache(){
+  filterVersion++;
+  renderSeccion(subActivo());
+}
+
+/* Render completo e inmediato de TODAS las secciones. Se conserva por si en algun
+   flujo puntual se necesita forzar el recalculo global (no se usa en el camino de
+   "Aplicar filtro"). */
+function renderTodasLasSecciones(){
+  filterVersion++;
+  ['dispensa','linea','soporte','inactivas','traslados','trazabilidad',
+   'facturas','invfisico','cohortes','cuentas','supervisores'].forEach(renderSeccion);
 }
 
 /* =========================================================================
@@ -9843,15 +9908,14 @@ document.querySelectorAll('.result-tabs button').forEach(b=>{
     b.classList.add('active');
     document.querySelectorAll('.subview').forEach(v=>v.classList.remove('active'));
     document.getElementById('sub-'+b.dataset.sub).classList.add('active');
-    if(b.dataset.sub==='facturas' && typeof renderInfoPorFactura==='function'){
-      renderInfoPorFactura();
-      if(typeof ensureFacturasData==='function') ensureFacturasData().then(()=>renderInfoPorFactura());
+    const sub = b.dataset.sub;
+    // LAZY FILTERING: si la seccion quedo desactualizada por un filtro aplicado
+    // mientras estaba en otra pestana, se recalcula AHORA (al entrar) y no antes.
+    if(seccionDesactualizada(sub)) renderSeccion(sub);
+    // Facturas carga datos extra de forma asincrona: se asegura y se repinta al llegar.
+    if(sub==='facturas' && typeof ensureFacturasData==='function'){
+      ensureFacturasData().then(()=>{ if(typeof renderInfoPorFactura==='function') renderInfoPorFactura(); });
     }
-    if(b.dataset.sub==='traslados' && typeof renderIndicadorTraslados==='function') renderIndicadorTraslados();
-    if(b.dataset.sub==='trazabilidad' && typeof renderTrazabilidad==='function') renderTrazabilidad();
-    if(b.dataset.sub==='invfisico' && typeof refrescarInvFisico==='function') refrescarInvFisico(true);
-    if(b.dataset.sub==='cuentas' && typeof pintarBaseCuentas==='function') pintarBaseCuentas();
-    if(b.dataset.sub==='supervisores' && typeof pintarBaseSupervisores==='function') pintarBaseSupervisores();
   });
 });
 
