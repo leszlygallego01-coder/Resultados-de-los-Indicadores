@@ -6334,6 +6334,82 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
  }
 });
 
+/* ---- Descargar "EPS por Bodega Detalle" -------------------------------------
+   Lista, por cada Bodega Detalle, TODAS las EPS distintas que dispensa, repartidas
+   una por columna: EPS 1, EPS 2, EPS 3... (la cantidad de columnas se ajusta a la
+   bodega que mas EPS maneje). Respeta los filtros activos en pantalla (fecha,
+   modalidad, EPS, EPS consolidada, diagnostico, bodega y zona) y usa solo la ultima
+   version de cada linea y dispensas activas, igual que el Analisis ABC.
+   El nombre de la EPS se toma CONSOLIDADO (EPS "madre"), para no duplicar la misma
+   EPS por sus regimenes (CONTRIBUTIVO/SUBSIDIADO/TUTELAS). */
+function nombreEpsConsolidada(r){
+  const g = String(r && r.epsGrupo || '').trim();
+  if(g && g.toUpperCase()!=='N/D') return g;
+  const e = String(r && r.eps || '').trim();
+  return e || '';
+}
+document.getElementById('btnExportarEpsBodega').addEventListener('click', ()=>{
+ try{
+  let baseRows = filasBaseExport();
+  if(!baseRows.length){ showToast('Primero pulsa "Calcular indicadores" para tener datos de EPS por bodega.', true); return; }
+  if(typeof XLSX==='undefined'){ showToast('No se pudo cargar la libreria de Excel. Revisa tu conexion a internet y recarga.', true); return; }
+  const bodegaSearch = getBodegaFiltro();
+  const zonaSel = document.getElementById('fZona');
+  const zona = zonaSel ? zonaSel.value : '';
+  // Estado ACTUAL: solo la ultima version de cada linea y solo dispensas activas.
+  const vigentes = soloActivas(baseRows.filter(r=>r.versionVigente!==false));
+  const grupos = groupByBodega(vigentes, bodegaSearch, zona);
+  if(!grupos.length){ showToast('No hay bodegas que cumplan los filtros actuales.', true); return; }
+
+  // Para cada bodega, el conjunto de EPS distintas que dispensa (orden alfabetico).
+  const filas = grupos.map(g=>{
+    const set = new Set();
+    g.rows.forEach(r=>{ const e = nombreEpsConsolidada(r); if(e) set.add(e); });
+    const eps = Array.from(set).sort((a,b)=>a.localeCompare(b,'es'));
+    return { zona:g.zona || '', bodega:g.bodega, eps };
+  });
+  // Numero maximo de EPS en una sola bodega: define cuantas columnas EPS N se crean.
+  const maxEps = filas.reduce((m,f)=>Math.max(m, f.eps.length), 0) || 1;
+
+  // Encabezados: Zona, Bodega Detalle, Cantidad de EPS y luego EPS 1..EPS maxEps.
+  const header = ['Zona','Bodega Detalle','Cantidad de EPS'];
+  for(let i=1;i<=maxEps;i++) header.push('EPS '+i);
+
+  const datos = filas.map(f=>{
+    const o = { 'Zona':f.zona, 'Bodega Detalle':f.bodega, 'Cantidad de EPS':f.eps.length };
+    for(let i=0;i<maxEps;i++) o['EPS '+(i+1)] = f.eps[i] || '';
+    return o;
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos, { header });
+  const cols = [{wch:16},{wch:34},{wch:14}];
+  for(let i=1;i<=maxEps;i++) cols.push({wch:26});
+  ws['!cols'] = cols;
+  XLSX.utils.book_append_sheet(wb, ws, 'EPS POR BODEGA');
+
+  // Hoja de criterio, para dejar claro el alcance del reporte.
+  const totalEpsDistintas = new Set();
+  filas.forEach(f=>f.eps.forEach(e=>totalEpsDistintas.add(e)));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
+    'Reporte': 'EPS que dispensa cada Bodega Detalle (una EPS por columna: EPS 1, EPS 2, EPS 3...)',
+    'EPS consideradas': 'Nombre consolidado de la EPS (se unen los regimenes de una misma EPS)',
+    'Bodegas en el reporte': filas.length,
+    'Maximo de EPS en una bodega': maxEps,
+    'EPS distintas en total': totalEpsDistintas.size,
+    'Filtro de bodega': getBodegaFiltroTexto() || '(todas)',
+    'Zona': zona || '(todas)',
+    'Alcance': 'Solo dispensas activas (se excluye INACTIVO), ultima version de cada linea, segun los filtros aplicados'
+  }]), 'CRITERIO');
+
+  XLSX.writeFile(wb, 'EPS_por_Bodega_Detalle_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('Descargado: EPS por bodega de '+fmtInt(filas.length)+' bodega(s) · hasta '+maxEps+' EPS por bodega · '+fmtInt(totalEpsDistintas.size)+' EPS distintas.');
+ }catch(err){
+  console.error('Error al generar el reporte de EPS por bodega:', err);
+  showToast('Error al generar el reporte de EPS por bodega: '+(err && err.message ? err.message : err), true);
+ }
+});
+
 /* ---- Descargar "Cantidad Autorizada = 0" por Bodega Detalle ------------------
    Cuenta cuántas LÍNEAS de cada Bodega Detalle vienen con Cantidad Autorizada en 0
    (es decir, la línea existe en el reporte pero no tiene cantidad autorizada).
