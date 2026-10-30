@@ -6335,13 +6335,19 @@ document.getElementById('btnExportarABC').addEventListener('click', ()=>{
 });
 
 /* ---- Descargar "EPS por Bodega Detalle" -------------------------------------
-   Lista, por cada Bodega Detalle, TODAS las EPS distintas que dispensa, repartidas
-   una por columna: EPS 1, EPS 2, EPS 3... (la cantidad de columnas se ajusta a la
-   bodega que mas EPS maneje). Respeta los filtros activos en pantalla (fecha,
-   modalidad, EPS, EPS consolidada, diagnostico, bodega y zona) y usa solo la ultima
-   version de cada linea y dispensas activas, igual que el Analisis ABC.
+   Lista, por cada Bodega Detalle, las EPS que dispensa repartidas una por columna
+   (EPS 1, EPS 2, EPS 3...). El ORDEN de las columnas es FIJO: cada EPS ocupa siempre
+   la misma posicion en todas las filas (NUEVA EPS = EPS 1, ASMET SALUD = EPS 2, y asi
+   sucesivamente, segun EPS_ORDEN_INFORME). Si una bodega NO dispensa una EPS, su celda
+   queda vacia, pero la columna de esa EPS no se mueve: asi las columnas son comparables
+   entre bodegas. Respeta los filtros activos en pantalla (fecha, modalidad, EPS, EPS
+   consolidada, diagnostico, bodega y zona) y usa solo la ultima version de cada linea y
+   dispensas activas, igual que el Analisis ABC.
    El nombre de la EPS se toma CONSOLIDADO (EPS "madre"), para no duplicar la misma
    EPS por sus regimenes (CONTRIBUTIVO/SUBSIDIADO/TUTELAS). */
+/* ORDEN FIJO de las columnas EPS del informe. Edita esta lista para cambiar el orden:
+   la primera EPS sera siempre la columna "EPS 1", la segunda "EPS 2", etc. */
+const EPS_ORDEN_INFORME = ['NUEVA EPS','ASMET SALUD','COMFENALCO','COOSALUD','CRUZ VERDE','FAMILIAR','FAMISANAR','FIDEICOMISOS','MAISFEN','POSITIVA','S.O.S','SANITAS'];
 function nombreEpsConsolidada(r){
   const g = String(r && r.epsGrupo || '').trim();
   if(g && g.toUpperCase()!=='N/D') return g;
@@ -6361,41 +6367,60 @@ document.getElementById('btnExportarEpsBodega').addEventListener('click', ()=>{
   const grupos = groupByBodega(vigentes, bodegaSearch, zona);
   if(!grupos.length){ showToast('No hay bodegas que cumplan los filtros actuales.', true); return; }
 
-  // Para cada bodega, el conjunto de EPS distintas que dispensa (orden alfabetico).
+  // Para cada bodega, el CONJUNTO de EPS distintas que dispensa (sin orden propio:
+  // el orden lo impone EPS_ORDEN_INFORME mas abajo).
   const filas = grupos.map(g=>{
     const set = new Set();
     g.rows.forEach(r=>{ const e = nombreEpsConsolidada(r); if(e) set.add(e); });
-    const eps = Array.from(set).sort((a,b)=>a.localeCompare(b,'es'));
-    return { zona:g.zona || '', bodega:g.bodega, eps };
+    return { zona:g.zona || '', bodega:g.bodega, set };
   });
-  // Numero maximo de EPS en una sola bodega: define cuantas columnas EPS N se crean.
-  const maxEps = filas.reduce((m,f)=>Math.max(m, f.eps.length), 0) || 1;
 
-  // Encabezados: Zona, Bodega Detalle, Cantidad de EPS y luego EPS 1..EPS maxEps.
+  // Columnas EPS en ORDEN FIJO: primero las EPS de EPS_ORDEN_INFORME (siempre presentes,
+  // aunque alguna quede vacia en el filtro actual), y al final cualquier EPS extra que
+  // aparezca en los datos y no este en la lista (asi no se pierde ninguna informacion).
+  const normEps = s => String(s||'').trim().toUpperCase();
+  const ordenNorm = EPS_ORDEN_INFORME.map(normEps);
+  const extras = [];
+  filas.forEach(f=>f.set.forEach(e=>{
+    if(ordenNorm.indexOf(normEps(e))<0 && extras.map(normEps).indexOf(normEps(e))<0) extras.push(e);
+  }));
+  extras.sort((a,b)=>a.localeCompare(b,'es'));
+  const columnasEps = EPS_ORDEN_INFORME.concat(extras); // nombre de EPS por cada columna, en orden fijo
+
+  // Encabezados: Zona, Bodega Detalle, Cantidad de EPS y luego EPS 1..EPS N.
   const header = ['Zona','Bodega Detalle','Cantidad de EPS'];
-  for(let i=1;i<=maxEps;i++) header.push('EPS '+i);
+  for(let i=1;i<=columnasEps.length;i++) header.push('EPS '+i);
 
   const datos = filas.map(f=>{
-    const o = { 'Zona':f.zona, 'Bodega Detalle':f.bodega, 'Cantidad de EPS':f.eps.length };
-    for(let i=0;i<maxEps;i++) o['EPS '+(i+1)] = f.eps[i] || '';
+    const o = { 'Zona':f.zona, 'Bodega Detalle':f.bodega };
+    const tiene = epsName => Array.from(f.set).some(e=>normEps(e)===normEps(epsName));
+    let cuenta = 0;
+    columnasEps.forEach((epsName,i)=>{
+      const marca = tiene(epsName);
+      if(marca) cuenta++;
+      // Cada EPS ocupa SIEMPRE su columna fija; vacia si la bodega no la dispensa.
+      o['EPS '+(i+1)] = marca ? epsName : '';
+    });
+    o['Cantidad de EPS'] = cuenta;
     return o;
   });
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(datos, { header });
   const cols = [{wch:16},{wch:34},{wch:14}];
-  for(let i=1;i<=maxEps;i++) cols.push({wch:26});
+  for(let i=1;i<=columnasEps.length;i++) cols.push({wch:26});
   ws['!cols'] = cols;
   XLSX.utils.book_append_sheet(wb, ws, 'EPS POR BODEGA');
 
-  // Hoja de criterio, para dejar claro el alcance del reporte.
+  // Hoja de criterio, para dejar claro el alcance y el orden fijo de las columnas.
   const totalEpsDistintas = new Set();
-  filas.forEach(f=>f.eps.forEach(e=>totalEpsDistintas.add(e)));
+  filas.forEach(f=>f.set.forEach(e=>totalEpsDistintas.add(e)));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{
-    'Reporte': 'EPS que dispensa cada Bodega Detalle (una EPS por columna: EPS 1, EPS 2, EPS 3...)',
+    'Reporte': 'EPS que dispensa cada Bodega Detalle (una EPS por columna, en orden fijo)',
+    'Orden fijo de columnas': columnasEps.map((e,i)=>'EPS '+(i+1)+' = '+e).join(' | '),
     'EPS consideradas': 'Nombre consolidado de la EPS (se unen los regimenes de una misma EPS)',
     'Bodegas en el reporte': filas.length,
-    'Maximo de EPS en una bodega': maxEps,
+    'Columnas EPS': columnasEps.length,
     'EPS distintas en total': totalEpsDistintas.size,
     'Filtro de bodega': getBodegaFiltroTexto() || '(todas)',
     'Zona': zona || '(todas)',
@@ -6403,7 +6428,7 @@ document.getElementById('btnExportarEpsBodega').addEventListener('click', ()=>{
   }]), 'CRITERIO');
 
   XLSX.writeFile(wb, 'EPS_por_Bodega_Detalle_'+new Date().toISOString().slice(0,10)+'.xlsx');
-  showToast('Descargado: EPS por bodega de '+fmtInt(filas.length)+' bodega(s) · hasta '+maxEps+' EPS por bodega · '+fmtInt(totalEpsDistintas.size)+' EPS distintas.');
+  showToast('Descargado: EPS por bodega de '+fmtInt(filas.length)+' bodega(s) · '+columnasEps.length+' columnas EPS en orden fijo · '+fmtInt(totalEpsDistintas.size)+' EPS distintas.');
  }catch(err){
   console.error('Error al generar el reporte de EPS por bodega:', err);
   showToast('Error al generar el reporte de EPS por bodega: '+(err && err.message ? err.message : err), true);
