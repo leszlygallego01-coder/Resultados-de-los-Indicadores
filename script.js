@@ -7015,12 +7015,25 @@ function calcularRotacionPorBodega(rowsVigentes, bodegaSearch, zona){
       const pendientes = lineas.filter(r=>lineaEsPendiente(r));
       if(!pendientes.length) return;                 // ya entregada: no aplica
       let sinHomologo = false;
+      /* Homólogo "basura" (0/0/0/N, ///N, 0-0-NA, solo ceros/NA/N...): estas líneas NO tienen
+         un código homólogo real, por lo que su clave homólogo+bodega colapsa en el inventario
+         y hace que varios medicamentos distintos COMPARTAN la misma existenciaPunto (bug 221u).
+         Regla de negocio: si CUALQUIER línea de la dispensa trae un homólogo basura, se descarta
+         la dispensa COMPLETA (Hoja 1 + Hoja 2), no solo la línea, porque su existencia no es
+         verificable de forma fiable. */
+      const tieneHomologoBasura = lineas.some(r=>{
+        const h = String(r.homologo||'').trim();
+        return h && !homologoValido(h);              // homólogo presente pero inválido/nulo
+      });
+      if(tieneHomologoBasura){ sinHomologo = true; }
       const demanda = new Map();                     // homólogo -> cantidad pendiente de ESTA dispensa
       const exist   = new Map();                     // homólogo -> existencia del punto (mismo valor por homólogo+bodega)
       const rot     = new Map();                     // homólogo -> promedio de rotación (stock de seguridad por homólogo+bodega)
       pendientes.forEach(r=>{
         const h = String(r.homologo||'').trim();
-        if(!h){ sinHomologo = true; return; }        // sin homólogo: no se puede verificar existencia
+        if(!h || !homologoValido(h)){ sinHomologo = true; return; }  // sin homólogo o homólogo basura: no se puede verificar existencia
+        // Al quedar solo homólogos válidos, existenciaPunto es la existencia ESPECÍFICA de
+        // ese homólogo en esa bodega (suma de sus códigos homologados), no un consolidado global.
         demanda.set(h, (demanda.get(h)||0) + Math.abs(toNumber(r.diferencia)));
         exist.set(h, toNumber(r.existenciaPunto));
         rot.set(h, rotDeLinea(r));
@@ -7105,16 +7118,14 @@ function calcularRotacionPorBodega(rowsVigentes, bodegaSearch, zona){
       'Fecha de Dispensación': d.fechaDispensacion,
       'Contrato': d.contrato,
       'EPS': d.eps,
-      'Líneas totales': d.lineasTotales,
       'Líneas pendientes': d.lineasPendientes,
-      'Líneas entregadas': d.lineasEntregadas,
       'Cantidad pendiente total': d.cantidadPendiente
     }));
     // Fila TOTAL
     const totD = dispensasCerrables.length;
     const totLP = resumen.reduce((s,r)=>s+r['Líneas pendientes'],0);
     const totCP = resumen.reduce((s,r)=>s+r['Cantidad pendiente total'],0);
-    resumen.push({'Zona':'TOTAL','Bodega Detalle':'','Documento':fmtInt(totD)+' dispensa(s)','Fecha de Dispensación':'','Contrato':'','EPS':'','Líneas totales':'','Líneas pendientes':totLP,'Líneas entregadas':'','Cantidad pendiente total':totCP});
+    resumen.push({'Zona':'TOTAL','Bodega Detalle':'','Documento':fmtInt(totD)+' dispensa(s)','Fecha de Dispensación':'','Contrato':'','EPS':'','Líneas pendientes':totLP,'Cantidad pendiente total':totCP});
 
     // Hoja 2: Detalle de las líneas pendientes de cada dispensa cerrable
     const detalle = [];
