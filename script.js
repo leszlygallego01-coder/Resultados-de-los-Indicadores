@@ -2364,6 +2364,8 @@ async function calcularIndicadores(){
         // Zona de la bodega DESTINO (tabla Bodega y Zona). Permite agrupar y filtrar
         // los traslados recibidos por zona.
         zonaDestino: bodegaToZona.get(normValue(r.bodegaDestino)) || 'N/D',
+        // Zona de la bodega ORIGEN (tabla Bodega y Zona): zona que origina el traslado.
+        zonaOrigen: bodegaToZona.get(normValue(r.bodegaOrigen)) || 'N/D',
         // Departamento de la bodega DESTINO: permite aplicar el filtro global de Departamento.
         departamentoDestino: bodegaToDepto.get(normValue(r.bodegaDestino)) || 'N/D'
       };
@@ -7481,6 +7483,47 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
   });
 })();
 
+/* ---- Tipología de traslados (Análisis de Traslados) ------------------------
+   Clasifica cada traslado en 4 categorías según sus bodegas de origen/destino.
+   El match se hace por el CÓDIGO de la bodega (primer token del nombre), para ser
+   robusto ante pequeñas diferencias en el texto completo. Precedencia en el ORDEN
+   del requerimiento: 1) origen principal → Bodega a Puntos; 2) destino principal →
+   Puntos a Bodega; 3) destino SB08 → Averías y Vencimientos; 4) resto → entre Puntos. */
+function _codigoBodega(nombre){ return normValue(String(nombre||'').trim().split(/\s+/)[0]||''); }
+const _COD_ORIGEN_PRINCIPAL  = ['URG01','B09','CENDIS','B05'];   // Bodega a Puntos (origen)
+const _COD_DESTINO_PRINCIPAL = ['CENDIS','B09','B05'];           // Puntos a Bodega (destino)
+function clasificarTipologiaTraslado(bodOrigen, bodDestino){
+  const co=_codigoBodega(bodOrigen);
+  const cd=_codigoBodega(bodDestino);
+  if(_COD_ORIGEN_PRINCIPAL.indexOf(co)>=0)  return 'bodegaAPuntos';
+  if(_COD_DESTINO_PRINCIPAL.indexOf(cd)>=0)  return 'puntosABodega';
+  if(cd==='SB08')                            return 'sb08';
+  return 'entrePuntos';
+}
+/* Construye la hoja "Análisis de Traslados": cuenta traslados ÚNICOS (dedup por
+   número de traslado, no por línea) por categoría y arma la tabla resumen con %.
+   `lineas` son las filas ya mapeadas con llaves 'Traslado'/'Bodega Origen'/'Bodega Destino'. */
+function construirAnalisisTraslados(lineas){
+  const vistos=new Map();   // id de traslado -> categoría (un traslado cuenta una sola vez)
+  (lineas||[]).forEach((r,i)=>{
+    const tr=String(r['Traslado']||'').trim();
+    const id = tr ? ('T:'+tr) : ('F:'+i);
+    if(vistos.has(id)) return;
+    vistos.set(id, clasificarTipologiaTraslado(r['Bodega Origen'], r['Bodega Destino']));
+  });
+  const c={bodegaAPuntos:0, puntosABodega:0, sb08:0, entrePuntos:0};
+  vistos.forEach(cat=>{ c[cat]++; });
+  const total=c.bodegaAPuntos+c.puntosABodega+c.sb08+c.entrePuntos;
+  const pct=(n)=> total ? (Math.round((n/total)*1000)/10)+'%' : '0%';
+  return [
+    {'Tipología de Traslado':'Traslados de Bodega a Puntos',               'Cantidad de Traslados Únicos':c.bodegaAPuntos, '% del Total':pct(c.bodegaAPuntos)},
+    {'Tipología de Traslado':'Traslados de Puntos a Bodega',               'Cantidad de Traslados Únicos':c.puntosABodega, '% del Total':pct(c.puntosABodega)},
+    {'Tipología de Traslado':'Traslados a SB08 (Averías y Vencimientos)',  'Cantidad de Traslados Únicos':c.sb08,          '% del Total':pct(c.sb08)},
+    {'Tipología de Traslado':'Traslados entre Puntos',                     'Cantidad de Traslados Únicos':c.entrePuntos,   '% del Total':pct(c.entrePuntos)},
+    {'Tipología de Traslado':'Total General',                             'Cantidad de Traslados Únicos':total,           '% del Total': total ? '100%':'0%'}
+  ];
+}
+
 /* Descarga, a nivel de LÍNEA, los traslados que siguen PENDIENTES POR ALISTAR
    (Estado Logístico = Pendiente, columna M) para la Bodega Destino seleccionada o
    filtrada. Un traslado cuenta como pendiente por alistar si al menos una de sus
@@ -7524,6 +7567,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
         'Traslado': r.traslado||'',
         'Fecha': r.fecha ? dateToISO(r.fecha) : '',
         'Bodega Origen': r.bodegaOrigen||'',
+        'Zona (Origen)': r.zonaOrigen||'N/D',
         'Bodega Destino': r.bodegaDestino||'',
         'Zona (destino)': r.zonaDestino||'N/D',
         'Codigo': r.codigo||'',
@@ -7559,6 +7603,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), 'Pendientes por Alistar');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), 'Detalle Líneas');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detalle)), 'Análisis de Traslados');
     const fecha=new Date().toISOString().slice(0,10);
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_Pendientes_por_Alistar'+suf+'_'+fecha+'.xlsx');
@@ -7625,6 +7670,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
       'Traslado': r.traslado||'',
       'Fecha': r.fecha ? dateToISO(r.fecha) : '',
       'Bodega Origen': r.bodegaOrigen||'',
+      'Zona (Origen)': r.zonaOrigen||'N/D',
       'Bodega Destino': r.bodegaDestino||'',
       'Zona (destino)': r.zonaDestino||'N/D',
       'Codigo': r.codigo||'',
@@ -7677,6 +7723,7 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet(detRec)),   'Detalle Lineas (Recibidos)');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resNoRec.rows),    'Alistados (No Recibidos)');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet(detNoRec)),'Detalle Lineas (No Recibidos)');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detRec.concat(detNoRec))), 'Análisis de Traslados');
     const fecha=new Date().toISOString().slice(0,10);
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_Alistados'+suf+'_'+fecha+'.xlsx');
