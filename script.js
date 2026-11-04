@@ -7490,8 +7490,8 @@ document.getElementById('btnDescargarInactivasBodega').addEventListener('click',
    del requerimiento: 1) origen principal → Bodega a Puntos; 2) destino principal →
    Puntos a Bodega; 3) destino SB08 → Averías y Vencimientos; 4) resto → entre Puntos. */
 function _codigoBodega(nombre){ return normValue(String(nombre||'').trim().split(/\s+/)[0]||''); }
-const _COD_ORIGEN_PRINCIPAL  = ['URG01','B09','CENDIS','B05'];   // Bodega a Puntos (origen)
-const _COD_DESTINO_PRINCIPAL = ['CENDIS','B09','B05'];           // Puntos a Bodega (destino)
+const _COD_ORIGEN_PRINCIPAL  = ['B10','URG01','B09','CENDIS','B05'];   // Bodega a Puntos (origen) — 5 bodegas principales
+const _COD_DESTINO_PRINCIPAL = ['B10','URG01','B09','CENDIS','B05'];   // Puntos a Bodega (destino) — 5 bodegas principales
 function clasificarTipologiaTraslado(bodOrigen, bodDestino){
   const co=_codigoBodega(bodOrigen);
   const cd=_codigoBodega(bodDestino);
@@ -7521,6 +7521,48 @@ function construirAnalisisTraslados(lineas){
     {'Tipología de Traslado':'Traslados a SB08 (Averías y Vencimientos)',  'Cantidad de Traslados Únicos':c.sb08,          '% del Total':pct(c.sb08)},
     {'Tipología de Traslado':'Traslados entre Puntos',                     'Cantidad de Traslados Únicos':c.entrePuntos,   '% del Total':pct(c.entrePuntos)},
     {'Tipología de Traslado':'Total General',                             'Cantidad de Traslados Únicos':total,           '% del Total': total ? '100%':'0%'}
+  ];
+}
+
+/* Variante desglosada para el archivo de ALISTADOS: cuenta traslados ÚNICOS por
+   categoría, separando los que ya están RECIBIDOS de los NO RECIBIDOS, y agrega el
+   consolidado total con sus porcentajes. Cada documento pertenece a un solo estado
+   (recibido o no recibido), así que no hay doble conteo entre columnas. */
+function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
+  const contar=(lineas)=>{
+    const vistos=new Map();
+    (lineas||[]).forEach((r,i)=>{
+      const tr=String(r['Traslado']||'').trim();
+      const id = tr ? ('T:'+tr) : ('F:'+i);
+      if(vistos.has(id)) return;
+      vistos.set(id, clasificarTipologiaTraslado(r['Bodega Origen'], r['Bodega Destino']));
+    });
+    const c={bodegaAPuntos:0, puntosABodega:0, sb08:0, entrePuntos:0};
+    vistos.forEach(cat=>{ c[cat]++; });
+    return c;
+  };
+  const cr=contar(lineasRec), cn=contar(lineasNoRec);
+  const totR=cr.bodegaAPuntos+cr.puntosABodega+cr.sb08+cr.entrePuntos;
+  const totN=cn.bodegaAPuntos+cn.puntosABodega+cn.sb08+cn.entrePuntos;
+  const totG=totR+totN;
+  const pctR=(n)=> totR ? (Math.round((n/totR)*1000)/10)+'%' : '0%';
+  const pctN=(n)=> totN ? (Math.round((n/totN)*1000)/10)+'%' : '0%';
+  const pctT=(n)=> totG ? (Math.round((n/totG)*1000)/10)+'%' : '0%';
+  const fila=(label,key)=>({
+    'Tipología de Traslado':label,
+    'Cantidad (Recibidos)':cr[key],   '% Recibidos':pctR(cr[key]),
+    'Cantidad (No Recibidos)':cn[key], '% No Recibidos':pctN(cn[key]),
+    'Total Traslados Únicos':cr[key]+cn[key], '% del Total':pctT(cr[key]+cn[key])
+  });
+  return [
+    fila('Traslados de Bodega a Puntos','bodegaAPuntos'),
+    fila('Traslados de Puntos a Bodega','puntosABodega'),
+    fila('Traslados a SB08 (Averías y Vencimientos)','sb08'),
+    fila('Traslados entre Puntos','entrePuntos'),
+    {'Tipología de Traslado':'Total General',
+     'Cantidad (Recibidos)':totR,   '% Recibidos': totR ? '100%':'0%',
+     'Cantidad (No Recibidos)':totN, '% No Recibidos': totN ? '100%':'0%',
+     'Total Traslados Únicos':totG, '% del Total': totG ? '100%':'0%'}
   ];
 }
 
@@ -7723,7 +7765,7 @@ function construirAnalisisTraslados(lineas){
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet(detRec)),   'Detalle Lineas (Recibidos)');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resNoRec.rows),    'Alistados (No Recibidos)');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hojaDet(detNoRec)),'Detalle Lineas (No Recibidos)');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detRec.concat(detNoRec))), 'Análisis de Traslados');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTrasladosSplit(detRec, detNoRec)), 'Análisis de Traslados');
     const fecha=new Date().toISOString().slice(0,10);
     const suf = destino ? '_'+String(destino).replace(/[^\w\-]+/g,'_') : (zona ? '_'+String(zona).replace(/[^\w\-]+/g,'_') : '');
     XLSX.writeFile(wb, 'Traslados_Alistados'+suf+'_'+fecha+'.xlsx');
