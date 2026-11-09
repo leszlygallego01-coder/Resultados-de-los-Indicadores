@@ -7944,6 +7944,122 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
   });
 })();
 
+/* INDICADOR SECUNDARIO: traslados pendientes por recibir (en camino / No Recibido)
+   con REZAGO operativo real = antigüedad MAYOR a 10 días calendario desde hoy.
+   Se descuenta el tránsito logístico normal (10 días) para aislar la carga demorada.
+   Opera sobre TODA la base de traslados (respeta solo el filtro global de
+   Departamento), NO sobre los filtros de zona/bodega/usuario de la sección, para
+   reflejar el universo completo igual que las cifras generales del tablero. */
+(function(){
+  const btn=document.getElementById('btnDescargarTrasladosRezago');
+  if(!btn) return;
+  const DIAS_TRANSITO = 10;
+  btn.addEventListener('click', ()=>{
+    const all=trasladosDelDepartamento();
+    if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
+
+    // "Hoy" a medianoche para contar días calendario completos.
+    const hoy=new Date(); hoy.setHours(0,0,0,0);
+    const diasDesde=(f)=>{
+      if(!(f instanceof Date) || isNaN(f)) return null;
+      const d=new Date(f.getFullYear(), f.getMonth(), f.getDate());
+      return Math.floor((hoy.getTime()-d.getTime())/86400000);
+    };
+
+    // Base total = traslados ÚNICOS en toda la base (cualquier estado).
+    const idsBase=new Set();
+    all.forEach((r,i)=> idsBase.add(r.traslado ? 'T:'+r.traslado : 'F:'+i));
+    const totalBase=idsBase.size;
+
+    // Universo pendiente por recibir (en camino / No Recibido) a NIVEL DOCUMENTO:
+    // un documento está en camino si al menos una línea sigue "No Recibido". De cada
+    // documento se guarda su fecha (la más reciente entre sus líneas) y una fila
+    // representativa para el detalle.
+    const docs=new Map();  // id -> {id, pend, fecha, rep}
+    all.forEach((r,i)=>{
+      const id = r.traslado ? 'T:'+r.traslado : 'F:'+i;
+      const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
+      let d=docs.get(id);
+      if(!d){ d={id, pend:false, fecha:null, rep:r}; docs.set(id, d); }
+      if(est==='PENDIENTE') d.pend=true;
+      if(r.fecha instanceof Date && !isNaN(r.fecha)){
+        if(!d.fecha || r.fecha.getTime()>d.fecha.getTime()){ d.fecha=r.fecha; d.rep=r; }
+      }
+    });
+    const enCamino=[...docs.values()].filter(d=>d.pend);
+    const totalEnCamino=enCamino.length;
+    if(!totalEnCamino){ showToast('No hay traslados pendientes por recibir (en camino) en la base.', true); return; }
+
+    // Rezagados = en camino con antigüedad > 10 días calendario (se EXCLUYEN los
+    // generados en los últimos 10 días, que aún están en tránsito normal).
+    const rezagados=[];
+    let sinFecha=0;
+    enCamino.forEach(d=>{
+      const dias=diasDesde(d.fecha);
+      if(dias===null){ sinFecha++; return; }   // sin fecha: no se puede medir rezago
+      if(dias>DIAS_TRANSITO) rezagados.push({doc:d, dias});
+    });
+    const totalRezago=rezagados.length;
+
+    // Desglose por rango de días de retraso.
+    let r1120=0, r2130=0, rMas30=0;
+    rezagados.forEach(x=>{
+      if(x.dias<=20) r1120++;
+      else if(x.dias<=30) r2130++;
+      else rMas30++;
+    });
+
+    const pct=(n,base)=> base ? (Math.round((n/base)*1000)/10)+'%' : '0%';
+
+    // Hoja 1: Resumen del indicador.
+    const resumen=[
+      {'Métrica':'Base total de traslados (documentos únicos)','Cantidad':totalBase,'% vs base total':'100%','% vs en camino':''},
+      {'Métrica':'Pendientes por recibir / en camino (No Recibido)','Cantidad':totalEnCamino,'% vs base total':pct(totalEnCamino,totalBase),'% vs en camino':'100%'},
+      {'Métrica':'Pendientes con REZAGO (> '+DIAS_TRANSITO+' días)','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)},
+      {'Métrica':'  • Rango 11 a 20 días','Cantidad':r1120,'% vs base total':pct(r1120,totalBase),'% vs en camino':pct(r1120,totalEnCamino)},
+      {'Métrica':'  • Rango 21 a 30 días','Cantidad':r2130,'% vs base total':pct(r2130,totalBase),'% vs en camino':pct(r2130,totalEnCamino)},
+      {'Métrica':'  • Más de 30 días','Cantidad':rMas30,'% vs base total':pct(rMas30,totalBase),'% vs en camino':pct(rMas30,totalEnCamino)}
+    ];
+    if(sinFecha) resumen.push({'Métrica':'En camino sin fecha (no medibles)','Cantidad':sinFecha,'% vs base total':pct(sinFecha,totalBase),'% vs en camino':pct(sinFecha,totalEnCamino)});
+
+    // Hoja 2: Desglose por rango de días de retraso.
+    const rangoRow=(label,n)=>({'Rango de días de retraso':label,'Traslados únicos':n,'% de rezagados':pct(n,totalRezago),'% de en camino':pct(n,totalEnCamino)});
+    const porRango=[
+      rangoRow('11 a 20 días', r1120),
+      rangoRow('21 a 30 días', r2130),
+      rangoRow('Más de 30 días', rMas30),
+      {'Rango de días de retraso':'Total rezagados','Traslados únicos':totalRezago,'% de rezagados': totalRezago?'100%':'0%','% de en camino':pct(totalRezago,totalEnCamino)}
+    ];
+
+    // Hoja 3: Detalle de documentos rezagados (traslado único), de mayor a menor rezago.
+    const detalle=rezagados
+      .sort((a,b)=> b.dias-a.dias)
+      .map(x=>{
+        const r=x.doc.rep;
+        const rango = x.dias<=20 ? '11 a 20 días' : (x.dias<=30 ? '21 a 30 días' : 'Más de 30 días');
+        return {
+          'Traslado': r.traslado||'',
+          'Fecha del traslado': x.doc.fecha ? dateToISO(x.doc.fecha) : '',
+          'Días de rezago': x.dias,
+          'Rango de retraso': rango,
+          'Bodega Origen': r.bodegaOrigen||'',
+          'Zona (Origen)': r.zonaOrigen||'N/D',
+          'Bodega Destino': r.bodegaDestino||'',
+          'Zona (destino)': r.zonaDestino||'N/D',
+          'Usuario': r.usuario||''
+        };
+      });
+
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen),  'Resumen Rezago');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(porRango), 'Desglose por Rango');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
+    const fecha=new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+fecha+'.xlsx');
+    showToast('Rezago >'+DIAS_TRANSITO+' días: '+fmtInt(totalRezago)+' traslado(s) · '+pct(totalRezago,totalEnCamino)+' de los en camino · '+pct(totalRezago,totalBase)+' de la base.');
+  });
+})();
+
 /* Descarga solo las LÍNEAS NO HOMOLOGADAS de traslados (código que no existe en la
    tabla Homólogo), con las columnas pedidas: Código, Bodega Origen, Bodega Destino,
    Descripcion, Cantidad y Usuario. Respeta los filtros propios de la sección. */
