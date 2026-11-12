@@ -8053,6 +8053,8 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen),  'Resumen Rezago');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(porRango), 'Desglose por Rango');
+    // Análisis por TIPOLOGÍA, aplicado SOLO al universo rezagado (> 10 días).
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detalle)), 'Análisis de Traslados');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+fecha+'.xlsx');
