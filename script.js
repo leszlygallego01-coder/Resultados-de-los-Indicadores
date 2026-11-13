@@ -7966,24 +7966,38 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       return Math.floor((hoy.getTime()-d.getTime())/86400000);
     };
 
+    // Clave de DOCUMENTO. Importante: se arma con traslado + origen + destino porque
+    // el mismo número de traslado puede repetirse entre bodegas (o venir vacío).
+    // Si no se desambigua, varios traslados reales se fusionan en uno y el conteo
+    // queda corto (p.ej. 634 en vez del total real).
+    const docKey=(r,i)=>{
+      const tr=String(r.traslado||'').trim();
+      if(!tr) return 'F:'+i;                      // sin número: cada línea es su propio documento
+      return 'T:'+tr+'|'+String(r.bodegaOrigen||'').trim()+'|'+String(r.bodegaDestino||'').trim();
+    };
+
     // Base total = traslados ÚNICOS en toda la base (cualquier estado).
     const idsBase=new Set();
-    all.forEach((r,i)=> idsBase.add(r.traslado ? 'T:'+r.traslado : 'F:'+i));
+    all.forEach((r,i)=> idsBase.add(docKey(r,i)));
     const totalBase=idsBase.size;
 
     // Universo pendiente por recibir (en camino / No Recibido) a NIVEL DOCUMENTO:
     // un documento está en camino si al menos una línea sigue "No Recibido". De cada
-    // documento se guarda su fecha (la más reciente entre sus líneas) y una fila
-    // representativa para el detalle.
-    const docs=new Map();  // id -> {id, pend, fecha, rep}
+    // documento se guardan sus fechas (la más antigua mide el rezago, la más reciente
+    // se muestra aparte como evidencia de que la base tiene movimientos posteriores),
+    // su conteo de líneas pendientes y una fila representativa para el detalle.
+    const docs=new Map();  // id -> {id, pend, fecha, fechaMax, rep}
     all.forEach((r,i)=>{
-      const id = r.traslado ? 'T:'+r.traslado : 'F:'+i;
+      const id = docKey(r,i);
       const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
       let d=docs.get(id);
-      if(!d){ d={id, pend:false, fecha:null, rep:r}; docs.set(id, d); }
-      if(est==='PENDIENTE') d.pend=true;
+      if(!d){ d={id, pend:false, fecha:null, fechaMax:null, rep:r}; docs.set(id, d); }
+      if(est==='PENDIENTE'){ d.pend=true; d.lineasPend=(d.lineasPend||0)+1; }
       if(r.fecha instanceof Date && !isNaN(r.fecha)){
-        if(!d.fecha || r.fecha.getTime()>d.fecha.getTime()){ d.fecha=r.fecha; d.rep=r; }
+        if(!d.fechaMax || r.fecha.getTime()>d.fechaMax.getTime()) d.fechaMax=r.fecha;
+        // Fecha del documento = la MÁS ANTIGUA de sus líneas: es cuando el traslado
+        // salió y, por tanto, la que mide el rezago real (la más reciente lo escondería).
+        if(!d.fecha || r.fecha.getTime()<d.fecha.getTime()){ d.fecha=r.fecha; d.rep=r; }
       }
     });
     const enCamino=[...docs.values()].filter(d=>d.pend);
@@ -8000,6 +8014,12 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       if(dias>DIAS_TRANSITO) rezagados.push({doc:d, dias});
     });
     const totalRezago=rezagados.length;
+    // Fecha del documento rezagado MÁS RECIENTE con antigüedad > 10 días: si sale
+    // antes de ayer, es que la base de traslados viene desactualizada (no se ha
+    // sincronizado desde Drive) y por eso no aparecen rezagos de los últimos días.
+    const corteDetalle = rezagados.length
+      ? dateToISO(rezagados.reduce((a,b)=> a.doc.fecha>b.doc.fecha?a:b).doc.fecha)
+      : '(sin rezagados)';
 
     // Desglose por rango de días de retraso.
     let r1120=0, r2130=0, rMas30=0;
@@ -8013,6 +8033,8 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
 
     // Hoja 1: Resumen del indicador.
     const resumen=[
+      {'Métrica':'Fecha de corte (hoy)','Cantidad':dateToISO(hoy),'% vs base total':'','% vs en camino':''},
+      {'Métrica':'Corte efectivo del detalle (documento más reciente con rezago)','Cantidad': corteDetalle,'% vs base total':'','% vs en camino':''},
       {'Métrica':'Base total de traslados (documentos únicos)','Cantidad':totalBase,'% vs base total':'100%','% vs en camino':''},
       {'Métrica':'Pendientes por recibir / en camino (No Recibido)','Cantidad':totalEnCamino,'% vs base total':pct(totalEnCamino,totalBase),'% vs en camino':'100%'},
       {'Métrica':'Pendientes con REZAGO (> '+DIAS_TRANSITO+' días)','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)},
@@ -8031,7 +8053,8 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       {'Rango de días de retraso':'Total rezagados','Traslados únicos':totalRezago,'% de rezagados': totalRezago?'100%':'0%','% de en camino':pct(totalRezago,totalEnCamino)}
     ];
 
-    // Hoja 3: Detalle de documentos rezagados (traslado único), de mayor a menor rezago.
+    // Hoja 3: Detalle de documentos rezagados, UN RENGLÓN POR TRASLADO ÚNICO
+    // (no por línea), de mayor a menor rezago.
     const detalle=rezagados
       .sort((a,b)=> b.dias-a.dias)
       .map(x=>{
@@ -8042,6 +8065,8 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
           'Fecha del traslado': x.doc.fecha ? dateToISO(x.doc.fecha) : '',
           'Días de rezago': x.dias,
           'Rango de retraso': rango,
+          'Líneas no recibidas': (typeof x.doc.lineasPend==='number') ? x.doc.lineasPend : '',
+          'Último movimiento': (x.doc.fechaMax && x.doc.fecha && x.doc.fechaMax.getTime()!==x.doc.fecha.getTime()) ? dateToISO(x.doc.fechaMax) : '',
           'Bodega Origen': r.bodegaOrigen||'',
           'Zona (Origen)': r.zonaOrigen||'N/D',
           'Bodega Destino': r.bodegaDestino||'',
@@ -8056,8 +8081,10 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     // Análisis por TIPOLOGÍA, aplicado SOLO al universo rezagado (> 10 días).
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detalle)), 'Análisis de Traslados');
     // Traslados NO RECIBIDOS por USUARIO (conteo de traslados únicos por usuario).
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(all)), 'No Recibidos por Usuario');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino)), 'No Recibidos por Usuario');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
+    // Hoja de control: fecha de corte, universo y calidad de la llave del documento.
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+fecha+'.xlsx');
     showToast('Rezago >'+DIAS_TRANSITO+' días: '+fmtInt(totalRezago)+' traslado(s) · '+pct(totalRezago,totalEnCamino)+' de los en camino · '+pct(totalRezago,totalBase)+' de la base.');
@@ -8065,54 +8092,89 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
 })();
 
 /* Traslados NO RECIBIDOS por USUARIO.
-   Se calcula desde las LÍNEAS reales de la base (no desde documentos agrupados) para
-   que el conteo de traslados únicos, las líneas no recibidas y los días de rezago
-   sean consistentes con la hoja "Detalle Rezagados".
-   - Traslados no recibidos (únicos): número de DOCUMENTO distinto por usuario.
-   - Líneas no recibidas: filas cuya línea sigue "No Recibido".
-   - Máx. días de rezago: mayor antigüedad (días desde su fecha) entre sus traslados.
-   `lineas` son todas las filas de traslado del universo (ya filtradas por Departamento). */
-function construirNoRecibidosPorUsuario(lineas){
-  const esPend=(r)=> (('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido))==='PENDIENTE';
-  const hoy=new Date(); hoy.setHours(0,0,0,0);
-  const diasDe=(f)=>{
-    if(!(f instanceof Date) || isNaN(f)) return null;
-    const d=new Date(f.getFullYear(), f.getMonth(), f.getDate());
-    return Math.floor((hoy.getTime()-d.getTime())/86400000);
-  };
-  const map=new Map();   // usuario -> {docs:Map(id->maxDias), lineas:n}
-  (lineas||[]).forEach((r,i)=>{
-    const est=esPend(r);
+   Recibe los MISMOS documentos del universo "en camino" que alimenta el Detalle
+   Rezagados, para que ambos bloques cuadren siempre (una sola fuente de verdad):
+     - traslados no recibidos (únicos): cuántos documentos tiene el usuario,
+     - líneas no recibidas: líneas de esos documentos que siguen "No Recibido",
+     - máx. días de rezago: antigüedad del documento más viejo del usuario.
+   `docs` = [{id, pend, fecha, fechaMax, rep, lineas?, lineasPend?}] */
+function construirNoRecibidosPorUsuario(docs){
+  const map=new Map();   // usuario -> {docs:Set, lineas:n, maxDias:n|-1}
+  (docs||[]).forEach(d=>{
+    if(!d || !d.pend || !d.rep) return;                 // solo lo que sigue en camino
+    const r=d.rep;
     const us=String(r.usuario||'').trim() || 'SIN USUARIO';
-    if(!map.has(us)) map.set(us, {docs:new Map(), lineas:0});
+    if(!map.has(us)) map.set(us, {docs:new Set(), lineas:0, maxDias:-1});
     const g=map.get(us);
-    const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
-    if(est){
-      g.lineas++;
-      const dias=diasDe(r.fecha);
-      if(dias!==null){
-        const prev=g.docs.get(id);
-        if(prev===undefined || dias>prev) g.docs.set(id, dias);
-      } else if(!g.docs.has(id)) g.docs.set(id, null);
-    }
+    g.docs.add(d.id);
+    g.lineas += (typeof d.lineasPend==='number') ? d.lineasPend : 1;
+    if(d.dias!==null && typeof d.dias==='number' && d.dias>g.maxDias) g.maxDias=d.dias;
   });
-  const rows=[...map.entries()].filter(([,g])=>g.docs.size>0).map(([us,g])=>{
-    const diasArr=[...g.docs.values()].filter(v=>typeof v==='number');
-    return {
-      'Usuario': us,
-      'Traslados no recibidos (únicos)': g.docs.size,
-      'Líneas no recibidas': g.lineas,
-      'Máx. días de rezago': diasArr.length ? Math.max(...diasArr) : ''
-    };
-  }).sort((a,b)=> (b['Traslados no recibidos (únicos)']-a['Traslados no recibidos (únicos)'])
+  const rows=[...map.entries()].map(([us,g])=>({
+    'Usuario': us,
+    'Traslados no recibidos (únicos)': g.docs.size,
+    'Líneas no recibidas': g.lineas,
+    'Máx. días de rezago': g.maxDias>=0 ? g.maxDias : ''
+  })).sort((a,b)=> (b['Traslados no recibidos (únicos)']-a['Traslados no recibidos (únicos)'])
       || a['Usuario'].localeCompare(b['Usuario'],'es'));
   const out=rows.map((r,i)=> Object.assign({'#': i+1}, r));
   const totDocs = rows.reduce((s,r)=> s + r['Traslados no recibidos (únicos)'], 0);
   const totLin  = rows.reduce((s,r)=> s + r['Líneas no recibidas'], 0);
-  if(out.length) out.push({'#':'', 'Usuario':'TOTAL ('+fmtInt(rows.length)+' usuarios)',
+  const prom    = rows.length ? Math.round(totDocs/rows.length*10)/10 : 0;
+  if(out.length) out.push({'#':'', 'Usuario':'TOTAL ('+fmtInt(rows.length)+' usuarios · promedio '+prom+' traslados c/u)',
     'Traslados no recibidos (únicos)':totDocs, 'Líneas no recibidas':totLin, 'Máx. días de rezago':''});
   else out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos (únicos)':0,'Líneas no recibidas':0,'Máx. días de rezago':''});
   return out;
+}
+
+/* Hoja de control de calidad del dato: sirve para explicar por qué un usuario puede
+   mostrar cientos de traslados. Cuenta documentos por llave y detecta:
+     - números de traslado repetidos en bodegas distintas (mismo Nº, otro documento),
+     - líneas sin número de traslado,
+     - líneas sin estado de recepción reconocible,
+     - usuarios con más documentos (posible nombre escrito de varias formas). */
+function construirCalidadDatosRezago(all, docs){
+  const hoy=new Date(); hoy.setHours(0,0,0,0);
+  const norm=(v)=> String(v||'').trim();
+  const porNumero=new Map();       // numero -> Set(bodegas origen|destino)
+  const ids=new Set();
+  let sinNumero=0, sinEstado=0;
+  (all||[]).forEach((r,i)=>{
+    const tr=norm(r.traslado);
+    const id = tr ? ('T:'+tr+'|'+norm(r.bodegaOrigen)+'|'+norm(r.bodegaDestino)) : ('F:'+i);
+    ids.add(id);
+    if(!tr){ sinNumero++; return; }
+    const k=tr+'|'+norm(r.bodegaOrigen)+'|'+norm(r.bodegaDestino);
+    if(!porNumero.has(tr)) porNumero.set(tr, new Set());
+    porNumero.get(tr).add(k);
+    const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
+    if(est==='') sinEstado++;
+  });
+  let numRepetidos=0, docExtra=0;
+  porNumero.forEach(set=>{ if(set.size>1){ numRepetidos++; docExtra += (set.size-1); } });
+
+  const enCamino=(docs||[]).filter(d=>d.pend);
+  const conDias=enCamino.filter(d=>typeof d.dias==='number');
+  // ANTIGÜEDAD = máxima cantidad de días. El documento más VIEJO es el de más días.
+  const minDias = conDias.length ? conDias.reduce((a,b)=> a.dias<b.dias?a:b).dias : '';   // días del documento MÁS RECIENTE
+  const maxDias = conDias.length ? conDias.reduce((a,b)=> a.dias>b.dias?a:b).dias : '';
+  const minFecha = conDias.length ? dateToISO(conDias.reduce((a,b)=> a.fecha<b.fecha?a:b).fecha) : '';
+  const ordenado = conDias.slice().sort((a,b)=>b.dias-a.dias);
+
+  const rows=[
+    {'Concepto':'Fecha de corte del informe','Valor':dateToISO(hoy),'Detalle':'el rezago se mide contra la fecha de HOY del equipo'},
+    {'Concepto':'Líneas de traslado leídas (universo filtrado)','Valor':(all||[]).length,'Detalle':'todas las filas del departamento seleccionado'},
+    {'Concepto':'Documentos únicos (traslado + origen + destino)','Valor':ids.size,'Detalle':'base para los porcentajes'},
+    {'Concepto':'Líneas sin número de traslado','Valor':sinNumero,'Detalle':'cada una se trata como documento aparte'},
+    {'Concepto':'Líneas sin estado de recepción reconocible','Valor':sinEstado,'Detalle':'no se pueden clasificar como en camino'},
+    {'Concepto':'Números de traslado usados en más de una bodega','Valor':numRepetidos,'Detalle':'mismo Nº, documentos distintos (+'+fmtInt(docExtra)+' documentos)'},
+    {'Concepto':'Documentos en camino (No Recibido)','Valor':enCamino.length,'Detalle':'universo del rezago'},
+    {'Concepto':'Documentos rezagados (> 10 días)','Valor':ordenado.length,'Detalle':'con fecha medible'},
+    {'Concepto':'Documentos en camino sin fecha','Valor':(enCamino.length-ordenado.length),'Detalle':'no se puede medir su rezago'},
+    {'Concepto':'Documento más reciente en camino (días / fecha)','Valor':minDias,'Detalle':minFecha},
+    {'Concepto':'Documento más antiguo en camino (días / fecha)','Valor':maxDias,'Detalle':ordenado.length?dateToISO(ordenado[0].fecha):'sin fecha'}
+  ];
+  return rows;
 }
 
 /* Descarga solo las LÍNEAS NO HOMOLOGADAS de traslados (código que no existe en la
