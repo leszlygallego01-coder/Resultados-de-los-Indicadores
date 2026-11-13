@@ -8123,9 +8123,13 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       const ff=fechaDeFila(r);
       if(ff){
         if(!d.fechaMax || ff.getTime()>d.fechaMax.getTime()) d.fechaMax=ff;
-        // Fecha del documento = la MÁS ANTIGUA de sus líneas: es cuando el traslado
-        // salió y, por tanto, la que mide el rezago real (la más reciente lo escondería).
+        // FECHA ÚNICA DEL TRASLADO: todas las líneas de un mismo documento traen la
+        // fecha de salida, así que se toma la PRIMERA fecha válida del documento y no
+        // se sobreescribe. Si un documento excepcionalmente mezclara fechas, se
+        // conserva la más ANTIGUA, que es la que mide el rezago real.
         if(!d.fecha || ff.getTime()<d.fecha.getTime()){ d.fecha=ff; d.rep=r; }
+      } else if(!d.fecha && r.fechaCruda!==undefined){
+        d.sinFechaLegible=true;
       }
     });
     const enCamino=[...docs.values()].filter(d=>d.pend);
@@ -8164,24 +8168,29 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       return;
     }
 
-    // Rezagados = en camino con antigüedad > 10 días calendario (se EXCLUYEN los
-    // generados en los últimos 10 días, que aún están en tránsito normal).
+    /* ---- REZAGO: fecha ÚNICA por traslado y cálculo dinámico contra HOY ----------
+       La fecha se toma UNA sola vez por número de traslado (todas sus líneas
+       comparten la misma fecha de salida), así agrupar por líneas no la duplica ni
+       la pierde. El rezago se recalcula en cada descarga contra la fecha actual del
+       equipo: un traslado del 1 de noviembre tiene un día más de rezago cada día.
+       Se incluyen los traslados con rezago ESTRICTAMENTE mayor a 10 días, sin
+       cortes artificiales por mes ni por rango fijo de fechas. */
     const rezagados=[];
     let sinFecha=0;
     enCamino.forEach(d=>{
       const dias=diasDesde(d.fecha);
       if(dias===null){ sinFecha++; return; }   // sin fecha: no se puede medir rezago
+      d.dias = dias;
       if(dias>DIAS_TRANSITO) rezagados.push({doc:d, dias});
     });
     const totalRezago=rezagados.length;
-    // Fecha del documento rezagado MÁS RECIENTE con antigüedad > 10 días: si sale
-    // antes de ayer, es que la base de traslados viene desactualizada (no se ha
-    // sincronizado desde Drive) y por eso no aparecen rezagos de los últimos días.
+    // Fecha del documento rezagado MÁS RECIENTE con rezago > 10 días. Debe quedar a
+    // 10 días de hoy; si sale antes, la base no se ha sincronizado desde entonces.
     const corteDetalle = rezagados.length
       ? dateToISO(rezagados.reduce((a,b)=> a.doc.fecha>b.doc.fecha?a:b).doc.fecha)
       : '(sin rezagados)';
 
-    // Desglose por rango de días de retraso.
+    // Desglose por rango de días de rezago (tabla y hoja "Desglose por Rango").
     let r1120=0, r2130=0, rMas30=0;
     rezagados.forEach(x=>{
       if(x.dias<=20) r1120++;
@@ -8247,9 +8256,8 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
     // Hoja de revisión de la columna Fecha: valor tal cual llega desde la fuente.
     if(_muestraFechas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(_muestraFechas), 'Muestra de Fechas');
-    const fecha=new Date().toISOString().slice(0,10);
-    XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+fecha+'.xlsx');
-    showToast('Rezago >'+DIAS_TRANSITO+' días: '+fmtInt(totalRezago)+' traslado(s) · '+pct(totalRezago,totalEnCamino)+' de los en camino · '+pct(totalRezago,totalBase)+' de la base.');
+    XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+dateToISO(hoy)+'.xlsx');
+    showToast('Rezago >'+DIAS_TRANSITO+' días al '+dateToISO(hoy)+': '+fmtInt(totalRezago)+' traslado(s) · '+pct(totalRezago,totalEnCamino)+' de los en camino · '+pct(totalRezago,totalBase)+' de la base.');
   });
 })();
 
@@ -8261,31 +8269,30 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
      - máx. días de rezago: antigüedad del documento más viejo del usuario.
    `docs` = [{id, pend, fecha, fechaMax, rep, lineas?, lineasPend?}] */
 function construirNoRecibidosPorUsuario(docs){
-  const map=new Map();   // usuario -> {docs:Set, lineas:n, maxDias:n|-1}
+  const map=new Map();   // usuario -> {docs:Set, lineas:n}
   (docs||[]).forEach(d=>{
     if(!d || !d.pend || !d.rep) return;                 // solo lo que sigue en camino
     const r=d.rep;
     const us=String(r.usuario||'').trim() || 'SIN USUARIO';
-    if(!map.has(us)) map.set(us, {docs:new Set(), lineas:0, maxDias:-1});
+    if(!map.has(us)) map.set(us, {docs:new Set(), lineas:0});
     const g=map.get(us);
     g.docs.add(d.id);
     g.lineas += (typeof d.lineasPend==='number') ? d.lineasPend : 1;
-    if(d.dias!==null && typeof d.dias==='number' && d.dias>g.maxDias) g.maxDias=d.dias;
   });
+  // Columnas pedidas: #, Usuario, Traslados no recibidos, Líneas no recibidas.
   const rows=[...map.entries()].map(([us,g])=>({
     'Usuario': us,
-    'Traslados no recibidos (únicos)': g.docs.size,
-    'Líneas no recibidas': g.lineas,
-    'Máx. días de rezago': g.maxDias>=0 ? g.maxDias : ''
-  })).sort((a,b)=> (b['Traslados no recibidos (únicos)']-a['Traslados no recibidos (únicos)'])
+    'Traslados no recibidos': g.docs.size,
+    'Líneas no recibidas': g.lineas
+  })).sort((a,b)=> (b['Traslados no recibidos']-a['Traslados no recibidos'])
       || a['Usuario'].localeCompare(b['Usuario'],'es'));
   const out=rows.map((r,i)=> Object.assign({'#': i+1}, r));
-  const totDocs = rows.reduce((s,r)=> s + r['Traslados no recibidos (únicos)'], 0);
-  const totLin  = rows.reduce((s,r)=> s + r['Líneas no recibidas'], 0);
+  const totDocs = rows.reduce((s2,r)=> s2 + r['Traslados no recibidos'], 0);
+  const totLin  = rows.reduce((s2,r)=> s2 + r['Líneas no recibidas'], 0);
   const prom    = rows.length ? Math.round(totDocs/rows.length*10)/10 : 0;
   if(out.length) out.push({'#':'', 'Usuario':'TOTAL ('+fmtInt(rows.length)+' usuarios · promedio '+prom+' traslados c/u)',
-    'Traslados no recibidos (únicos)':totDocs, 'Líneas no recibidas':totLin, 'Máx. días de rezago':''});
-  else out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos (únicos)':0,'Líneas no recibidas':0,'Máx. días de rezago':''});
+    'Traslados no recibidos':totDocs, 'Líneas no recibidas':totLin});
+  else out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos':0,'Líneas no recibidas':0});
   return out;
 }
 
