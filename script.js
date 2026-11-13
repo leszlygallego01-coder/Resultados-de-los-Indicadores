@@ -658,16 +658,57 @@ function toNumber(v){
   const n2 = parseFloat(v);
   return isNaN(n2) ? 0 : n2;
 }
-function excelSerialToDate(n){const utcDays=Math.floor(n-25569);return new Date(utcDays*86400*1000);}
+/* Serial de Excel (días desde 1899-12-30) -> Date a medianoche UTC.
+   Se redondea porque el serial puede traer fracción de hora. */
+function excelSerialToDate(n){
+  const num=Number(n);
+  if(!isFinite(num) || num<=0) return null;
+  const utcDays=Math.round(num-25569);
+  return new Date(utcDays*86400*1000);
+}
+/* Llave para localizar la MISMA línea dentro de la base cruda guardada (sirve de
+   respaldo cuando la fila procesada llega sin fecha legible). */
+function llaveLineaTraslado(r){
+  return [String(r.traslado||'').trim(), String(r.bodegaOrigen||'').trim(),
+          String(r.bodegaDestino||'').trim(), String(r.codigo||'').trim(),
+          String(r.lote||'').trim(), String(r.usuario||'').trim()].join('|');
+}
+/* Fecha de un traslado con RESPALDO: 1) la fecha ya normalizada de la fila;
+   2) si falta, la misma línea en la base cruda (IndexedDB), leída con toDateSafe.
+   Se usa el respaldo SOLO cuando la fecha normalizada no existe, para no cambiar
+   el comportamiento del resto del visor. */
+function fechaTrasladoSegura(r, rawFechaMap){
+  const propia=toDateSafe(r.fecha);
+  if(propia) return propia;
+  if(rawFechaMap){
+    const k=llaveLineaTraslado(r);
+    if(rawFechaMap.has(k)) return rawFechaMap.get(k);
+  }
+  return null;
+}
+/* Mapa llave-línea -> fecha a partir de las filas crudas de la sincronización. */
+function mapaFechasCrudas(rows){
+  const m=new Map();
+  (rows||[]).forEach(rw=>{
+    const k=llaveLineaTraslado(rw);
+    if(m.has(k)) return;
+    const d=toDateSafe(rw.fecha);
+    if(d) m.set(k, d);
+  });
+  return m;
+}
 function toDateSafe(v){
   if (v===null||v===undefined||v==='') return null;
   if (v instanceof Date && !isNaN(v)) return v;
   if (typeof v==='number') return excelSerialToDate(v);
-  const s=String(v).trim();
+  // Fecha con hora ("3/11/2026 8:30", ISO "2026-11-03T08:30:00"): se descarta la hora.
+  const s=String(v).trim().replace(/\s+(\d{1,2}:\d{2}(:\d{2})?(\.\d+)?)\s*(AM|PM|a\.m\.|p\.m\.)?$/i,'');
   let m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if(m){let [,d,mo,y]=m; if(y.length===2)y='20'+y; const dt=new Date(Date.UTC(+y,+mo-1,+d)); if(!isNaN(dt))return dt;}
   m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if(m){const [,y,mo,d]=m; const dt=new Date(Date.UTC(+y,+mo-1,+d)); if(!isNaN(dt))return dt;}
+  // Serial de Excel que llega como TEXTO ("45872"): se interpreta como fecha.
+  if(/^\d{5}(\.\d+)?$/.test(s)) return excelSerialToDate(parseFloat(s));
   const dt2=new Date(s); return isNaN(dt2)?null:dt2;
 }
 function dateToISO(d){ if(!d) return ''; return d.toISOString().slice(0,10); }
@@ -2336,6 +2377,9 @@ async function calcularIndicadores(){
       const p = codigoToParetoDirect.get(codigo) || 'N/D';
       return {
         traslado: String(r.traslado||'').trim(),
+        // Se conserva el valor ORIGINAL de la columna Fecha: si la normalización
+        // falla, el respaldo puede reintentar la lectura con el valor tal cual.
+        fechaCruda: r.fecha,
         fecha: toDateSafe(r.fecha),
         bodegaOrigen: String(r.bodegaOrigen||'').trim(),
         bodegaDestino: String(r.bodegaDestino||'').trim(),
@@ -2366,6 +2410,8 @@ async function calcularIndicadores(){
         zonaDestino: bodegaToZona.get(normValue(r.bodegaDestino)) || 'N/D',
         // Zona de la bodega ORIGEN (tabla Bodega y Zona): zona que origina el traslado.
         zonaOrigen: bodegaToZona.get(normValue(r.bodegaOrigen)) || 'N/D',
+        // Fecha con respaldo desde la base cruda (ver fechaTrasladoSegura). Aquí no hay
+        // acceso al crudo todavía, así que se reintenta la lectura del valor original.
         // Departamento de la bodega DESTINO: permite aplicar el filtro global de Departamento.
         departamentoDestino: bodegaToDepto.get(normValue(r.bodegaDestino)) || 'N/D'
       };
@@ -3492,6 +3538,7 @@ function renderIndicadorInactivas(rowsAll, bodegaSearch, zona){
    Filtros propios: Bodega Origen, Bodega Destino y buscador de usuario.
    ========================================================================= */
 let _trasladosUsuarioCache=[];
+let _trasladosFechasRespaldo=null;   // tarea única de recuperación de fechas (sección Traslados)
 
 /* Traslados que quedan dentro del filtro global de Departamento (por la bodega DESTINO).
    Todas las vistas de traslados parten de aquí, así el filtro de departamento también
@@ -3579,6 +3626,35 @@ function renderIndicadorTraslados(){
     return true;
   });
 
+  /* Respaldo de la fecha para toda la sección: si hay líneas sin fecha normalizada,
+     se resuelven contra la base cruda (una sola lectura) y se avisa en el
+     diagnóstico si la columna Fecha de la fuente no se está leyendo. */
+  if(filas.some(r=>!r.fecha) && !_trasladosFechasRespaldo){
+    _trasladosFechasRespaldo=async()=>{
+      let raw=[];
+      try{
+        const recs=await idbGetAll();
+        const reg=(recs||[]).find(x=>x.key==='traslados');
+        raw=(reg && reg.rows) ? reg.rows : [];
+      }catch(e){ raw=[]; }
+      const map=mapaFechasCrudas(raw);
+      let resueltas=0;
+      all.forEach(r=>{ if(!r.fecha){ const f=fechaTrasladoSegura(r, map); if(f){ r.fecha=f; resueltas++; } } });
+      const faltan=all.filter(r=>!r.fecha).length;
+      _trasladosFechasRespaldo=null;
+      if(resueltas>0){ try{ renderIndicadorTraslados(); }catch(e){} }
+      const el=document.getElementById('trasladosDiag');
+      if(el && faltan>0){
+        el.style.display='';
+        el.innerHTML='<b>Atención:</b> '+fmtInt(faltan)+' línea(s) de traslado llegan <b>sin fecha legible</b> desde la fuente'+
+          (resueltas? ' ('+fmtInt(resueltas)+' recuperadas desde la base guardada)':'')+
+          '. Revisa la columna <b>Fecha</b> del archivo de Traslados: debe ser fecha real (AAAA-MM-DD o DD/MM/AAAA) y no texto con otro formato.';
+      }
+      try{ showToast('Traslados: '+fmtInt(resueltas)+' fecha(s) recuperadas · '+fmtInt(faltan)+' sin fecha en la fuente.', faltan>0); }catch(e){}
+    };
+    setTimeout(()=>{ _trasladosFechasRespaldo && _trasladosFechasRespaldo(); }, 0);
+  }
+
   // Filas visibles: se aplican TODOS los filtros de la sección, incluida la búsqueda
   // por usuario, para que el anillo y los indicadores coincidan con la tabla.
   const filasVis = busca ? filas.filter(r=>normValue(r.usuario||'SIN USUARIO').includes(busca)) : filas;
@@ -3614,7 +3690,8 @@ function renderIndicadorTraslados(){
   const totalTraslados=listaFull.reduce((a,u)=>a+u.cant,0);
   const trasladosUnicosGlobal=new Set(filasVis.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size;
   const sinClasificar=filasVis.filter(r=>r.moleculaPareto==='N/D').length;
-  const fechas=filasVis.map(r=>r.fecha).filter(Boolean).sort((a,b)=>a-b);
+  const fechas=filasVis.map(r=>r.fecha).filter(f=>f instanceof Date && !isNaN(f)).sort((a,b)=>a-b);
+  const sinFechaLineas=filasVis.filter(r=>!(r.fecha instanceof Date)).length;
   const usuariosVis=new Set(filasVis.map(r=>r.usuario||'SIN USUARIO')).size;
 
   if(statsEl){
@@ -3626,7 +3703,8 @@ function renderIndicadorTraslados(){
       '<div class="stat"><div class="label">Líneas No Pareto</div><div class="value">'+fmtInt(filasVis.filter(r=>r.moleculaPareto==='NO PARETO').length)+'</div></div>'+
       '<div class="stat"><div class="label">Líneas no homologadas</div><div class="value">'+fmtInt(sinClasificar)+'</div></div>'+
       '<div class="stat"><div class="label">Rango de fechas</div><div class="value" style="font-size:16px;">'+
-        (fechas.length ? escHtml(dateToISO(fechas[0])+' → '+dateToISO(fechas[fechas.length-1])) : '—')+'</div></div>';
+        (fechas.length ? escHtml(dateToISO(fechas[0])+' → '+dateToISO(fechas[fechas.length-1])) : '—')+
+        (sinFechaLineas ? '<div class="sub">'+fmtInt(sinFechaLineas)+' línea(s) sin fecha legible</div>' : '')+'</div></div>';
   }
 
   if(diagEl){
@@ -7954,7 +8032,47 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
   const btn=document.getElementById('btnDescargarTrasladosRezago');
   if(!btn) return;
   const DIAS_TRANSITO = 10;
-  btn.addEventListener('click', ()=>{
+  /* Respaldo de la fecha del traslado: si la fila procesada llega SIN fecha (fecha
+     no reconocida, campo vacío o acumulado guardado antes de normalizar), se busca
+     la misma línea en la base cruda guardada por la sincronización (IndexedDB) y se
+     reintenta la lectura con toDateSafe. Así un dato de fecha que sí existe en el
+     archivo no se pierde y los traslados no quedan "sin fecha" injustificadamente. */
+  const _fechaFallbackCache=new Map();   // clave de línea -> Date|null
+  const _fechaFallbackLlave=(r)=> [String(r.traslado||'').trim(), String(r.bodegaOrigen||'').trim(),
+                                   String(r.bodegaDestino||'').trim(), String(r.codigo||'').trim(),
+                                   String(r.lote||'').trim(), String(r.usuario||'').trim()].join('|');
+  const _rawFechaMap=(rawRows)=>{
+    const m=new Map();
+    (rawRows||[]).forEach(rw=>{
+      const k=[String(rw.traslado||''), String(rw.bodegaOrigen||''), String(rw.bodegaDestino||''),
+               String(rw.codigo||''), String(rw.lote||''), String(rw.usuario||'')].map(v=>v.trim()).join('|');
+      const d=toDateSafe(rw.fecha);
+      if(d && !m.has(k)) m.set(k, d);
+    });
+    return m;
+  };
+  let _fechaFallbackHecho=false;
+  const _resolverFechaFallback=async(all)=>{
+    if(_fechaFallbackHecho) return;
+    _fechaFallbackHecho=true;
+    let raw=[];
+    try{
+      const recs=await idbGetAll();
+      const reg=(recs||[]).find(x=>x.key==='traslados');
+      raw=(reg && reg.rows) ? reg.rows : [];
+    }catch(e){ raw=[]; }
+    // También se revisan las líneas crudas del propio universo filtrado.
+    const m=_rawFechaMap(raw);
+    _rawFechaMap(all.map(r=>({traslado:r.traslado,bodegaOrigen:r.bodegaOrigen,bodegaDestino:r.bodegaDestino,
+                              codigo:r.codigo,lote:r.lote,usuario:r.usuario,
+                              fecha:(r.fechaCruda!==undefined ? r.fechaCruda : r.fecha)}))).forEach((v,k)=>{
+      if(!m.has(k)) m.set(k,v);
+    });
+    m.forEach((v,k)=> _fechaFallbackCache.set(k,v));
+    _fechaFallbackCache._rawCount = raw.length;
+  };
+
+  btn.addEventListener('click', async ()=>{
     const all=trasladosDelDepartamento();
     if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
 
@@ -7976,6 +8094,15 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       return 'T:'+tr+'|'+String(r.bodegaOrigen||'').trim()+'|'+String(r.bodegaDestino||'').trim();
     };
 
+    // Recupera las fechas que falten desde la base cruda (una sola lectura).
+    await _resolverFechaFallback(all);
+    const fechaDeFila=(r)=>{
+      const propia=toDateSafe(r.fecha);
+      if(propia) return propia;
+      const alt=_fechaFallbackCache.get(_fechaFallbackLlave(r));
+      return alt || null;
+    };
+
     // Base total = traslados ÚNICOS en toda la base (cualquier estado).
     const idsBase=new Set();
     all.forEach((r,i)=> idsBase.add(docKey(r,i)));
@@ -7993,16 +8120,49 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       let d=docs.get(id);
       if(!d){ d={id, pend:false, fecha:null, fechaMax:null, rep:r}; docs.set(id, d); }
       if(est==='PENDIENTE'){ d.pend=true; d.lineasPend=(d.lineasPend||0)+1; }
-      if(r.fecha instanceof Date && !isNaN(r.fecha)){
-        if(!d.fechaMax || r.fecha.getTime()>d.fechaMax.getTime()) d.fechaMax=r.fecha;
+      const ff=fechaDeFila(r);
+      if(ff){
+        if(!d.fechaMax || ff.getTime()>d.fechaMax.getTime()) d.fechaMax=ff;
         // Fecha del documento = la MÁS ANTIGUA de sus líneas: es cuando el traslado
         // salió y, por tanto, la que mide el rezago real (la más reciente lo escondería).
-        if(!d.fecha || r.fecha.getTime()<d.fecha.getTime()){ d.fecha=r.fecha; d.rep=r; }
+        if(!d.fecha || ff.getTime()<d.fecha.getTime()){ d.fecha=ff; d.rep=r; }
       }
     });
     const enCamino=[...docs.values()].filter(d=>d.pend);
     const totalEnCamino=enCamino.length;
     if(!totalEnCamino){ showToast('No hay traslados pendientes por recibir (en camino) en la base.', true); return; }
+
+    /* ---- Diagnóstico de fechas: si NINGUNA línea en camino tiene fecha legible,
+       se exporta de todos modos un archivo con la hoja "Control del Dato" y una
+       muestra de cómo viene la columna Fecha, en vez de abortar sin explicación.
+       Eso permite ver el valor exacto que está llegando (texto, número, vacío). */
+    let _muestraFechas=[];
+    try{
+      const recs=await idbGetAll();
+      const regT=(recs||[]).find(x=>x.key==='traslados');
+      const rawT=(regT && regT.rows) ? regT.rows : [];
+      const pend={estadoRecibido:'PENDIENTE',recibido:'No Recibido'};
+      const primeras=rawT.filter(x=>estadoTraslado(x.recibido)==='PENDIENTE').slice(0,25);
+      _muestraFechas=primeras.map(x=>({
+        'Traslado': String(x.traslado||'').trim(),
+        'Valor crudo de la columna Fecha': (x.fecha===undefined||x.fecha===null) ? '(vacío)' : String(x.fecha),
+        'Tipo de dato': (x.fecha instanceof Date) ? 'Fecha' : (typeof x.fecha),
+        'Fecha leída por el visor': toDateSafe(x.fecha) ? dateToISO(toDateSafe(x.fecha)) : '(no reconocida)'
+      }));
+      if(!_muestraFechas.length && all.length){
+        _muestraFechas=[{'Traslado':'(sin líneas crudas No Recibido)','Valor crudo de la columna Fecha':'—','Tipo de dato':'—','Fecha leída por el visor':'—'}];
+      }
+    }catch(e){ _muestraFechas=[]; }
+    const conFecha=enCamino.filter(d=>d.fecha).length;
+    if(!conFecha){
+      const wb0=XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
+      XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(_muestraFechas.length?_muestraFechas:[{'Traslado':'—'}]), 'Muestra de Fechas');
+      XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino)), 'No Recibidos por Usuario');
+      XLSX.writeFile(wb0, 'Traslados_Rezago_SIN_FECHAS_'+dateToISO(hoy)+'.xlsx');
+      showToast('Ningún traslado en camino tiene fecha legible ('+fmtInt(totalEnCamino)+' documentos). Se descargó un archivo con la muestra de fechas para revisar la fuente.', true);
+      return;
+    }
 
     // Rezagados = en camino con antigüedad > 10 días calendario (se EXCLUYEN los
     // generados en los últimos 10 días, que aún están en tránsito normal).
@@ -8085,6 +8245,8 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
     // Hoja de control: fecha de corte, universo y calidad de la llave del documento.
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
+    // Hoja de revisión de la columna Fecha: valor tal cual llega desde la fuente.
+    if(_muestraFechas.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(_muestraFechas), 'Muestra de Fechas');
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+fecha+'.xlsx');
     showToast('Rezago >'+DIAS_TRANSITO+' días: '+fmtInt(totalRezago)+' traslado(s) · '+pct(totalRezago,totalEnCamino)+' de los en camino · '+pct(totalRezago,totalBase)+' de la base.');
@@ -8139,10 +8301,16 @@ function construirCalidadDatosRezago(all, docs){
   const porNumero=new Map();       // numero -> Set(bodegas origen|destino)
   const ids=new Set();
   let sinNumero=0, sinEstado=0;
+  const tipos=new Set(), objFecha=new Map();
   (all||[]).forEach((r,i)=>{
     const tr=norm(r.traslado);
     const id = tr ? ('T:'+tr+'|'+norm(r.bodegaOrigen)+'|'+norm(r.bodegaDestino)) : ('F:'+i);
     ids.add(id);
+    const fv=r.fecha;
+    if(fv instanceof Date) tipos.add('Fecha');
+    else if(typeof fv==='number') tipos.add('Número (serial de Excel)');
+    else if(fv===undefined||fv===null||fv==='') tipos.add('Vacío');
+    else tipos.add('Texto');
     if(!tr){ sinNumero++; return; }
     const k=tr+'|'+norm(r.bodegaOrigen)+'|'+norm(r.bodegaDestino);
     if(!porNumero.has(tr)) porNumero.set(tr, new Set());
@@ -8154,6 +8322,8 @@ function construirCalidadDatosRezago(all, docs){
   porNumero.forEach(set=>{ if(set.size>1){ numRepetidos++; docExtra += (set.size-1); } });
 
   const enCamino=(docs||[]).filter(d=>d.pend);
+  const sinFechaCam = enCamino.filter(d=>!d.fecha).length;
+  const tiposFecha = Array.from(tipos).join(' / ') || '(sin líneas)';
   const conDias=enCamino.filter(d=>typeof d.dias==='number');
   // ANTIGÜEDAD = máxima cantidad de días. El documento más VIEJO es el de más días.
   const minDias = conDias.length ? conDias.reduce((a,b)=> a.dias<b.dias?a:b).dias : '';   // días del documento MÁS RECIENTE
@@ -8167,6 +8337,8 @@ function construirCalidadDatosRezago(all, docs){
     {'Concepto':'Documentos únicos (traslado + origen + destino)','Valor':ids.size,'Detalle':'base para los porcentajes'},
     {'Concepto':'Líneas sin número de traslado','Valor':sinNumero,'Detalle':'cada una se trata como documento aparte'},
     {'Concepto':'Líneas sin estado de recepción reconocible','Valor':sinEstado,'Detalle':'no se pueden clasificar como en camino'},
+    {'Concepto':'Líneas en camino SIN fecha legible','Valor':sinFechaCam,'Detalle':'ver hoja Muestra de Fechas para el valor crudo'},
+    {'Concepto':'Tipos de dato encontrados en la columna Fecha','Valor':tiposFecha,'Detalle':'fecha real / texto / número de Excel'},
     {'Concepto':'Números de traslado usados en más de una bodega','Valor':numRepetidos,'Detalle':'mismo Nº, documentos distintos (+'+fmtInt(docExtra)+' documentos)'},
     {'Concepto':'Documentos en camino (No Recibido)','Valor':enCamino.length,'Detalle':'universo del rezago'},
     {'Concepto':'Documentos rezagados (> 10 días)','Valor':ordenado.length,'Detalle':'con fecha medible'},
