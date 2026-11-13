@@ -8056,7 +8056,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     // Análisis por TIPOLOGÍA, aplicado SOLO al universo rezagado (> 10 días).
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detalle)), 'Análisis de Traslados');
     // Traslados NO RECIBIDOS por USUARIO (conteo de traslados únicos por usuario).
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino)), 'No Recibidos por Usuario');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(all)), 'No Recibidos por Usuario');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
     const fecha=new Date().toISOString().slice(0,10);
     XLSX.writeFile(wb, 'Traslados_Pendientes_Rezago_'+fecha+'.xlsx');
@@ -8064,40 +8064,54 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
   });
 })();
 
-/* Traslados NO RECIBIDOS por USUARIO: agrupa los documentos en camino (No Recibido)
-   por usuario y cuenta cuántos traslados ÚNICOS tiene cada uno —sin duplicar por
-   líneas—, ordenado de mayor a menor. `enCamino` son los documentos ya resueltos.
-   Se agrega fila TOTAL con el total de traslados y de usuarios. */
-function construirNoRecibidosPorUsuario(enCamino){
-  const map=new Map();   // usuario -> {ids:Set, lineas, rezagados:Set}
-  (enCamino||[]).forEach(d=>{
-    const us=String((d.rep && d.rep.usuario) || '').trim() || 'SIN USUARIO';
-    if(!map.has(us)) map.set(us, {ids:new Set(), lineas:0, dias:[]});
+/* Traslados NO RECIBIDOS por USUARIO.
+   Se calcula desde las LÍNEAS reales de la base (no desde documentos agrupados) para
+   que el conteo de traslados únicos, las líneas no recibidas y los días de rezago
+   sean consistentes con la hoja "Detalle Rezagados".
+   - Traslados no recibidos (únicos): número de DOCUMENTO distinto por usuario.
+   - Líneas no recibidas: filas cuya línea sigue "No Recibido".
+   - Máx. días de rezago: mayor antigüedad (días desde su fecha) entre sus traslados.
+   `lineas` son todas las filas de traslado del universo (ya filtradas por Departamento). */
+function construirNoRecibidosPorUsuario(lineas){
+  const esPend=(r)=> (('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido))==='PENDIENTE';
+  const hoy=new Date(); hoy.setHours(0,0,0,0);
+  const diasDe=(f)=>{
+    if(!(f instanceof Date) || isNaN(f)) return null;
+    const d=new Date(f.getFullYear(), f.getMonth(), f.getDate());
+    return Math.floor((hoy.getTime()-d.getTime())/86400000);
+  };
+  const map=new Map();   // usuario -> {docs:Map(id->maxDias), lineas:n}
+  (lineas||[]).forEach((r,i)=>{
+    const est=esPend(r);
+    const us=String(r.usuario||'').trim() || 'SIN USUARIO';
+    if(!map.has(us)) map.set(us, {docs:new Map(), lineas:0});
     const g=map.get(us);
-    g.ids.add(d.id);
-    g.lineas += (d.lineas||0);
-    if(typeof d.dias === 'number') g.dias.push(d.dias);
+    const id = r.traslado ? ('T:'+r.traslado) : ('F:'+i);
+    if(est){
+      g.lineas++;
+      const dias=diasDe(r.fecha);
+      if(dias!==null){
+        const prev=g.docs.get(id);
+        if(prev===undefined || dias>prev) g.docs.set(id, dias);
+      } else if(!g.docs.has(id)) g.docs.set(id, null);
+    }
   });
-  const rows=[...map.entries()].map(([us,g])=>{
-    const maxDias = g.dias.length ? Math.max(...g.dias) : '';
-    const promDias = g.dias.length ? Math.round(g.dias.reduce((a,b)=>a+b,0)/g.dias.length) : '';
+  const rows=[...map.entries()].filter(([,g])=>g.docs.size>0).map(([us,g])=>{
+    const diasArr=[...g.docs.values()].filter(v=>typeof v==='number');
     return {
       'Usuario': us,
-      'Traslados no recibidos (únicos)': g.ids.size,
+      'Traslados no recibidos (únicos)': g.docs.size,
       'Líneas no recibidas': g.lineas,
-      'Máx. días de rezago': maxDias,
-      'Prom. días de rezago': promDias
+      'Máx. días de rezago': diasArr.length ? Math.max(...diasArr) : ''
     };
   }).sort((a,b)=> (b['Traslados no recibidos (únicos)']-a['Traslados no recibidos (únicos)'])
       || a['Usuario'].localeCompare(b['Usuario'],'es'));
-  // Numeración correlativa (#) como en pantalla.
   const out=rows.map((r,i)=> Object.assign({'#': i+1}, r));
   const totDocs = rows.reduce((s,r)=> s + r['Traslados no recibidos (únicos)'], 0);
   const totLin  = rows.reduce((s,r)=> s + r['Líneas no recibidas'], 0);
   if(out.length) out.push({'#':'', 'Usuario':'TOTAL ('+fmtInt(rows.length)+' usuarios)',
-    'Traslados no recibidos (únicos)':totDocs, 'Líneas no recibidas':totLin,
-    'Máx. días de rezago':'', 'Prom. días de rezago':''});
-  else out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos (únicos)':0,'Líneas no recibidas':0,'Máx. días de rezago':'','Prom. días de rezago':''});
+    'Traslados no recibidos (únicos)':totDocs, 'Líneas no recibidas':totLin, 'Máx. días de rezago':''});
+  else out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos (únicos)':0,'Líneas no recibidas':0,'Máx. días de rezago':''});
   return out;
 }
 
