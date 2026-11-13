@@ -678,13 +678,22 @@ function llaveLineaTraslado(r){
    Se usa el respaldo SOLO cuando la fecha normalizada no existe, para no cambiar
    el comportamiento del resto del visor. */
 function fechaTrasladoSegura(r, rawFechaMap){
-  const propia=toDateSafe(r.fecha);
+  const propia=soloFechaValida(parseFechaDMY(r.fecha));
   if(propia) return propia;
   if(rawFechaMap){
     const k=llaveLineaTraslado(r);
-    if(rawFechaMap.has(k)) return rawFechaMap.get(k);
+    if(rawFechaMap.has(k)) return soloFechaValida(rawFechaMap.get(k));
   }
   return null;
+}
+/* Descarta fechas imposibles que produce el parseo automático de Excel (p.ej. el
+   texto "01/11/2026" leído como mes/día -> año 2011, o seriales mal interpretados).
+   Una fecha de traslado válida está entre 2015 y un año adelante de hoy. */
+function soloFechaValida(d){
+  if(!d) return null;
+  const y=d.getUTCFullYear();
+  if(y<2015 || y>new Date().getUTCFullYear()+1) return null;
+  return d;
 }
 /* Mapa llave-línea -> fecha a partir de las filas crudas de la sincronización. */
 function mapaFechasCrudas(rows){
@@ -692,10 +701,26 @@ function mapaFechasCrudas(rows){
   (rows||[]).forEach(rw=>{
     const k=llaveLineaTraslado(rw);
     if(m.has(k)) return;
-    const d=toDateSafe(rw.fecha);
+    const d=soloFechaValida(parseFechaDMY(rw.fecha));
     if(d) m.set(k, d);
   });
   return m;
+}
+/* Interpretación EXPLÍCITA día/mes/año (formato colombiano de la fuente).
+   Se usa cuando el encabezado de la columna dice FECHA, o cuando un valor ambiguo
+   tipo 01/11/2026 no puede leerse como mes/día (mes > 12). Evita que el 1 y 2 de
+   noviembre se pierdan o se conviertan en 11 de enero. */
+function parseFechaDMY(v){
+  if(v===null||v===undefined||v==='') return null;
+  if(v instanceof Date) return isNaN(v)?null:v;
+  if(typeof v==='number') return excelSerialToDate(v);
+  const s=String(v).trim().replace(/\s+(\d{1,2}:\d{2}(:\d{2})?(\.\d+)?)\s*(AM|PM|a\.m\.|p\.m\.)?$/i,'');
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m){const [,y,mo,d]=m; const dt=new Date(Date.UTC(+y,+mo-1,+d)); if(!isNaN(dt))return dt;}
+  m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if(m){let [,d,mo,y]=m; if(y.length===2)y='20'+y; const dt=new Date(Date.UTC(+y,+mo-1,+d)); if(!isNaN(dt))return dt;}
+  if(/^\d{5}(\.\d+)?$/.test(s)) return excelSerialToDate(parseFloat(s));
+  const dt2=new Date(s); return isNaN(dt2)?null:dt2;
 }
 function toDateSafe(v){
   if (v===null||v===undefined||v==='') return null;
@@ -704,7 +729,14 @@ function toDateSafe(v){
   // Fecha con hora ("3/11/2026 8:30", ISO "2026-11-03T08:30:00"): se descarta la hora.
   const s=String(v).trim().replace(/\s+(\d{1,2}:\d{2}(:\d{2})?(\.\d+)?)\s*(AM|PM|a\.m\.|p\.m\.)?$/i,'');
   let m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-  if(m){let [,d,mo,y]=m; if(y.length===2)y='20'+y; const dt=new Date(Date.UTC(+y,+mo-1,+d)); if(!isNaN(dt))return dt;}
+  if(m){
+    let [,a,b,y]=m; if(y.length===2)y='20'+y;
+    // Ambiguo aa/mm/aaaa: si el segundo número es mayor a 12 es día y el primero mes
+    // (11/01/2026 -> 11 de enero); si no, se conserva día/mes (01/11/2026 -> 1 de nov).
+    let d=+a, mo=+b;
+    if(mo>12 && d<=12){ const t=d; d=mo; mo=t; }
+    const dt=new Date(Date.UTC(+y,mo-1,d)); if(!isNaN(dt))return dt;
+  }
   m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if(m){const [,y,mo,d]=m; const dt=new Date(Date.UTC(+y,+mo-1,+d)); if(!isNaN(dt))return dt;}
   // Serial de Excel que llega como TEXTO ("45872"): se interpreta como fecha.
@@ -2380,7 +2412,9 @@ async function calcularIndicadores(){
         // Se conserva el valor ORIGINAL de la columna Fecha: si la normalización
         // falla, el respaldo puede reintentar la lectura con el valor tal cual.
         fechaCruda: r.fecha,
-        fecha: toDateSafe(r.fecha),
+        // En traslados la fecha se lee como día/mes/año (formato de la fuente): así
+        // "01/11/2026" es 1 de noviembre y no se interpreta como 11 de enero.
+        fecha: parseFechaDMY(r.fecha),
         bodegaOrigen: String(r.bodegaOrigen||'').trim(),
         bodegaDestino: String(r.bodegaDestino||'').trim(),
         codigo,
@@ -8046,7 +8080,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     (rawRows||[]).forEach(rw=>{
       const k=[String(rw.traslado||''), String(rw.bodegaOrigen||''), String(rw.bodegaDestino||''),
                String(rw.codigo||''), String(rw.lote||''), String(rw.usuario||'')].map(v=>v.trim()).join('|');
-      const d=toDateSafe(rw.fecha);
+      const d=soloFechaValida(parseFechaDMY(rw.fecha));
       if(d && !m.has(k)) m.set(k, d);
     });
     return m;
@@ -8077,10 +8111,13 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
 
     // "Hoy" a medianoche para contar días calendario completos.
-    const hoy=new Date(); hoy.setHours(0,0,0,0);
+    const _hoyLocal=new Date(); _hoyLocal.setHours(0,0,0,0);
+    const hoy=new Date(Date.UTC(_hoyLocal.getFullYear(), _hoyLocal.getMonth(), _hoyLocal.getDate()));
     const diasDesde=(f)=>{
       if(!(f instanceof Date) || isNaN(f)) return null;
-      const d=new Date(f.getFullYear(), f.getMonth(), f.getDate());
+      // Las fechas se construyen en UTC (día/mes de la fuente); se comparan en UTC
+      // para no correr un día por la zona horaria del equipo (Colombia UTC-5).
+      const d=new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate()));
       return Math.floor((hoy.getTime()-d.getTime())/86400000);
     };
 
@@ -8097,7 +8134,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     // Recupera las fechas que falten desde la base cruda (una sola lectura).
     await _resolverFechaFallback(all);
     const fechaDeFila=(r)=>{
-      const propia=toDateSafe(r.fecha);
+      const propia=soloFechaValida(parseFechaDMY(r.fecha));
       if(propia) return propia;
       const alt=_fechaFallbackCache.get(_fechaFallbackLlave(r));
       return alt || null;
