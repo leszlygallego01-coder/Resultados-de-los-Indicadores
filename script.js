@@ -686,6 +686,18 @@ function fechaTrasladoSegura(r, rawFechaMap){
   }
   return null;
 }
+/* ---- Llave ÚNICA de documento de traslado (una sola para todo el visor) ----
+   Un traslado es un documento; sus líneas (artículos) NO son traslados distintos.
+   Se usa el número de traslado como identificador y, si el archivo no trae número
+   (o viene vacío), se agrupa por la combinación origen+destino+fecha para no
+   contar cada línea como un traslado diferente. Todas las pantallas y hojas del
+   Excel deben usar esta función para que los totales cuadren entre sí. */
+function docKeyTraslado(r,i){
+  const tr=String(r && r.traslado!==undefined && r.traslado!==null ? r.traslado : '').trim();
+  if(tr) return 'T:'+tr;
+  const f=r && r.fecha ? (function(d){ try{ return dateToISO(d); }catch(e){ return ''; } })(r.fecha) : '';
+  return 'S:'+String(r&&r.bodegaOrigen||'').trim()+'|'+String(r&&r.bodegaDestino||'').trim()+'|'+f+'|'+(i===undefined?'':i);
+}
 /* Descarta fechas imposibles que produce el parseo automático de Excel (p.ej. el
    texto "01/11/2026" leído como mes/día -> año 2011, o seriales mal interpretados).
    Una fecha de traslado válida está entre 2015 y un año adelante de hoy. */
@@ -3798,7 +3810,7 @@ function renderIndicadorTraslados(){
 function contarDocsRecepcion(filas){
   const docs=new Map();
   (filas||[]).forEach((t,i)=>{
-    const id = t.traslado ? ('T:'+t.traslado) : ('F:'+i);
+    const id = docKeyTraslado(t, i);
     if(!docs.has(id)) docs.set(id, {tienePend:false, tieneRec:false, tieneEstado:false});
     const d=docs.get(id);
     const est=('estadoRecibido' in t) ? t.estadoRecibido : estadoTraslado(t.recibido);
@@ -7921,7 +7933,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       const k=zn+'||'+bd;
       if(!grupos.has(k)) grupos.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0, filas:[]});
       const g=grupos.get(k);
-      g.ids.add(r.traslado ? 'T:'+r.traslado : 'F:'+i);
+      g.ids.add(docKeyTraslado(r,i));
       g.lineas++;
       g.filas.push(r);
     });
@@ -8026,7 +8038,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       const k=zn+'||'+bd;
       if(!porBodega.has(k)) porBodega.set(k, {zona:zn, bodega:bd, ids:new Set(), lineas:0});
       const g=porBodega.get(k);
-      g.ids.add(r.traslado ? 'T:'+r.traslado : 'F:'+i);
+      g.ids.add(docKeyTraslado(r,i));
       g.lineas++;
     });
     const resumen=[...porBodega.values()]
@@ -8039,7 +8051,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       }));
     resumen.push({
       'Zona': '', 'Bodega Destino': 'TOTAL ('+resumen.length+(resumen.length===1?' bodega)':' bodegas)'),
-      'Traslados no recibidos (únicos)': new Set(filas.map((r,i)=>r.traslado?('T:'+r.traslado):('F:'+i))).size,
+      'Traslados no recibidos (únicos)': new Set(filas.map((r,i)=>docKeyTraslado(r,i))).size,
       'Líneas no recibidas': filas.length
     });
 
@@ -8121,15 +8133,10 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       return Math.floor((hoy.getTime()-d.getTime())/86400000);
     };
 
-    // Clave de DOCUMENTO. Importante: se arma con traslado + origen + destino porque
-    // el mismo número de traslado puede repetirse entre bodegas (o venir vacío).
-    // Si no se desambigua, varios traslados reales se fusionan en uno y el conteo
-    // queda corto (p.ej. 634 en vez del total real).
-    const docKey=(r,i)=>{
-      const tr=String(r.traslado||'').trim();
-      if(!tr) return 'F:'+i;                      // sin número: cada línea es su propio documento
-      return 'T:'+tr+'|'+String(r.bodegaOrigen||'').trim()+'|'+String(r.bodegaDestino||'').trim();
-    };
+    // Clave de DOCUMENTO: la MISMA que usa toda la tarjeta de traslados
+    // (docKeyTraslado). Si el indicador y el Excel usaran llaves distintas, el
+    // conteo por usuario no cuadraría con el Detalle Rezagados.
+    const docKey=docKeyTraslado;
 
     // Recupera las fechas que falten desde la base cruda (una sola lectura).
     await _resolverFechaFallback(all);
@@ -8199,7 +8206,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       const wb0=XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
       XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(_muestraFechas.length?_muestraFechas:[{'Traslado':'—'}]), 'Muestra de Fechas');
-      XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino)), 'No Recibidos por Usuario');
+      XLSX.utils.book_append_sheet(wb0, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino, [], DIAS_TRANSITO)), 'No Recibidos por Usuario');
       XLSX.writeFile(wb0, 'Traslados_Rezago_SIN_FECHAS_'+dateToISO(hoy)+'.xlsx');
       showToast('Ningún traslado en camino tiene fecha legible ('+fmtInt(totalEnCamino)+' documentos). Se descargó un archivo con la muestra de fechas para revisar la fuente.', true);
       return;
@@ -8243,12 +8250,17 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       {'Métrica':'Corte efectivo del detalle (documento más reciente con rezago)','Cantidad': corteDetalle,'% vs base total':'','% vs en camino':''},
       {'Métrica':'Base total de traslados (documentos únicos)','Cantidad':totalBase,'% vs base total':'100%','% vs en camino':''},
       {'Métrica':'Pendientes por recibir / en camino (No Recibido)','Cantidad':totalEnCamino,'% vs base total':pct(totalEnCamino,totalBase),'% vs en camino':'100%'},
-      {'Métrica':'Pendientes con REZAGO (> '+DIAS_TRANSITO+' días)','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)},
+      {'Métrica':'Pendientes con REZAGO (> '+DIAS_TRANSITO+' días) = filas de "Detalle Rezagados"','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)},
       {'Métrica':'  • Rango 11 a 20 días','Cantidad':r1120,'% vs base total':pct(r1120,totalBase),'% vs en camino':pct(r1120,totalEnCamino)},
       {'Métrica':'  • Rango 21 a 30 días','Cantidad':r2130,'% vs base total':pct(r2130,totalBase),'% vs en camino':pct(r2130,totalEnCamino)},
       {'Métrica':'  • Más de 30 días','Cantidad':rMas30,'% vs base total':pct(rMas30,totalBase),'% vs en camino':pct(rMas30,totalEnCamino)}
     ];
     if(sinFecha) resumen.push({'Métrica':'En camino sin fecha (no medibles)','Cantidad':sinFecha,'% vs base total':pct(sinFecha,totalBase),'% vs en camino':pct(sinFecha,totalEnCamino)});
+    resumen.push({'Métrica':'','Cantidad':'','% vs base total':'','% vs en camino':''});
+    resumen.push({'Métrica':'Cómo leer las cifras','Cantidad':'Un TRASLADO = un documento (número de traslado). Sus líneas de artículos NO son traslados distintos: un traslado con 5 artículos es 1 traslado y 5 líneas.','% vs base total':'','% vs en camino':''});
+    resumen.push({'Métrica':'Total documentos en camino','Cantidad':totalEnCamino,'% vs base total':pct(totalEnCamino,totalBase),'% vs en camino':'100%'});
+    resumen.push({'Métrica':'De esos, rezagados > '+DIAS_TRANSITO+' días (Detalle Rezagados)','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)});
+    resumen.push({'Métrica':'De esos, en tránsito normal (<= '+DIAS_TRANSITO+' días)','Cantidad':totalEnCamino-totalRezago,'% vs base total':pct(totalEnCamino-totalRezago,totalBase),'% vs en camino':pct(totalEnCamino-totalRezago,totalEnCamino)});
 
     // Hoja 2: Desglose por rango de días de retraso.
     const rangoRow=(label,n)=>({'Rango de días de retraso':label,'Traslados únicos':n,'% de rezagados':pct(n,totalRezago),'% de en camino':pct(n,totalEnCamino)});
@@ -8287,7 +8299,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     // Análisis por TIPOLOGÍA, aplicado SOLO al universo rezagado (> 10 días).
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirAnalisisTraslados(detalle)), 'Análisis de Traslados');
     // Traslados NO RECIBIDOS por USUARIO (conteo de traslados únicos por usuario).
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino)), 'No Recibidos por Usuario');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino, detalle, DIAS_TRANSITO)), 'No Recibidos por Usuario');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
     // Hoja de control: fecha de corte, universo y calidad de la llave del documento.
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
@@ -8298,38 +8310,62 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
   });
 })();
 
-/* Traslados NO RECIBIDOS por USUARIO.
-   Recibe los MISMOS documentos del universo "en camino" que alimenta el Detalle
-   Rezagados, para que ambos bloques cuadren siempre (una sola fuente de verdad):
-     - traslados no recibidos (únicos): cuántos documentos tiene el usuario,
-     - líneas no recibidas: líneas de esos documentos que siguen "No Recibido",
-     - máx. días de rezago: antigüedad del documento más viejo del usuario.
-   `docs` = [{id, pend, fecha, fechaMax, rep, lineas?, lineasPend?}] */
-function construirNoRecibidosPorUsuario(docs){
-  const map=new Map();   // usuario -> {docs:Set, lineas:n}
+/* Traslados NO RECIBIDOS por USUARIO — cuadre exacto con el Detalle Rezagados.
+   Recibe dos universos y los cruza por la llave ÚNICA del documento:
+     - `docs`  : documentos EN CAMINO (No Recibido) del universo filtrado,
+     - `detalle`: renglones del Detalle Rezagados (un renglón por documento > 10 días).
+   Para el usuario se informa:
+     · Traslados no recibidos            -> TODOS sus documentos en camino (sin tope de días)
+     · Líneas no recibidas               -> líneas de esos documentos que siguen pendientes
+     · Traslados con rezago > N días     -> documentos que aparecen en el Detalle Rezagados
+     · Líneas con rezago > N días        -> líneas de esos documentos
+   Así se ve la diferencia entre "sigue pendiente" y "está rezagado", que es justo
+   lo que hacía parecer descuadradas las dos cifras. */
+function construirNoRecibidosPorUsuario(docs, detalle, diasTope){
+  const tope = (typeof diasTope==='number') ? diasTope : 10;
+  const map=new Map();
+  const fila=(us)=>{
+    if(!map.has(us)) map.set(us, {usuario:us, docs:new Set(), lineas:0, rez:new Set(), rezLin:0});
+    return map.get(us);
+  };
   (docs||[]).forEach(d=>{
     if(!d || !d.pend || !d.rep) return;                 // solo lo que sigue en camino
     const r=d.rep;
-    const us=String(r.usuario||'').trim() || 'SIN USUARIO';
-    if(!map.has(us)) map.set(us, {docs:new Set(), lineas:0});
-    const g=map.get(us);
+    const g=fila(String(r.usuario||'').trim() || 'SIN USUARIO');
     g.docs.add(d.id);
     g.lineas += (typeof d.lineasPend==='number') ? d.lineasPend : 1;
   });
-  // Columnas pedidas: #, Usuario, Traslados no recibidos, Líneas no recibidas.
-  const rows=[...map.entries()].map(([us,g])=>({
-    'Usuario': us,
+  // Renglones del Detalle Rezagados: se agrupan por el USUARIO que trae el detalle
+  // (ese renglón es la evidencia de quién quedó con el traslado).
+  (detalle||[]).forEach(x=>{
+    const us=String((x && x['Usuario'])||'').trim() || 'SIN USUARIO';
+    const tr=String((x && x['Traslado'])||'').trim();
+    const id= tr ? ('T:'+tr) : ('S:'+us+'|'+(x&&x['Fecha del traslado']||''));
+    const g=fila(us);
+    if(!g.rez.has(id)){
+      g.rez.add(id);
+      g.rezLin += (typeof x['Líneas no recibidas']==='number') ? x['Líneas no recibidas'] : 1;
+    }
+  });
+  const rows=[...map.values()].map(g=>({
+    'Usuario': g.usuario,
     'Traslados no recibidos': g.docs.size,
-    'Líneas no recibidas': g.lineas
+    'Líneas no recibidas': g.lineas,
+    ['Traslados con rezago > '+tope+' días']: g.rez.size,
+    ['Líneas con rezago > '+tope+' días']: g.rezLin
   })).sort((a,b)=> (b['Traslados no recibidos']-a['Traslados no recibidos'])
       || a['Usuario'].localeCompare(b['Usuario'],'es'));
   const out=rows.map((r,i)=> Object.assign({'#': i+1}, r));
-  const totDocs = rows.reduce((s2,r)=> s2 + r['Traslados no recibidos'], 0);
-  const totLin  = rows.reduce((s2,r)=> s2 + r['Líneas no recibidas'], 0);
-  const prom    = rows.length ? Math.round(totDocs/rows.length*10)/10 : 0;
-  if(out.length) out.push({'#':'', 'Usuario':'TOTAL ('+fmtInt(rows.length)+' usuarios · promedio '+prom+' traslados c/u)',
-    'Traslados no recibidos':totDocs, 'Líneas no recibidas':totLin});
-  else out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos':0,'Líneas no recibidas':0});
+  const sum=(k)=> rows.reduce((a,r)=> a + (Number(r[k])||0), 0);
+  const totDocs=sum('Traslados no recibidos');
+  const prom=c=> rows.length ? Math.round(c/rows.length*10)/10 : 0;
+  out.push({'#':'', 'Usuario':'TOTAL ('+fmtInt(rows.length)+' usuarios · promedio '+prom(totDocs)+' traslados c/u)',
+    'Traslados no recibidos':totDocs,
+    'Líneas no recibidas':sum('Líneas no recibidas'),
+    ['Traslados con rezago > '+tope+' días']:sum('Traslados con rezago > '+tope+' días'),
+    ['Líneas con rezago > '+tope+' días']:sum('Líneas con rezago > '+tope+' días')});
+  if(!rows.length) out.push({'#':'','Usuario':'(sin traslados no recibidos)','Traslados no recibidos':0,'Líneas no recibidas':0,
+    ['Traslados con rezago > '+tope+' días']:0, ['Líneas con rezago > '+tope+' días']:0});
   return out;
 }
 
@@ -8348,7 +8384,7 @@ function construirCalidadDatosRezago(all, docs){
   const tipos=new Set(), objFecha=new Map();
   (all||[]).forEach((r,i)=>{
     const tr=norm(r.traslado);
-    const id = tr ? ('T:'+tr+'|'+norm(r.bodegaOrigen)+'|'+norm(r.bodegaDestino)) : ('F:'+i);
+    const id = docKeyTraslado(r, i);
     ids.add(id);
     const fv=r.fecha;
     if(fv instanceof Date) tipos.add('Fecha');
@@ -8379,7 +8415,9 @@ function construirCalidadDatosRezago(all, docs){
     {'Concepto':'Fecha de corte del informe','Valor':dateToISO(hoy),'Detalle':'el rezago se mide contra la fecha de HOY del equipo'},
     {'Concepto':'Líneas de traslado leídas (universo filtrado)','Valor':(all||[]).length,'Detalle':'todas las filas del departamento seleccionado'},
     {'Concepto':'Documentos únicos (traslado + origen + destino)','Valor':ids.size,'Detalle':'base para los porcentajes'},
-    {'Concepto':'Líneas sin número de traslado','Valor':sinNumero,'Detalle':'cada una se trata como documento aparte'},
+    {'Concepto':'Líneas sin número de traslado','Valor':sinNumero,'Detalle':'se agrupan por bodega origen + destino + fecha (no una por línea)'},
+    {'Concepto':'Líneas leídas (filas del archivo)','Valor':(all||[]).length,'Detalle':'cada FILA es una línea de artículo, no un traslado'},
+    {'Concepto':'Traslados (documentos) = líneas / promedio de líneas','Valor':ids.size,'Detalle':'promedio '+((ids.size?((all||[]).length/ids.size):0)).toFixed(1)+' líneas por traslado'},
     {'Concepto':'Líneas sin estado de recepción reconocible','Valor':sinEstado,'Detalle':'no se pueden clasificar como en camino'},
     {'Concepto':'Líneas en camino SIN fecha legible','Valor':sinFechaCam,'Detalle':'ver hoja Muestra de Fechas para el valor crudo'},
     {'Concepto':'Tipos de dato encontrados en la columna Fecha','Valor':tiposFecha,'Detalle':'fecha real / texto / número de Excel'},
