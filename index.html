@@ -672,6 +672,7 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
       <!-- ---- SUBVISTA: TRASLADOS REALIZADOS ---- -->
       <div class="subview" id="sub-traslados">
         <div class="helpbox">Este indicador se calcula con la tabla <b>Traslados</b> (carpeta de Drive). Se cuentan <b>traslados únicos</b> (número de Traslado sin repetir) por usuario: si un traslado tiene varias líneas de artículos, cuenta una sola vez. El <b>Codigo</b> de cada línea se cruza con la tabla Homólogo para clasificarla como <b>Pareto</b> o <b>No Pareto</b>. Se muestran las <b>líneas</b> (cada registro de la tabla, ya que un traslado puede repetirse con varios Codigos): <b>Líneas Pareto + Líneas No Pareto + Líneas no homologadas = Líneas totales</b>. Los filtros de esta sección son independientes de los filtros generales de la pantalla.</div>
+        <div class="helpbox">El <b>rezago</b> se mide por traslado único contra la fecha de hoy y con el umbral de días configurado en <b>Días de rezago</b> (10 por defecto). Un traslado recién despachado (0 o pocos días) <b>no</b> es rezago: por eso no aparece en el Detalle Rezagados, pero sí en las hojas <b>Pendientes en Camino</b> y <b>Calendario de Despachos</b> del Excel.</div>
         <div class="helpbox" id="trasladosDiag" style="display:none;"></div>
         <div class="stat-row" id="statsTraslados"></div>
 
@@ -684,7 +685,8 @@ try{ dbFirestore = firebase.firestore(); }catch(e){ console.warn('Firestore init
             <div style="margin-left:auto;align-self:center;display:flex;gap:10px;flex-wrap:wrap;">
               <button class="btn btn-export" id="btnDescargarTrasladosDestino" style="background:var(--blue-deep);box-shadow:0 2px 0 #05365F;">⬇ Descargar traslados por bodega destino (Excel)</button>
               <button class="btn btn-export" id="btnDescargarTrasladosNoRec" style="background:#C0392B;box-shadow:0 2px 0 #7E241A;">⬇ Descargar traslados no recibidos (Excel)</button>
-              <button class="btn btn-export" id="btnDescargarTrasladosRezago" style="background:#8E44AD;box-shadow:0 2px 0 #5B2C6F;">⬇ Descargar pendientes con rezago &gt;10 días (Excel)</button>
+              <label for="inpDiasRezago" title="Umbral de días para considerar un traslado como rezagado" style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;">Días de rezago&gt;<input id="inpDiasRezago" type="number" min="1" max="365" step="1" value="10" style="width:72px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;"></label>
+              <button class="btn btn-export" id="btnDescargarTrasladosRezago" style="background:#8E44AD;box-shadow:0 2px 0 #5B2C6F;">⬇ Descargar pendientes con rezago (Excel)</button>
               <button class="btn btn-export" id="btnDescargarTrasladosNoHom" style="background:var(--amber);box-shadow:0 2px 0 #A6641B;">⬇ Descargar líneas no homologadas (Excel)</button>
             </div>
           </div>
