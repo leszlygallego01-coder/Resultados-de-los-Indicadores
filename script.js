@@ -8077,7 +8077,24 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
 (function(){
   const btn=document.getElementById('btnDescargarTrasladosRezago');
   if(!btn) return;
-  const DIAS_TRANSITO = 10;
+  /* Umbral de rezago en días. Se toma del campo "Días de rezago (>)" de la pantalla
+     para poder ajustarlo sin tocar el código (10 por defecto). Nunca baja de 1:
+     con 0 todo lo pendiente quedaría "rezagado" y el indicador perdería sentido. */
+  const leerUmbral=()=>{
+    const el=document.getElementById('inpDiasRezago');
+    let n=parseInt((el&&el.value)||'10',10);
+    if(isNaN(n)||n<1) n=10;
+    n=Math.min(n,365);
+    try{ localStorage.setItem('mf_dias_rezago', String(n)); }catch(e){}
+    return n;
+  };
+  // Se recuerda el último umbral usado para no tener que escribirlo cada vez.
+  try{
+    const el=document.getElementById('inpDiasRezago');
+    const g=localStorage.getItem('mf_dias_rezago');
+    if(el && g && !isNaN(parseInt(g,10))) el.value=String(Math.min(Math.max(parseInt(g,10),1),365));
+  }catch(e){}
+  let DIAS_TRANSITO = 10;
   /* Respaldo de la fecha del traslado: si la fila procesada llega SIN fecha (fecha
      no reconocida, campo vacío o acumulado guardado antes de normalizar), se busca
      la misma línea en la base cruda guardada por la sincronización (IndexedDB) y se
@@ -8119,6 +8136,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
   };
 
   btn.addEventListener('click', async ()=>{
+    DIAS_TRANSITO = leerUmbral();
     const all=trasladosDelDepartamento();
     if(!all.length){ showToast('No hay traslados cargados para exportar.', true); return; }
 
@@ -8234,6 +8252,84 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
       ? dateToISO(rezagados.reduce((a,b)=> a.doc.fecha>b.doc.fecha?a:b).doc.fecha)
       : '(sin rezagados)';
 
+    /* ---- Universo COMPLETO de pendientes (también los recién despachados) ------
+       El Detalle Rezagados solo puede mostrar lo que supera el umbral: un traslado
+       despachado ayer no es rezagado, por definición. Pero el usuario necesita ver
+       que ese traslado SÍ entró a la base. Por eso se arma también el listado de
+       todos los documentos en camino con sus días de tránsito y su situación. */
+    const todosPendientes=enCamino
+      .filter(d=>typeof d.dias==='number')
+      .sort((a,b)=> b.dias-a.dias)
+      .map(d=>{
+        const r=d.rep;
+        return {
+          'Traslado': r.traslado||'',
+          'Fecha del traslado': d.fecha ? dateToISO(d.fecha) : '',
+          'Días en tránsito': d.dias,
+          'Situación': d.dias>DIAS_TRANSITO ? ('REZAGADO (> '+DIAS_TRANSITO+' días)') : 'En tránsito normal',
+          'Líneas no recibidas': (typeof d.lineasPend==='number') ? d.lineasPend : '',
+          'Bodega Origen': r.bodegaOrigen||'',
+          'Bodega Destino': r.bodegaDestino||'',
+          'Zona (destino)': r.zonaDestino||'N/D',
+          'Usuario': r.usuario||''
+        };
+      });
+    /* CALENDARIO DE DESPACHOS (día por día) -------------------------------
+       Se construye sobre TODA la base, no solo sobre los pendientes, porque la
+       duda típica es: "el día X sí hubo traslados, ¿por qué no aparecen?".
+       Para cada fecha se muestra cuántos traslados salieron, cuántos ya están
+       Recibidos, cuántos siguen pendientes y cuántos superan el umbral. Así se
+       ve si la fecha falta por estado (todo recibido) o por antigüedad (aún
+       dentro del umbral), sin adivinar. */
+    const calMap=new Map();
+    all.forEach((r,i)=>{
+      const f=fechaDeFila(r);
+      if(!f) return;
+      const iso=dateToISO(f);
+      const id=docKey(r,i);
+      let g=calMap.get(iso);
+      if(!g){ g={iso, docs:new Map()}; calMap.set(iso,g); }
+      const est=('estadoRecibido' in r) ? r.estadoRecibido : estadoTraslado(r.recibido);
+      let d=g.docs.get(id);
+      if(!d){ d={pend:false, lineas:0, pendLineas:0}; g.docs.set(id,d); }
+      d.lineas++;
+      if(est==='PENDIENTE'){ d.pend=true; d.pendLineas++; }
+    });
+    const porFecha=[...calMap.values()]
+      .map(g=>{
+        const dt=parseFechaDMY(g.iso);
+        const dias=diasDesde(dt);
+        let docs=0, pend=0, rec=0, linPend=0, rez=0, rezLin=0;
+        g.docs.forEach(d=>{
+          docs++;
+          if(d.pend){ pend++; linPend+=d.pendLineas; if(dias!==null && dias>DIAS_TRANSITO){ rez++; rezLin+=d.pendLineas; } }
+          else rec++;
+        });
+        let motivo;
+        if(!pend) motivo='Todos los traslados de ese día están Recibidos: no hay nada pendiente.';
+        else if(rez>0) motivo='Cumple el umbral: '+rez+' de '+pend+' pendientes ya superan los '+DIAS_TRANSITO+' días.';
+        else motivo='Pendiente, pero aún dentro del umbral ('+dias+' días; se necesitan más de '+DIAS_TRANSITO+').';
+        return {
+          'Fecha del traslado': g.iso,
+          'Días de antigüedad': dias,
+          'Traslados del día': docs,
+          'Traslados Recibidos': rec,
+          'Traslados pendientes': pend,
+          'Líneas pendientes': linPend,
+          ['Rezagados (> '+DIAS_TRANSITO+' días)']: rez,
+          '¿Entra al Detalle Rezagados?': rez>0 ? (rez===pend?'Sí, todos los pendientes':'Sí, parcialmente') : 'No',
+          'Motivo': motivo
+        };
+      })
+      .filter(r=> typeof r['Días de antigüedad']==='number' && r['Días de antigüedad']<=60)
+      .sort((a,b)=> b['Fecha del traslado'].localeCompare(a['Fecha del traslado']));
+
+    // Fechas extremas del universo pendiente: sirven para demostrar hasta dónde
+    // llega la base cargada (y despejar la duda de "el reporte se cortó").
+    const conDias=enCamino.filter(d=>typeof d.dias==='number');
+    const masReciente=conDias.length ? conDias.reduce((a,b)=> b.dias<a.dias?b:a) : null;
+    const masAntiguo =conDias.length ? conDias.reduce((a,b)=> b.dias>a.dias?b:a) : null;
+
     // Desglose por rango de días de rezago (tabla y hoja "Desglose por Rango").
     let r1120=0, r2130=0, rMas30=0;
     rezagados.forEach(x=>{
@@ -8248,6 +8344,7 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     const resumen=[
       {'Métrica':'Fecha de corte (hoy)','Cantidad':dateToISO(hoy),'% vs base total':'','% vs en camino':''},
       {'Métrica':'Corte efectivo del detalle (documento más reciente con rezago)','Cantidad': corteDetalle,'% vs base total':'','% vs en camino':''},
+      {'Métrica':'  · Qué significa ese corte','Cantidad':'Es la última fecha de despacho que ya superó los '+DIAS_TRANSITO+' días. Lo despachado después sigue pendiente pero está en tránsito normal: no es rezago todavía.','% vs base total':'','% vs en camino':''},
       {'Métrica':'Base total de traslados (documentos únicos)','Cantidad':totalBase,'% vs base total':'100%','% vs en camino':''},
       {'Métrica':'Pendientes por recibir / en camino (No Recibido)','Cantidad':totalEnCamino,'% vs base total':pct(totalEnCamino,totalBase),'% vs en camino':'100%'},
       {'Métrica':'Pendientes con REZAGO (> '+DIAS_TRANSITO+' días) = filas de "Detalle Rezagados"','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)},
@@ -8261,6 +8358,10 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     resumen.push({'Métrica':'Total documentos en camino','Cantidad':totalEnCamino,'% vs base total':pct(totalEnCamino,totalBase),'% vs en camino':'100%'});
     resumen.push({'Métrica':'De esos, rezagados > '+DIAS_TRANSITO+' días (Detalle Rezagados)','Cantidad':totalRezago,'% vs base total':pct(totalRezago,totalBase),'% vs en camino':pct(totalRezago,totalEnCamino)});
     resumen.push({'Métrica':'De esos, en tránsito normal (<= '+DIAS_TRANSITO+' días)','Cantidad':totalEnCamino-totalRezago,'% vs base total':pct(totalEnCamino-totalRezago,totalBase),'% vs en camino':pct(totalEnCamino-totalRezago,totalEnCamino)});
+    resumen.push({'Métrica':'','Cantidad':'','% vs base total':'','% vs en camino':''});
+    resumen.push({'Métrica':'Hasta dónde llega la base cargada','Cantidad': masReciente ? ('Traslado más reciente pendiente: '+dateToISO(masReciente.fecha)+' ('+masReciente.dias+' día(s))') : '(sin fechas)', '% vs base total':'','% vs en camino':''});
+    resumen.push({'Métrica':'Documento pendiente más antiguo','Cantidad': masAntiguo ? (dateToISO(masAntiguo.fecha)+' ('+masAntiguo.dias+' días)') : '(sin fechas)','% vs base total':'','% vs en camino':''});
+    resumen.push({'Métrica':'Por qué un traslado reciente NO está en el Detalle Rezagados','Cantidad':'Porque su antigüedad no supera los '+DIAS_TRANSITO+' días. Un traslado despachado hoy tiene 0 días y uno de ayer, 1. Esos traslados SÍ están en el informe: hojas "Pendientes en Camino" (uno por traslado) y "Calendario de Despachos" (día por día: cuántos salieron, cuántos ya están Recibidos, cuántos pendientes y por qué no entra cada fecha).','% vs base total':'','% vs en camino':''});
 
     // Hoja 2: Desglose por rango de días de retraso.
     const rangoRow=(label,n)=>({'Rango de días de retraso':label,'Traslados únicos':n,'% de rezagados':pct(n,totalRezago),'% de en camino':pct(n,totalEnCamino)});
@@ -8301,6 +8402,11 @@ function construirAnalisisTrasladosSplit(lineasRec, lineasNoRec){
     // Traslados NO RECIBIDOS por USUARIO (conteo de traslados únicos por usuario).
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirNoRecibidosPorUsuario(enCamino, detalle, DIAS_TRANSITO)), 'No Recibidos por Usuario');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle.length?detalle:[{'Traslado':'(sin traslados rezagados)'}]), 'Detalle Rezagados');
+    // Todos los pendientes (rezagados + tránsito normal), incluido lo cargado hoy:
+    // es la hoja que permite comprobar que un traslado reciente SÍ entró a la base.
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(todosPendientes.length?todosPendientes:[{'Traslado':'(sin pendientes)'}]), 'Pendientes en Camino');
+    // Conteo día por día: evidencia de hasta dónde llega la base y qué entra al rezago.
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(porFecha.length?porFecha:[{'Fecha del traslado':'(sin fechas)'}]), 'Calendario de Despachos');
     // Hoja de control: fecha de corte, universo y calidad de la llave del documento.
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(construirCalidadDatosRezago(all, enCamino)), 'Control del Dato');
     // Hoja de revisión de la columna Fecha: valor tal cual llega desde la fuente.
@@ -8406,9 +8512,11 @@ function construirCalidadDatosRezago(all, docs){
   const tiposFecha = Array.from(tipos).join(' / ') || '(sin líneas)';
   const conDias=enCamino.filter(d=>typeof d.dias==='number');
   // ANTIGÜEDAD = máxima cantidad de días. El documento más VIEJO es el de más días.
-  const minDias = conDias.length ? conDias.reduce((a,b)=> a.dias<b.dias?a:b).dias : '';   // días del documento MÁS RECIENTE
-  const maxDias = conDias.length ? conDias.reduce((a,b)=> a.dias>b.dias?a:b).dias : '';
-  const minFecha = conDias.length ? dateToISO(conDias.reduce((a,b)=> a.fecha<b.fecha?a:b).fecha) : '';
+  /* Antigüedad: el documento MÁS VIEJO es el de MÁS días y el MÁS RECIENTE el de
+     MENOS días. Antes se mezclaban ambos criterios y la fila "más reciente" salía
+     con la fecha del más antiguo, lo que hacía pensar que el reporte se cortaba. */
+  const masViejo = conDias.length ? conDias.reduce((a,b)=> a.dias>b.dias?a:b) : null;
+  const masNuevo = conDias.length ? conDias.reduce((a,b)=> a.dias<b.dias?a:b) : null;
   const ordenado = conDias.slice().sort((a,b)=>b.dias-a.dias);
 
   const rows=[
@@ -8425,8 +8533,10 @@ function construirCalidadDatosRezago(all, docs){
     {'Concepto':'Documentos en camino (No Recibido)','Valor':enCamino.length,'Detalle':'universo del rezago'},
     {'Concepto':'Documentos rezagados (> 10 días)','Valor':ordenado.length,'Detalle':'con fecha medible'},
     {'Concepto':'Documentos en camino sin fecha','Valor':(enCamino.length-ordenado.length),'Detalle':'no se puede medir su rezago'},
-    {'Concepto':'Documento más reciente en camino (días / fecha)','Valor':minDias,'Detalle':minFecha},
-    {'Concepto':'Documento más antiguo en camino (días / fecha)','Valor':maxDias,'Detalle':ordenado.length?dateToISO(ordenado[0].fecha):'sin fecha'}
+    {'Concepto':'Documento PENDIENTE más reciente (fecha / días en tránsito)','Valor': masNuevo?dateToISO(masNuevo.fecha):'', 'Detalle': masNuevo?(masNuevo.dias+' día(s)'):'sin fecha'},
+    {'Concepto':'Documento PENDIENTE más antiguo (fecha / días en tránsito)','Valor': masViejo?dateToISO(masViejo.fecha):'', 'Detalle': masViejo?(masViejo.dias+' día(s)'):'sin fecha'},
+    {'Concepto':'Fecha del pendiente más reciente con rezago (> umbral)','Valor': ordenado.length?dateToISO(ordenado[0].fecha):'—','Detalle':'sobre esta fecha se aplica el umbral de días'},
+    {'Concepto':'Pendientes que NO son rezago (dentro del umbral)','Valor': conDias.filter(d=>!(typeof d.dias==='number' && d.dias>10)).length,'Detalle':'están en la hoja Pendientes en Camino'}
   ];
   return rows;
 }
